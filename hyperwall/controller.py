@@ -258,6 +258,8 @@ class WallController:
 
     def _shutdown(self):
         logger.info("Shutdown requested.")
+        self._api_pool.shutdown(wait=True, cancel_futures=False)
+        self._cleanup()
         QApplication.instance().quit()
 
     def _cleanup(self):

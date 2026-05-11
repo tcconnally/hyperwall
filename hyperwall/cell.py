@@ -1,4 +1,6 @@
 import logging
+import os
+import sys
 import time as _time
 from collections import deque
 from PyQt6.QtCore import (
@@ -163,12 +165,25 @@ class VideoCell(QWidget):
     def _ensure_mpv(self):
         if self._mpv is not None:
             return
-        wid = int(self.video_frame.winId())
+        # Mask to 32-bit to prevent HWND sign-extension on Windows (mpv #10189).
+        # Without this, winId() can become negative on systems with long uptimes,
+        # causing mpv to create detached windows instead of embedded playback.
+        wid = int(self.video_frame.winId()) & 0xFFFFFFFF
         if wid == 0:
             logger.warning("video_frame.winId() == 0 — widget not realized yet.")
             return
 
-        m = mpv.MPV(wid=wid, log_handler=self._mpv_log, **apply_perf_env(MPV_OPTS))
+        # Suppress FFmpeg C-level log output during instance creation.
+        # With 8-12 cells, all instances route logs to the first handler
+        # (python-mpv issue #126). Redirect C stdio temporarily.
+        _devnull = open(os.devnull, "w")
+        _std_saved = (sys.stdout, sys.stderr)
+        try:
+            sys.stdout = sys.stderr = _devnull
+            m = mpv.MPV(wid=wid, log_handler=self._mpv_log, **apply_perf_env(MPV_OPTS))
+        finally:
+            sys.stdout, sys.stderr = _std_saved
+            _devnull.close()
         try: m["mute"] = self.muted
         except Exception: pass
         if self.looping:
