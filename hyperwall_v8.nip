@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ArrayOfProfile xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Profile>
+    <ProfileName>HyperWall</ProfileName>
+    <Executables>
+      <ExecutableByName>
+        <Name>hyperwall_v8.exe</Name>
+      </ExecutableByName>
+    </Executables>
+    <Settings>
+      <!-- VRR / G-SYNC: 1 = Fully disabled. Setting ID is internal NVIDIA name
+           "VRR_MODE" exposed by NPI; verify in NPI after import. -->
+      <ProfileSetting>
+        <SettingNameInfo>VRR_MODE</SettingNameInfo>
+        <SettingID>2944903966</SettingID>
+        <SettingValue>1</SettingValue>
+        <ValueType>Dword</ValueType>
+      </ProfileSetting>
+      <!-- VRR Requested State: 0 = Off (also forces VRR off at the kernel level
+           regardless of display panel reporting). -->
+      <ProfileSetting>
+        <SettingNameInfo>VRRRequestState</SettingNameInfo>
+        <SettingID>2945118144</SettingID>
+        <SettingValue>0</SettingValue>
+        <ValueType>Dword</ValueType>
+      </ProfileSetting>
+      <!-- Power management mode: 1 = Prefer maximum performance.
+           Keeps GPU clocks pinned during the wall's mixed-FPS workload. -->
+      <ProfileSetting>
+        <SettingNameInfo>Power management mode</SettingNameInfo>
+        <SettingID>274326537</SettingID>
+        <SettingValue>1</SettingValue>
+        <ValueType>Dword</ValueType>
+      </ProfileSetting>
+      <!-- Threaded optimization: 1 = On. Lets the driver multithread for many
+           concurrent contexts (12 mpv decoders). -->
+      <ProfileSetting>
+        <SettingNameInfo>OGL_THREAD_CONTROL_ID</SettingNameInfo>
+        <SettingID>278196567</SettingID>
+        <SettingValue>1</SettingValue>
+        <ValueType>Dword</ValueType>
+      </ProfileSetting>
+    </Settings>
+  </Profile>
+</ArrayOfProfile>

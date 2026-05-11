@@ -1,0 +1,96 @@
+[http @ 0000022044f3ab80] Error reading HTTP response: Immediate exit requested
+[hls @ 000002206e5d0b40] Error when loading first segment 'http://10.168.168.29:8096/Videos/19636/hls1/main/0.ts?PlaySessionId=4c165cda83b740048f04e71d63df2db7'
+[http @ 0000022044f389c0] Error reading HTTP response: Immediate exit requested
+[hls @ 000002206e5d3380] Error when loading first segment 'http://10.168.168.29:8096/Videos/19904/hls1/main/0.ts?PlaySessionId=2392bcaf8ee34fd9a4fac8584327c217'
+[http @ 0000022044f3adc0] Error reading HTTP response: Immediate exit requested
+[hls @ 000002206e5d3100] Error when loading first segment 'http://10.168.168.29:8096/Videos/19845/hls1/main/0.ts?PlaySessionId=159bc2790a8b4f77b62f6ac667c0fecf'
+[http @ 0000022044f3b000] Error reading HTTP response: Immediate exit requested
+[hls @ 000002206e5d1e00] Error when loading first segment 'http://10.168.168.29:8096/Videos/19668/hls1/main/0.ts?PlaySessionId=1fab7b5a1311486c9d846b6ddc7759b7'
+[http @ 0000022044f34300] Error reading HTTP response: Error number -138 occurred
+[hls @ 000002206e5d18c0] Failed to open segment 1 of playlist 0
+[hls @ 000002206e5d18c0] Segment 1 of playlist 0 failed too many times, skipping
+[hls @ 000002206e5d18c0] Opening 'http://10.168.168.29:8096/Videos/18608/hls1/main/2.ts?PlaySessionId=89f32a59b29345deafbf13391dab8521' for reading
+[http @ 0000022044f3af00] Error reading HTTP response: Immediate exit requested
+[hls @ 000002206e5d10c0] Error when loading first segment 'http://10.168.168.29:8096/Videos/19852/hls1/main/0.ts?PlaySessionId=f8ad075ffc1d4aff9f78efcffb545134'
+[http @ 0000022044f3acc0] Error reading HTTP response: Immediate exit requested
+[hls @ 000002206e5d0880] Error when loading first segment 'http://10.168.168.29:8096/Videos/20001/hls1/main/0.ts?PlaySessionId=f3a87a81da064a938083366ba350b5f8'
+[http @ 0000022044f35740] Error reading HTTP response: Immediate exit requested
+[hls @ 000002206e5d1340] Error when loading first segment 'http://10.168.168.29:8096/Videos/19938/hls1/main/0.ts?PlaySessionId=44a72cbf7d61467e8219cae8be5dcd17'
+[http @ 0000022044f34300] Error reading HTTP response: Immediate exit requested
+[hls @ 000002206e5d18c0] Error when loading first segment 'http://10.168.168.29:8096/Videos/18608/hls1/main/0.ts?PlaySessionId=89f32a59b29345deafbf13391dab8521'
+Auth -> http://10.168.168.29:8096
+Libraries (4): asmr, df, hd, mv
+Total items with known bitrate: 1215
+
+Top 12 by source bitrate:
+--------------------------------------------------------------------------------------------------------------
+   1  149.3 Mbps  h264   3840x2160  [TRANSCODE]  connoisseur_s_gym_thots_1_4k_1
+   2  142.9 Mbps  h264   3840x2160  [TRANSCODE]  ConnoisseurPMVs - Gym Thots 3 (4k 60fps)
+   3  120.4 Mbps  h264   3840x2160  [TRANSCODE]  rockstar_slut_mix_1
+   4  119.6 Mbps  h264   3840x2160  [TRANSCODE]  bad_bitches_4k60fps_1
+   5  109.9 Mbps  h264   3840x2160  [TRANSCODE]  connoisseur_s_gym_thots_2_4k_1
+   6  100.7 Mbps  h264   1920x1080  [DIRECT   ]  tiktok_x_porn_ep1_1
+   7  100.5 Mbps  h264   1920x1080  [DIRECT   ]  tiktok_x_porn_ep4_1
+   8   98.2 Mbps  h264   3840x2160  [TRANSCODE]  coelidge_stop_drop_and_rollupscale_1
+   9   94.7 Mbps  h264   1920x1080  [DIRECT   ]  tiktok_x_porn_ep5_1
+  10   84.6 Mbps  h264   3840x2160  [TRANSCODE]  white_girls_xxx_pt2_kim_petras_xxx_1
+  11   84.5 Mbps  h264   3840x2160  [TRANSCODE]  white_girls_xxx_kim_petras_xxx_1
+  12   83.1 Mbps  h264   3840x2160  [TRANSCODE]  asmr_is_porn
+--------------------------------------------------------------------------------------------------------------
+GPU pre-test: GPU 5%  VRAM 2457/16303 MB  (5% bw)  38C
+
+Starting 12 cells with 300ms stagger...
+All started. Holding for 30.0s...
+GPU mid-test:  GPU 17%  VRAM 2718/16303 MB  (5% bw)  39C
+GPU end-test:  GPU 25%  VRAM 2753/16303 MB  (7% bw)  40C
+
+==============================================================================================================
+  # tier        first     pos   rt%        eof res        name
+==============================================================================================================
+  1 TRANSCODE     -      0.00    0%        eof 3840x2160  FAIL  connoisseur_s_gym_thots_1_4k_1
+  2 TRANSCODE     -      0.00    0%        eof 3840x2160  FAIL  ConnoisseurPMVs - Gym Thots 3 (4k 60fps)
+  3 TRANSCODE     -      0.00    0%        eof 3840x2160  FAIL  rockstar_slut_mix_1
+  4 TRANSCODE     -      0.00    0%        eof 3840x2160  FAIL  bad_bitches_4k60fps_1
+  5 TRANSCODE     -      0.00    0%        eof 3840x2160  FAIL  connoisseur_s_gym_thots_2_4k_1
+  6 DIRECT       0.70   31.72   98%        eof 1920x1080  PASS  tiktok_x_porn_ep1_1
+  7 DIRECT       0.66   31.52   99%        eof 1920x1080  PASS  tiktok_x_porn_ep4_1
+  8 TRANSCODE     -      0.00    0%        eof 3840x2160  FAIL  coelidge_stop_drop_and_rollupscale_1
+  9 DIRECT       1.32   30.37   97%        eof 1920x1080  PASS  tiktok_x_porn_ep5_1
+ 10 TRANSCODE     -      0.00    0%        eof 3840x2160  FAIL  white_girls_xxx_pt2_kim_petras_xxx_1
+ 11 TRANSCODE     -      0.00    0%        eof 3840x2160  FAIL  white_girls_xxx_kim_petras_xxx_1
+ 12 TRANSCODE     -      0.00    0%        eof 3840x2160  FAIL  asmr_is_porn
+==============================================================================================================
+  RESULT: 3/12 cells held steady playback for >=21s
+
+Failure detail:
+  cell 1 [TRANSCODE]: connoisseur_s_gym_thots_1_4k_1
+    first_frame=None  last_pos=0.0  ratio=0.00  eof=eof
+    err: http: Error reading HTTP response: Error number -138 occurred
+    err: http: Error reading HTTP response: Error number -138 occurred
+    err: http: Error reading HTTP response: Error number -138 occurred
+  cell 2 [TRANSCODE]: ConnoisseurPMVs - Gym Thots 3 (4k 60fps)
+    first_frame=None  last_pos=0.0  ratio=0.00  eof=eof
+    err: avformat_open_input() failed
+  cell 3 [TRANSCODE]: rockstar_slut_mix_1
+    first_frame=None  last_pos=0.0  ratio=0.00  eof=eof
+    err: avformat_open_input() failed
+  cell 4 [TRANSCODE]: bad_bitches_4k60fps_1
+    first_frame=None  last_pos=0.0  ratio=0.00  eof=eof
+    err: avformat_open_input() failed
+  cell 5 [TRANSCODE]: connoisseur_s_gym_thots_2_4k_1
+    first_frame=None  last_pos=0.0  ratio=0.00  eof=eof
+    err: avformat_open_input() failed
+  cell 8 [TRANSCODE]: coelidge_stop_drop_and_rollupscale_1
+    first_frame=None  last_pos=0.0  ratio=0.00  eof=eof
+    err: avformat_open_input() failed
+  cell 10 [TRANSCODE]: white_girls_xxx_pt2_kim_petras_xxx_1
+    first_frame=None  last_pos=0.0  ratio=0.00  eof=eof
+    err: avformat_open_input() failed
+  cell 11 [TRANSCODE]: white_girls_xxx_kim_petras_xxx_1
+    first_frame=None  last_pos=0.0  ratio=0.00  eof=eof
+    err: avformat_open_input() failed
+  cell 12 [TRANSCODE]: asmr_is_porn
+    first_frame=None  last_pos=0.0  ratio=0.00  eof=eof
+    err: avformat_open_input() failed
+
+JSON: C:\Users\tccon\OneDrive\Documents\scripts\wall\test_max_concurrent_results.json

@@ -1,0 +1,154 @@
+{
+  "ts": "2026-05-07T23:53:03",
+  "n_cells": 8,
+  "mpv_opts_effective": {
+    "vo": "gpu-next",
+    "gpu_api": "d3d11",
+    "hwdec": "nvdec-copy",
+    "profile": "fast",
+    "video_sync": "audio",
+    "interpolation": "no",
+    "target_colorspace_hint": "yes",
+    "cache": "yes",
+    "cache_secs": 5,
+    "demuxer_max_bytes": "128MiB",
+    "demuxer_readahead_secs": 5,
+    "network_timeout": 15,
+    "stream_lavf_o": "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
+    "keep_open": "no",
+    "osd_level": 0,
+    "input_default_bindings": false,
+    "input_vo_keyboard": false,
+    "ytdl": false,
+    "ao": "wasapi",
+    "audio_client_name": "HyperWall",
+    "audio_buffer": 1.0,
+    "msg_level": "all=warn,cplayer=info,ao=error,ao/wasapi=fatal"
+  },
+  "env": {
+    "HYPERWALL_STATS": "1",
+    "HYPERWALL_HWDEC": "nvdec-copy"
+  },
+  "cells": [
+    {
+      "cell": 0,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 60.0,
+        "hwdec-current": "nvdec-copy",
+        "estimated-vf-fps": 60.000000000000036,
+        "video-bitrate": 51492252
+      },
+      "last_item": "f3v0r_gimme_1"
+    },
+    {
+      "cell": 1,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 30.00023651123047,
+        "hwdec-current": "nvdec-copy",
+        "estimated-vf-fps": 30.00023653403839,
+        "video-bitrate": 8850295
+      },
+      "last_item": "pmv_trio_wall_016"
+    },
+    {
+      "cell": 2,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 60.0,
+        "hwdec-current": "nvdec-copy",
+        "estimated-vf-fps": 60.000000000000036,
+        "video-bitrate": 35314293
+      },
+      "last_item": "world_games_2025_judges_entry_super_smash_hoes_1"
+    },
+    {
+      "cell": 3,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 30.0,
+        "hwdec-current": "nvdec-copy",
+        "estimated-vf-fps": 30.000000000000018,
+        "video-bitrate": 2621371
+      },
+      "last_item": "bent_over_ass_goon_loop_joi_2"
+    },
+    {
+      "cell": 4,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 30.0,
+        "hwdec-current": "nvdec-copy",
+        "estimated-vf-fps": 30.000000000000018,
+        "video-bitrate": 19190968
+      },
+      "last_item": "bubblegum_addicted_to_cute_butts_1_1"
+    },
+    {
+      "cell": 5,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 24.0,
+        "hwdec-current": "nvdec-copy",
+        "estimated-vf-fps": 24.00000000000003,
+        "video-bitrate": 19921088
+      },
+      "last_item": "goonalympics_1"
+    },
+    {
+      "cell": 6,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 60.0,
+        "hwdec-current": "nvdec-copy",
+        "estimated-vf-fps": 60.000000000000036,
+        "video-bitrate": 51380669
+      },
+      "last_item": "goon_loop_bang_1"
+    },
+    {
+      "cell": 7,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 29.970029830932617,
+        "hwdec-current": "nvdec-copy",
+        "estimated-vf-fps": 29.970029970029906,
+        "video-bitrate": 48324363
+      },
+      "last_item": "the_savannah_bond_experience_1"
+    }
+  ]
+}

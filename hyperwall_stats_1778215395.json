@@ -1,0 +1,153 @@
+{
+  "ts": "2026-05-07T23:43:15",
+  "n_cells": 8,
+  "mpv_opts_effective": {
+    "vo": "gpu-next",
+    "gpu_api": "d3d11",
+    "hwdec": "auto-copy",
+    "profile": "fast",
+    "video_sync": "audio",
+    "interpolation": "no",
+    "target_colorspace_hint": "yes",
+    "cache": "yes",
+    "cache_secs": 5,
+    "demuxer_max_bytes": "128MiB",
+    "demuxer_readahead_secs": 5,
+    "network_timeout": 15,
+    "stream_lavf_o": "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
+    "keep_open": "no",
+    "osd_level": 0,
+    "input_default_bindings": false,
+    "input_vo_keyboard": false,
+    "ytdl": false,
+    "ao": "wasapi",
+    "audio_client_name": "HyperWall",
+    "audio_buffer": 1.0,
+    "msg_level": "all=warn,cplayer=info,ao=error,ao/wasapi=fatal"
+  },
+  "env": {
+    "HYPERWALL_STATS": "1"
+  },
+  "cells": [
+    {
+      "cell": 0,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 30.00018882751465,
+        "hwdec-current": "d3d11va-copy",
+        "estimated-vf-fps": 30.000189013287645,
+        "video-bitrate": 7135637
+      },
+      "last_item": "pmv_trio_wall_049"
+    },
+    {
+      "cell": 1,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 60.0,
+        "hwdec-current": "d3d11va-copy",
+        "estimated-vf-fps": 60.000000000000036,
+        "video-bitrate": 14278608
+      },
+      "last_item": "tiktok_blitz_33_1"
+    },
+    {
+      "cell": 2,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 30.00009536743164,
+        "hwdec-current": "d3d11va-copy",
+        "estimated-vf-fps": 30.000095104586475,
+        "video-bitrate": 8722784
+      },
+      "last_item": "pmv_trio_wall_035"
+    },
+    {
+      "cell": 3,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 25.0,
+        "hwdec-current": "d3d11va-copy",
+        "estimated-vf-fps": 24.999999999999982,
+        "video-bitrate": 5907496
+      },
+      "last_item": "pulse_1"
+    },
+    {
+      "cell": 4,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 30.000160217285156,
+        "hwdec-current": "d3d11va-copy",
+        "estimated-vf-fps": 30.000160531680944,
+        "video-bitrate": 7243288
+      },
+      "last_item": "pmv_trio_wall_050"
+    },
+    {
+      "cell": 5,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 30.0,
+        "hwdec-current": "d3d11va-copy",
+        "estimated-vf-fps": 30.000000000000018,
+        "video-bitrate": 12050720
+      },
+      "last_item": "mosaic_of_porn_3_a_compilation_1"
+    },
+    {
+      "cell": 6,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 60.0,
+        "hwdec-current": "d3d11va-copy",
+        "estimated-vf-fps": 59.99999972869085,
+        "video-bitrate": 14795712
+      },
+      "last_item": "pawgs_1"
+    },
+    {
+      "cell": 7,
+      "totals": {
+        "frame-drop-count": 0.0,
+        "vo-delayed-frame-count": 0.0,
+        "decoder-frame-drop-count": 0.0
+      },
+      "info": {
+        "container-fps": 29.970029830932617,
+        "hwdec-current": "d3d11va-copy",
+        "estimated-vf-fps": 29.970029970029906,
+        "video-bitrate": 11341746
+      },
+      "last_item": "bliss_1"
+    }
+  ]
+}

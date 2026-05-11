@@ -1,0 +1,51 @@
+Auth -> http://10.168.168.29:8096
+Libraries (1): mv
+Total items with known bitrate: 580
+Selection mode: RANDOM (typical-load simulation)
+
+Top 12 by source bitrate:
+--------------------------------------------------------------------------------------------------------------
+   1  109.9 Mbps  h264   3840x2160  [DIRECT   ]  connoisseur_s_gym_thots_2_4k_1
+   2   36.7 Mbps  h264   1920x1080  [DIRECT   ]  ai_makes_me_pump_1
+   3   10.2 Mbps  h264   1920x1080  [DIRECT   ]  juicy_butts_5_big_ass_compilation_edit_1
+   4   10.6 Mbps  h264   1920x1080  [DIRECT   ]  ig_baddies_v3_1
+   5   29.5 Mbps  h264   1920x1080  [DIRECT   ]  gyatt_nude_edition_1
+   6   22.8 Mbps  h264   3840x2160  [DIRECT   ]  demon_mika_compilation_1
+   7   21.3 Mbps  h264   1920x1080  [DIRECT   ]  call_me_bad_1
+   8    9.2 Mbps  h264   1920x1080  [DIRECT   ]  wet_dreams_3_ai_art_of_1
+   9   14.6 Mbps  h264   1920x1080  [DIRECT   ]  bouns_no1_1
+  10   20.2 Mbps  h264   1920x1080  [DIRECT   ]  re-entry_02_moaning_e3otuz_1
+  11    8.2 Mbps  h264   1920x1080  [DIRECT   ]  alexis_texas_6_1
+  12    8.1 Mbps  h264   1920x1080  [DIRECT   ]  alexis_texas_3_1
+--------------------------------------------------------------------------------------------------------------
+Aggregate source bitrate (DIRECT-only ceiling): 301.2 Mbps
+GPU pre-test: GPU 34%  VRAM 3035/16303 MB  (17% bw)  39C
+
+Starting 12 cells with 300ms stagger...
+All started. Holding for 20.0s...
+GPU mid-test:  GPU 21%  VRAM 4614/16303 MB  (8% bw)  40C
+GPU end-test:  GPU 19%  VRAM 4603/16303 MB  (7% bw)  39C
+
+==============================================================================================================
+  # tier        first     pos   rt%        eof res        name
+==============================================================================================================
+  1 DIRECT       0.35   23.45   99%        eof 3840x2160  PASS  connoisseur_s_gym_thots_2_4k_1
+  2 DIRECT       1.44   22.12   99%        eof 1920x1080  PASS  ai_makes_me_pump_1
+  3 DIRECT       0.21   23.10   99%        eof 1920x1080  PASS  juicy_butts_5_big_ass_compilation_edit_1
+  4 DIRECT       0.31   21.23   92%        eof 1920x1080  PASS  ig_baddies_v3_1
+  5 DIRECT       0.58   22.21   99%        eof 1920x1080  PASS  gyatt_nude_edition_1
+  6 DIRECT       0.43   16.93   75%        eof 3840x2160  FAIL  demon_mika_compilation_1
+  7 DIRECT       0.24   22.08   99%        eof 1920x1080  PASS  call_me_bad_1
+  8 DIRECT       0.30   21.77   99%        eof 1920x1080  PASS  wet_dreams_3_ai_art_of_1
+  9 DIRECT       0.34   18.45   88%        eof 1920x1080  PASS  bouns_no1_1
+ 10 DIRECT       0.25   21.32   99%        eof 1920x1080  PASS  re-entry_02_moaning_e3otuz_1
+ 11 DIRECT       0.22   21.10   99%        eof 1920x1080  PASS  alexis_texas_6_1
+ 12 DIRECT       0.35   20.73   99%        eof 1920x1080  PASS  alexis_texas_3_1
+==============================================================================================================
+  RESULT: 11/12 cells held steady playback for >=14s
+
+Failure detail:
+  cell 6 [DIRECT]: demon_mika_compilation_1
+    first_frame=0.4284343719482422  last_pos=16.9  ratio=0.76  eof=eof
+
+JSON: C:\Users\tccon\OneDrive\Documents\scripts\wall\test_max_concurrent_results.json

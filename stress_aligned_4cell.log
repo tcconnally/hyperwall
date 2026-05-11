@@ -1,0 +1,31 @@
+Auth -> http://10.168.168.29:8096
+Libraries (1): mv
+Total items with known bitrate: 580
+Selection mode: RANDOM (typical-load simulation)
+
+Top 4 by source bitrate:
+--------------------------------------------------------------------------------------------------------------
+   1  109.9 Mbps  h264   3840x2160  [DIRECT   ]  connoisseur_s_gym_thots_2_4k_1
+   2   36.7 Mbps  h264   1920x1080  [DIRECT   ]  ai_makes_me_pump_1
+   3   10.2 Mbps  h264   1920x1080  [DIRECT   ]  juicy_butts_5_big_ass_compilation_edit_1
+   4   10.6 Mbps  h264   1920x1080  [DIRECT   ]  ig_baddies_v3_1
+--------------------------------------------------------------------------------------------------------------
+Aggregate source bitrate (DIRECT-only ceiling): 167.4 Mbps
+GPU pre-test: GPU 18%  VRAM 2678/16303 MB  (14% bw)  38C
+
+Starting 4 cells with 300ms stagger...
+All started. Holding for 20.0s...
+GPU mid-test:  GPU 16%  VRAM 3343/16303 MB  (13% bw)  38C
+GPU end-test:  GPU 16%  VRAM 3340/16303 MB  (13% bw)  38C
+
+==============================================================================================================
+  # tier        first     pos   rt%        eof res        name
+==============================================================================================================
+  1 DIRECT       0.31   21.07   99%        eof 3840x2160  PASS  connoisseur_s_gym_thots_2_4k_1
+  2 DIRECT       0.26   20.85   99%        eof 1920x1080  PASS  ai_makes_me_pump_1
+  3 DIRECT       0.18   20.68   99%        eof 1920x1080  PASS  juicy_butts_5_big_ass_compilation_edit_1
+  4 DIRECT       0.23   19.70   99%        eof 1920x1080  PASS  ig_baddies_v3_1
+==============================================================================================================
+  RESULT: 4/4 cells held steady playback for >=14s
+
+JSON: C:\Users\tccon\OneDrive\Documents\scripts\wall\test_max_concurrent_results.json

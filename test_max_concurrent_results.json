@@ -1,0 +1,102 @@
+{
+  "args": {
+    "cells": 8,
+    "stress_secs": 20.0,
+    "libraries": "mv",
+    "start_stagger_ms": 300,
+    "prefer_largest": true,
+    "force_direct": false,
+    "random": true,
+    "seed": 99
+  },
+  "statuses": [
+    {
+      "idx": 1,
+      "item": "pmv_trio_wall_051",
+      "tier": "DIRECT",
+      "first_frame_s": 0.3026134967803955,
+      "last_pos_s": 22.266666666666666,
+      "playback_ratio": 0.9989655999290475,
+      "eof_reason": "eof",
+      "errors": [],
+      "passed": true
+    },
+    {
+      "idx": 2,
+      "item": "pmv_trio_wall_027",
+      "tier": "DIRECT",
+      "first_frame_s": 0.14825654029846191,
+      "last_pos_s": 22.166666666666668,
+      "playback_ratio": 1.0001040581289842,
+      "eof_reason": "eof",
+      "errors": [],
+      "passed": true
+    },
+    {
+      "idx": 3,
+      "item": "gimme_done_1",
+      "tier": "DIRECT",
+      "first_frame_s": 0.25470900535583496,
+      "last_pos_s": 21.766666666666666,
+      "playback_ratio": 0.998659965923827,
+      "eof_reason": "eof",
+      "errors": [],
+      "passed": true
+    },
+    {
+      "idx": 4,
+      "item": "f-r-e-a-k_1",
+      "tier": "DIRECT",
+      "first_frame_s": 0.2210066318511963,
+      "last_pos_s": 21.5215,
+      "playback_ratio": 0.996735374718668,
+      "eof_reason": "eof",
+      "errors": [],
+      "passed": true
+    },
+    {
+      "idx": 5,
+      "item": "haven_1",
+      "tier": "DIRECT",
+      "first_frame_s": 0.19221806526184082,
+      "last_pos_s": 21.28,
+      "playback_ratio": 0.9993964878310608,
+      "eof_reason": "eof",
+      "errors": [],
+      "passed": true
+    },
+    {
+      "idx": 6,
+      "item": "instagram_is_goon_fuel_1",
+      "tier": "DIRECT",
+      "first_frame_s": 0.6440563201904297,
+      "last_pos_s": 20.625,
+      "playback_ratio": 0.9919886393346525,
+      "eof_reason": "eof",
+      "errors": [],
+      "passed": true
+    },
+    {
+      "idx": 7,
+      "item": "deepthroat_no_captions_60fps_1",
+      "tier": "DIRECT",
+      "first_frame_s": 0.2582588195800781,
+      "last_pos_s": 20.741722222222222,
+      "playback_ratio": 0.9976603678156925,
+      "eof_reason": "eof",
+      "errors": [],
+      "passed": true
+    },
+    {
+      "idx": 8,
+      "item": "bop_haven_1",
+      "tier": "DIRECT",
+      "first_frame_s": 0.648226261138916,
+      "last_pos_s": 20.083333333333332,
+      "playback_ratio": 0.9895689054054853,
+      "eof_reason": "eof",
+      "errors": [],
+      "passed": true
+    }
+  ]
+}
