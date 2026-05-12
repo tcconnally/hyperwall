@@ -98,14 +98,13 @@ change the constant.
 |---|---|
 | `C` | Toggle controls visibility on all cells |
 | `Space` | Global pause / resume |
-| `M` | Global mute / unmute |
 | `F` | Filter to favorites only |
 | `A` | Reset filter (show all) |
 | `Escape` | Shutdown |
 
-Shortcuts must work even when a `QVideoWidget` has keyboard focus (the known
-failure mode with `QShortcut`). Use application-level event filtering or
-`keyPressEvent` override on the window — not bare `QShortcut`.
+Audio is per-cell only: use each cell's speaker button and volume slider. HyperWall intentionally has no global mute/unmute because multiple cells may be unmuted simultaneously.
+
+Shortcuts must work even when embedded media/native child widgets have focus. v8 keeps normal shortcuts registered per fullscreen window and also installs an app-level Escape-only event filter as a last-resort emergency shutdown path.
 
 ---
 

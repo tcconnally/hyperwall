@@ -16,7 +16,7 @@ Drop-in v8 alongside 7.4. Same `config.ini`. Backend is now `python-mpv` (libmpv
 | Retry escalation | Same 3-retry exponential backoff | Same; `_force_transcode` now flips `VideoCodec=copy` → `VideoCodec=h264` |
 | Process isolation | None | Bundled `hyperwall_v8.exe` so NVIDIA driver applies a per-app G-Sync-off profile |
 
-UX is identical: same wizard, same shortcuts (`C/Space/M/F/A/Esc`), same controls strip, same title overlay, same cleanup-on-startup flow.
+UX is intentionally close to 7.4, with one important audio correction: there is no global mute/unmute shortcut. Audio is controlled per cell only, and multiple cells may be unmuted at the same time. Shortcuts are `C/Space/F/A/S/R/Esc`; the controls strip, title overlay, and cleanup-on-startup flow remain.
 
 ---
 
@@ -121,14 +121,15 @@ Run after build, in order:
 3. Wall comes up across selected monitors, all cells start within ~4 s
 4. `C` toggles controls; fade is smooth
 5. Click anywhere on seek bar → playhead jumps there
-6. `M` → all cells mute/unmute in sync
-7. `F` → favorites only; `A` → all
-8. Trash button on a clip → tag added (verify in Emby UI)
-9. Star button → favorite added
-10. Mouse idle 3 s → cursor disappears; move → reappears
-11. 4K source plays without frame drops (Emby transcodes it down to 1080p server-side via REMUX path)
-12. Two simultaneous heavy sources play without stutter
-13. **Video transitions visibly smoother than 7.4** — this is the new bar; mpv's pre-buffered loadfile + libmpv decoder reuse should make end-of-clip → next-clip near-seamless
+6. Speaker button and volume slider affect only that cell; unmuting one cell does not mute any other cell
+7. Multiple cells can remain unmuted simultaneously
+8. `F` → favorites only; `A` → all
+9. Trash button on a clip → tag added (verify in Emby UI)
+10. Star button → favorite added
+11. Mouse idle 3 s → cursor disappears; move → reappears
+12. 4K source plays without frame drops (Emby transcodes it down to 1080p server-side via REMUX path)
+13. Two simultaneous heavy sources play without stutter
+14. **Video transitions visibly smoother than 7.4** — this is the new bar; mpv's pre-buffered loadfile + libmpv decoder reuse should make end-of-clip → next-clip near-seamless
 
 If any regress vs. 7.4, that's a release blocker per the brief.
 

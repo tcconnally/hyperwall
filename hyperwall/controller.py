@@ -27,17 +27,44 @@ try:
 except ImportError:
     _remix_walls = None
 
+
+class _EmergencyKeyFilter(QObject):
+    """App-level last-resort key handler for shortcuts stolen by child widgets.
+
+    Normal wall shortcuts stay registered per fullscreen window because that is
+    the proven multi-monitor Qt focus model for HyperWall. This filter is only
+    an additive safety net for Escape so exiting the wall never depends on which
+    cell/control/native mpv child currently owns focus.
+    """
+
+    def __init__(self, shutdown_callback):
+        super().__init__()
+        self._shutdown_callback = shutdown_callback
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+            self._shutdown_callback()
+            return True
+        return False
+
+
 class WallController:
     def __init__(self, settings: dict, api):
         self.settings   = settings
         self.api        = api
         self.cells:    list[VideoCell]   = []
         self.windows:  list[QMainWindow] = []
+        self._shortcuts: list[QShortcut] = []
         self.all_items: list[dict] = []
         self.filtered:  list[dict] = []
         self.playlist:  deque[dict] = deque()
         self.controls_visible = True
         self._api_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="api")
+        self._api_pool_closed = False
+        self._cleaned_up = False
+        self._shutdown_requested = False
+        self._escape_filter = _EmergencyKeyFilter(self._shutdown)
+        QApplication.instance().installEventFilter(self._escape_filter)
 
         self._build_displays()
         self._start_async_load()
@@ -63,14 +90,15 @@ class WallController:
             for key, fn in (
                 ("C",      self._global_toggle_controls),
                 ("Space",  self._global_toggle_pause),
-                ("M",      self._global_toggle_mute),
                 ("F",      lambda: self._set_filter("favorites")),
                 ("A",      lambda: self._set_filter("all")),
                 ("S",      self._toggle_stats_overlay),
                 ("R",      self._open_remix_dialog),
                 ("Escape", self._shutdown),
             ):
-                QShortcut(QKeySequence(key), win).activated.connect(fn)
+                shortcut = QShortcut(QKeySequence(key), win)
+                shortcut.activated.connect(fn)
+                self._shortcuts.append(shortcut)
 
             win.setGeometry(screen.geometry())
             win.showFullScreen()
@@ -135,7 +163,17 @@ class WallController:
                 logger.info("Session stop %s -> HTTP %d", session_id[:8], r.status_code)
             except Exception as e:
                 logger.warning("Stop-session %s failed: %s", session_id[:8], e)
-        self._api_pool.submit(_worker)
+        self._submit_api(_worker, "stop-session")
+
+    def _submit_api(self, fn, label: str):
+        if self._api_pool_closed:
+            logger.debug("API task skipped after shutdown: %s", label)
+            return None
+        try:
+            return self._api_pool.submit(fn)
+        except RuntimeError as e:
+            logger.debug("API task rejected during shutdown (%s): %s", label, e)
+            return None
 
     def _hand_off(self, cell: VideoCell, item: dict, force_transcode: bool = False):
         self.stop_emby_session(cell._emby_item_id, cell._emby_session_id)
@@ -191,27 +229,6 @@ class WallController:
                 c.btn_play.setText("▶" if any_playing else "⏸")
             except Exception: pass
 
-    def _global_toggle_mute(self):
-        if not self.cells:
-            return
-        new_muted = not all(c.muted for c in self.cells)
-        for c in self.cells:
-            c.muted = new_muted
-            c.btn_mute.setChecked(new_muted)
-            c.btn_mute.setText("🔇" if new_muted else "🔊")
-            if not new_muted and c.vol_slider.value() == 0:
-                c.vol_slider.blockSignals(True)
-                c.vol_slider.setValue(70)
-                c.vol_slider.blockSignals(False)
-            if c._mpv is not None:
-                try:
-                    c._mpv["mute"] = new_muted
-                    if not new_muted and c.vol_slider.value() > 0:
-                        c._mpv["volume"] = float(c.vol_slider.value())
-                except Exception:
-                    pass
-        logger.info("Audio: %s", "MUTED" if new_muted else "UNMUTED")
-
     def _set_filter(self, mode: str):
         if mode == "favorites":
             subset = [i for i in self.all_items if i.get("UserData", {}).get("IsFavorite")]
@@ -244,7 +261,7 @@ class WallController:
                 logger.info("API: Tags updated for '%s'", name)
             except Exception as e:
                 logger.error("API: Tag error for '%s': %s", name, e)
-        self._api_pool.submit(_worker)
+        self._submit_api(_worker, "update-tags")
 
     def update_favorite(self, item_id: str, state: bool):
         def _worker():
@@ -254,15 +271,20 @@ class WallController:
                 logger.info("API: Favorite toggled for %s → %s", item_id, state)
             except Exception as e:
                 logger.error("API: Favorite error: %s", e)
-        self._api_pool.submit(_worker)
+        self._submit_api(_worker, "update-favorite")
 
     def _shutdown(self):
+        if self._shutdown_requested:
+            return
+        self._shutdown_requested = True
         logger.info("Shutdown requested.")
-        self._api_pool.shutdown(wait=True, cancel_futures=False)
         self._cleanup()
         QApplication.instance().quit()
 
     def _cleanup(self):
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
         for c in self.cells:
             self.stop_emby_session(c._emby_item_id, c._emby_session_id)
         if STATS_ENABLED:
@@ -275,6 +297,15 @@ class WallController:
             except Exception: pass
         if STATS_ENABLED:
             self._dump_stats_json()
+        self._api_pool_closed = True
+        try:
+            self._api_pool.shutdown(wait=False, cancel_futures=False)
+        except TypeError:
+            self._api_pool.shutdown(wait=False)
+        try:
+            QApplication.instance().removeEventFilter(self._escape_filter)
+        except Exception:
+            pass
         self.api.close()
         logger.info("Cleanup complete.")
 
