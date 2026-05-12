@@ -1,33 +1,48 @@
 @echo off
-:: Set directory to where this script is located
+setlocal
 cd /d "%~dp0"
 
-echo Starting HyperWall...
+echo Starting HyperWall v8...
 echo Working Directory: %CD%
 
-:: 1. VERIFY FILE EXISTS
-if not exist "hyperwall.py" (
+if exist "hyperwall_v8.exe" (
+    start "" "%CD%\hyperwall_v8.exe"
+    exit /b 0
+)
+
+if not exist "hyperwall_v8.py" (
     echo.
     echo ========================================================
-    echo  CRITICAL ERROR: hyperwall.py NOT FOUND!
+    echo  CRITICAL ERROR: hyperwall_v8.py NOT FOUND!
     echo ========================================================
-    echo.
-    echo Please make sure you saved the python code as 'hyperwall.py'
+    echo Pull the current HyperWall repo or run bootstrap_v8.ps1.
     pause
-    exit /b
+    exit /b 1
 )
 
-:: 2. RUN SCRIPT
-python3 hyperwall.py
-if %ERRORLEVEL% EQU 9009 (
-    python hyperwall.py
+set PY=
+where py >nul 2>&1 && set PY=py
+if "%PY%"=="" where python >nul 2>&1 && set PY=python
+if "%PY%"=="" where python3 >nul 2>&1 && set PY=python3
+
+if "%PY%"=="" (
+    echo.
+    echo ========================================================
+    echo  CRITICAL ERROR: Python not found on PATH
+    echo ========================================================
+    echo Run bootstrap_v8.ps1 from PowerShell 7 or install Python.
+    pause
+    exit /b 1
 )
 
-:: 3. CATCH CRASHES
+%PY% hyperwall_v8.py
+
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo ========================================================
-    echo  SCRIPT CRASHED
+    echo  HYPERWALL V8 CRASHED
     echo ========================================================
     pause
 )
+
+endlocal

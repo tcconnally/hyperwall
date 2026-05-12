@@ -2,6 +2,8 @@
 
 ## What This Is
 
+This file documents the legacy v7.4 monolith (`hyperwall.py`). The active v8/v8.1 runtime lives in `hyperwall_v8.py` plus the `hyperwall/` package; use `INSTRUCTIONS_v8.md` for current launcher/build steps.
+
 HyperWall (`hyperwall.py`) is a fullscreen video wall application that streams
 content from a local Emby media server across one or more monitors in a
 configurable grid. It runs on a single Windows machine in a closed local network.
@@ -131,3 +133,9 @@ Shortcuts must work even when embedded media/native child widgets have focus. v8
 - Shutdown uses `QApplication.quit()` — the `os._exit(0)` hard-kill was only
   needed for the overlay layout (7.0/7.1) which caused Qt HWND deadlocks on
   teardown. The VBoxLayout approach shuts down cleanly.
+
+---
+
+## Local directory cleanup
+
+Run `cleanup_wall_dir.ps1 -Apply` after confirming the v8 launcher works; it moves old logs, caches, build leftovers, and the legacy v7 monolith into `_archive/` instead of deleting them.

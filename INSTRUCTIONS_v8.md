@@ -65,9 +65,11 @@ Produces `hyperwall_v8.exe` in the same dir.
 
 Launch `hyperwall_v8.exe` directly (not via `python hyperwall_v8.py`). On first run it will UAC-prompt to silent-import `hyperwall_v8.nip` into the NVIDIA driver. Approve once. A sentinel file is written with the driver version.
 
-### 6. Update the shortcut
+### 6. Update / use the shortcut
 
-Point `C:\Users\tccon\OneDrive\Desktop\game\tools\hyperwork.lnk` at `hyperwall_v8.exe` instead of the 7.4 launch.bat.
+`launch.bat` now starts v8 first: it launches `hyperwall_v8.exe` when present, otherwise falls back to `python hyperwall_v8.py`. The old v7.4 `hyperwall.py` is not launched by this batch file.
+
+Point `C:\Users\tccon\OneDrive\Desktop\game\tools\hyperwork.lnk` at either `hyperwall_v8.exe` directly or this updated `launch.bat`.
 
 ---
 
@@ -145,4 +147,4 @@ If any regress vs. 7.4, that's a release blocker per the brief.
 
 ## Rollback
 
-7.4 is untouched at `hyperwall.py`. Point the shortcut back at `launch.bat` to restore.
+7.4 is preserved as `hyperwall.py` when present, but `launch.bat` now starts v8. To roll back, run `python hyperwall.py` directly or restore `hyperwall.py` from `_archive/` if you used `cleanup_wall_dir.ps1 -Apply`.

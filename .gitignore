@@ -17,6 +17,11 @@ config.ini
 hyperwall.log*
 hyperwall_stats_*.json
 launch_diag.log
+.hyperwall_v8_nvprofile.sentinel
+
+# Downloaded tools/binaries
+tools/*.exe
+tools/Reference.xml
 
 # Stress test artifacts
 stress_*.log
