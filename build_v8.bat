@@ -16,6 +16,12 @@ REM ============================================================================
 setlocal
 cd /d "%~dp0"
 
+if not exist "hyperwall_v8.py" (
+    echo [ERROR] hyperwall_v8.py is missing. It is a tracked repo file.
+    echo Restore it with: git restore --source=HEAD -- hyperwall_v8.py
+    exit /b 1
+)
+
 if not exist "mpv-2.dll" (
     echo [ERROR] mpv-2.dll not found in %CD%
     echo Download libmpv: https://mpv.io/installation/  ^(shobon-mpv builds^)

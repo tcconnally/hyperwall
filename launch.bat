@@ -10,7 +10,7 @@ REM This prevents accidentally testing an old PyInstaller build after git pull.
 set EXE_STALE=
 if exist "hyperwall_v8.exe" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$exe = Get-Item -LiteralPath 'hyperwall_v8.exe'; $src = @(Get-Item -LiteralPath 'hyperwall_v8.py'; Get-ChildItem -LiteralPath 'hyperwall' -Filter '*.py' -File -Recurse) | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($src.LastWriteTime -gt $exe.LastWriteTime) { exit 10 } else { exit 0 }"
+        "$exe = Get-Item -LiteralPath 'hyperwall_v8.exe'; $srcItems = @(); if (Test-Path -LiteralPath 'hyperwall_v8.py') { $srcItems += Get-Item -LiteralPath 'hyperwall_v8.py' }; $srcItems += Get-ChildItem -LiteralPath 'hyperwall' -Filter '*.py' -File -Recurse; $src = $srcItems | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($src -and $src.LastWriteTime -gt $exe.LastWriteTime) { exit 10 } else { exit 0 }"
     if errorlevel 10 set EXE_STALE=1
 )
 
@@ -30,7 +30,9 @@ if not exist "hyperwall_v8.py" (
     echo ========================================================
     echo  CRITICAL ERROR: hyperwall_v8.py NOT FOUND!
     echo ========================================================
-    echo Pull the current HyperWall repo or run bootstrap_v8.ps1.
+    echo hyperwall_v8.py is a tracked repo file. Restore it with:
+    echo   git restore --source=HEAD -- hyperwall_v8.py
+    echo Then rerun this launcher, or run bootstrap_v8.ps1 after the restore.
     pause
     exit /b 1
 )

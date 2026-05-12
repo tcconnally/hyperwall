@@ -8,6 +8,14 @@ def read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8", errors="ignore")
 
 
+def test_v8_shim_exists_and_delegates_to_package():
+    shim = ROOT / "hyperwall_v8.py"
+    assert shim.exists()
+    text = read("hyperwall_v8.py")
+    assert "from hyperwall import main" in text
+    assert "main()" in text
+
+
 def test_legacy_monolith_is_not_active_root_entrypoint():
     assert not (ROOT / "hyperwall.py").exists()
     assert (ROOT / "legacy" / "hyperwall_v7_4.py").exists()
