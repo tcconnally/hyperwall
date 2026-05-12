@@ -116,6 +116,18 @@ Verify after first apply: open NVIDIA Profile Inspector → search "HyperWall" i
 
 ## Smoke tests (per brief)
 
+### Static repo guards
+
+After pulling a branch, run the no-dependency guard suite before building:
+
+```powershell
+python .\tests\run_repo_guards.py
+```
+
+These checks prevent the specific v8 footguns we already hit: root `hyperwall.py` returning, `launch.bat` pointing at legacy code, global `M` mute returning, missing Escape emergency filter, or missing runtime identity logging.
+
+### Manual wall smoke
+
 Run after build, in order:
 
 1. Launch → wizard appears with last selections preselected
