@@ -15,6 +15,7 @@ from .nvprofile import ensure_nvidia_profile, maybe_relaunch_in_isolation
 from .emby import EmbyAPISession, CleanupWorker
 from .wizard import SetupWizard
 from .controller import WallController, MouseIdleHider
+from .version import runtime_banner
 
 # Late import for mpv
 mpv = None
@@ -52,6 +53,7 @@ def main():
 
     # 3. Setup logging
     setup_logging(LOG_FILE)
+    logger.info("Runtime: %s", runtime_banner())
 
     # 4. Set priority
     if not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
@@ -152,7 +154,7 @@ def main():
     with open(CONFIG_FILE, "w") as f:
         cfg.write(f)
 
-    logger.info("Initializing HyperWall 8.0…")
+    logger.info("Initializing HyperWall 8.1 structured package…")
     _eff = apply_perf_env(MPV_OPTS)
     logger.info(
         "Perf: vo=%s gpu_api=%s hwdec=%s profile=%s video_sync=%s hdr_hint=%s stats=%s",

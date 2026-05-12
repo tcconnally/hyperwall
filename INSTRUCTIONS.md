@@ -2,9 +2,9 @@
 
 ## What This Is
 
-This file documents the legacy v7.4 monolith (`hyperwall.py`). The active v8/v8.1 runtime lives in `hyperwall_v8.py` plus the `hyperwall/` package; use `INSTRUCTIONS_v8.md` for current launcher/build steps.
+This file documents the legacy v7.4 monolith (`legacy/hyperwall_v7_4.py`). The active v8/v8.1 runtime lives in `hyperwall_v8.py` plus the `hyperwall/` package; use `INSTRUCTIONS_v8.md` for current launcher/build steps.
 
-HyperWall (`hyperwall.py`) is a fullscreen video wall application that streams
+HyperWall v7.4 (`legacy/hyperwall_v7_4.py`) is a fullscreen video wall application that streams
 content from a local Emby media server across one or more monitors in a
 configurable grid. It runs on a single Windows machine in a closed local network.
 
@@ -89,8 +89,7 @@ change the constant.
 - **No plugin architecture, no abstract base classes, no factory patterns.**
 - **No third-party dependencies beyond PyQt6 and requests.** Both are already
   installed.
-- **Single file.** Everything lives in `hyperwall.py`. Do not split into modules
-  unless the file exceeds ~1500 lines and splitting is explicitly requested.
+- **Legacy single file.** v7.4 is quarantined in `legacy/hyperwall_v7_4.py`. Active v8 work belongs in `hyperwall_v8.py` and the `hyperwall/` package; do not recreate a root `hyperwall.py` launcher.
 
 ---
 

@@ -1,6 +1,6 @@
-# HyperWall 8.0 — Setup & Behavior
+# HyperWall 8.1 — Setup & Behavior
 
-Drop-in v8 alongside 7.4. Same `config.ini`. Backend is now `python-mpv` (libmpv); the Qt media stack is gone.
+Active v8/v8.1 runtime. Same `config.ini`. Backend is now `python-mpv` (libmpv); the Qt media stack is gone. Legacy v7.4 is quarantined under `legacy/hyperwall_v7_4.py` so normal launch paths cannot accidentally run it.
 
 ---
 
@@ -67,7 +67,7 @@ Launch `hyperwall_v8.exe` directly (not via `python hyperwall_v8.py`). On first 
 
 ### 6. Update / use the shortcut
 
-`launch.bat` now starts v8 first: it launches `hyperwall_v8.exe` when present, otherwise falls back to `python hyperwall_v8.py`. The old v7.4 `hyperwall.py` is not launched by this batch file.
+`launch.bat` starts v8 only. It launches `hyperwall_v8.exe` when the bundled exe is current; if the exe is older than checked-out source, it warns and falls back to `python hyperwall_v8.py`. The legacy v7.4 monolith is not launched by this batch file.
 
 Point `C:\Users\tccon\OneDrive\Desktop\game\tools\hyperwork.lnk` at either `hyperwall_v8.exe` directly or this updated `launch.bat`.
 
@@ -147,4 +147,4 @@ If any regress vs. 7.4, that's a release blocker per the brief.
 
 ## Rollback
 
-7.4 is preserved as `hyperwall.py` when present, but `launch.bat` now starts v8. To roll back, run `python hyperwall.py` directly or restore `hyperwall.py` from `_archive/` if you used `cleanup_wall_dir.ps1 -Apply`.
+7.4 is preserved as `legacy/hyperwall_v7_4.py` for archaeology only. Normal launcher/build paths are v8-only. To roll back deliberately, run `python legacy/hyperwall_v7_4.py` after confirming the old monolith still matches your current `config.ini` and dependency set.
