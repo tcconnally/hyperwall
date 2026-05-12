@@ -2,7 +2,9 @@
 
 ## What This Is
 
-HyperWall (`hyperwall.py`) is a fullscreen video wall application that streams
+This file documents the legacy v7.4 monolith (`legacy/hyperwall_v7_4.py`). The active v8/v8.1 runtime lives in `hyperwall_v8.py` plus the `hyperwall/` package; use `INSTRUCTIONS_v8.md` for current launcher/build steps.
+
+HyperWall v7.4 (`legacy/hyperwall_v7_4.py`) is a fullscreen video wall application that streams
 content from a local Emby media server across one or more monitors in a
 configurable grid. It runs on a single Windows machine in a closed local network.
 
@@ -87,8 +89,7 @@ change the constant.
 - **No plugin architecture, no abstract base classes, no factory patterns.**
 - **No third-party dependencies beyond PyQt6 and requests.** Both are already
   installed.
-- **Single file.** Everything lives in `hyperwall.py`. Do not split into modules
-  unless the file exceeds ~1500 lines and splitting is explicitly requested.
+- **Legacy single file.** v7.4 is quarantined in `legacy/hyperwall_v7_4.py`. Active v8 work belongs in `hyperwall_v8.py` and the `hyperwall/` package; do not recreate a root `hyperwall.py` launcher.
 
 ---
 
@@ -98,14 +99,13 @@ change the constant.
 |---|---|
 | `C` | Toggle controls visibility on all cells |
 | `Space` | Global pause / resume |
-| `M` | Global mute / unmute |
 | `F` | Filter to favorites only |
 | `A` | Reset filter (show all) |
 | `Escape` | Shutdown |
 
-Shortcuts must work even when a `QVideoWidget` has keyboard focus (the known
-failure mode with `QShortcut`). Use application-level event filtering or
-`keyPressEvent` override on the window — not bare `QShortcut`.
+Audio is per-cell only: use each cell's speaker button and volume slider. HyperWall intentionally has no global mute/unmute because multiple cells may be unmuted simultaneously.
+
+Shortcuts must work even when embedded media/native child widgets have focus. v8 keeps normal shortcuts registered per fullscreen window and also installs an app-level Escape-only event filter as a last-resort emergency shutdown path.
 
 ---
 
@@ -132,3 +132,9 @@ failure mode with `QShortcut`). Use application-level event filtering or
 - Shutdown uses `QApplication.quit()` — the `os._exit(0)` hard-kill was only
   needed for the overlay layout (7.0/7.1) which caused Qt HWND deadlocks on
   teardown. The VBoxLayout approach shuts down cleanly.
+
+---
+
+## Local directory cleanup
+
+Run `cleanup_wall_dir.ps1 -Apply` after confirming the v8 launcher works; it moves old logs, caches, build leftovers, and the legacy v7 monolith into `_archive/` instead of deleting them.

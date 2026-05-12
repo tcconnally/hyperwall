@@ -1,6 +1,6 @@
-# HyperWall 8.0 — Setup & Behavior
+# HyperWall 8.1 — Setup & Behavior
 
-Drop-in v8 alongside 7.4. Same `config.ini`. Backend is now `python-mpv` (libmpv); the Qt media stack is gone.
+Active v8/v8.1 runtime. Same `config.ini`. Backend is now `python-mpv` (libmpv); the Qt media stack is gone. Legacy v7.4 is quarantined under `legacy/hyperwall_v7_4.py` so normal launch paths cannot accidentally run it.
 
 ---
 
@@ -16,7 +16,7 @@ Drop-in v8 alongside 7.4. Same `config.ini`. Backend is now `python-mpv` (libmpv
 | Retry escalation | Same 3-retry exponential backoff | Same; `_force_transcode` now flips `VideoCodec=copy` → `VideoCodec=h264` |
 | Process isolation | None | Bundled `hyperwall_v8.exe` so NVIDIA driver applies a per-app G-Sync-off profile |
 
-UX is identical: same wizard, same shortcuts (`C/Space/M/F/A/Esc`), same controls strip, same title overlay, same cleanup-on-startup flow.
+UX is intentionally close to 7.4, with one important audio correction: there is no global mute/unmute shortcut. Audio is controlled per cell only, and multiple cells may be unmuted at the same time. Shortcuts are `C/Space/F/A/S/R/Esc`; the controls strip, title overlay, and cleanup-on-startup flow remain.
 
 ---
 
@@ -65,9 +65,11 @@ Produces `hyperwall_v8.exe` in the same dir.
 
 Launch `hyperwall_v8.exe` directly (not via `python hyperwall_v8.py`). On first run it will UAC-prompt to silent-import `hyperwall_v8.nip` into the NVIDIA driver. Approve once. A sentinel file is written with the driver version.
 
-### 6. Update the shortcut
+### 6. Update / use the shortcut
 
-Point `C:\Users\tccon\OneDrive\Desktop\game\tools\hyperwork.lnk` at `hyperwall_v8.exe` instead of the 7.4 launch.bat.
+`launch.bat` starts v8 only. It launches `hyperwall_v8.exe` when the bundled exe is current; if the exe is older than checked-out source, it warns and falls back to `python hyperwall_v8.py`. The legacy v7.4 monolith is not launched by this batch file.
+
+Point `C:\Users\tccon\OneDrive\Desktop\game\tools\hyperwork.lnk` at either `hyperwall_v8.exe` directly or this updated `launch.bat`.
 
 ---
 
@@ -114,6 +116,18 @@ Verify after first apply: open NVIDIA Profile Inspector → search "HyperWall" i
 
 ## Smoke tests (per brief)
 
+### Static repo guards
+
+After pulling a branch, run the no-dependency guard suite before building:
+
+```powershell
+python .\tests\run_repo_guards.py
+```
+
+These checks prevent the specific v8 footguns we already hit: root `hyperwall.py` returning, `launch.bat` pointing at legacy code, global `M` mute returning, missing Escape emergency filter, or missing runtime identity logging.
+
+### Manual wall smoke
+
 Run after build, in order:
 
 1. Launch → wizard appears with last selections preselected
@@ -121,14 +135,15 @@ Run after build, in order:
 3. Wall comes up across selected monitors, all cells start within ~4 s
 4. `C` toggles controls; fade is smooth
 5. Click anywhere on seek bar → playhead jumps there
-6. `M` → all cells mute/unmute in sync
-7. `F` → favorites only; `A` → all
-8. Trash button on a clip → tag added (verify in Emby UI)
-9. Star button → favorite added
-10. Mouse idle 3 s → cursor disappears; move → reappears
-11. 4K source plays without frame drops (Emby transcodes it down to 1080p server-side via REMUX path)
-12. Two simultaneous heavy sources play without stutter
-13. **Video transitions visibly smoother than 7.4** — this is the new bar; mpv's pre-buffered loadfile + libmpv decoder reuse should make end-of-clip → next-clip near-seamless
+6. Speaker button and volume slider affect only that cell; unmuting one cell does not mute any other cell
+7. Multiple cells can remain unmuted simultaneously
+8. `F` → favorites only; `A` → all
+9. Trash button on a clip → tag added (verify in Emby UI)
+10. Star button → favorite added
+11. Mouse idle 3 s → cursor disappears; move → reappears
+12. 4K source plays without frame drops (Emby transcodes it down to 1080p server-side via REMUX path)
+13. Two simultaneous heavy sources play without stutter
+14. **Video transitions visibly smoother than 7.4** — this is the new bar; mpv's pre-buffered loadfile + libmpv decoder reuse should make end-of-clip → next-clip near-seamless
 
 If any regress vs. 7.4, that's a release blocker per the brief.
 
@@ -144,4 +159,4 @@ If any regress vs. 7.4, that's a release blocker per the brief.
 
 ## Rollback
 
-7.4 is untouched at `hyperwall.py`. Point the shortcut back at `launch.bat` to restore.
+7.4 is preserved as `legacy/hyperwall_v7_4.py` for archaeology only. Normal launcher/build paths are v8-only. To roll back deliberately, run `python legacy/hyperwall_v7_4.py` after confirming the old monolith still matches your current `config.ini` and dependency set.

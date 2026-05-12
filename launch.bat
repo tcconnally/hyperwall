@@ -1,33 +1,65 @@
 @echo off
-:: Set directory to where this script is located
+setlocal
 cd /d "%~dp0"
 
-echo Starting HyperWall...
+echo Starting HyperWall v8...
 echo Working Directory: %CD%
 
-:: 1. VERIFY FILE EXISTS
-if not exist "hyperwall.py" (
+REM Prefer the bundled exe only when it is at least as new as the Python source.
+REM This prevents accidentally testing an old PyInstaller build after git pull.
+set EXE_STALE=
+if exist "hyperwall_v8.exe" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$exe = Get-Item -LiteralPath 'hyperwall_v8.exe'; $srcItems = @(); if (Test-Path -LiteralPath 'hyperwall_v8.py') { $srcItems += Get-Item -LiteralPath 'hyperwall_v8.py' }; $srcItems += Get-ChildItem -LiteralPath 'hyperwall' -Filter '*.py' -File -Recurse; $src = $srcItems | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($src -and $src.LastWriteTime -gt $exe.LastWriteTime) { exit 10 } else { exit 0 }"
+    if errorlevel 10 set EXE_STALE=1
+)
+
+if exist "hyperwall_v8.exe" if not defined EXE_STALE (
+    echo Launching bundled hyperwall_v8.exe
+    start "" "%CD%\hyperwall_v8.exe"
+    exit /b 0
+)
+
+if defined EXE_STALE (
+    echo WARNING: hyperwall_v8.exe is older than the checked-out source.
+    echo Running Python source instead. Rebuild with build_v8.bat when ready.
+)
+
+if not exist "hyperwall_v8.py" (
     echo.
     echo ========================================================
-    echo  CRITICAL ERROR: hyperwall.py NOT FOUND!
+    echo  CRITICAL ERROR: hyperwall_v8.py NOT FOUND!
     echo ========================================================
-    echo.
-    echo Please make sure you saved the python code as 'hyperwall.py'
+    echo hyperwall_v8.py is a tracked repo file. Restore it with:
+    echo   git restore --source=HEAD -- hyperwall_v8.py
+    echo Then rerun this launcher, or run bootstrap_v8.ps1 after the restore.
     pause
-    exit /b
+    exit /b 1
 )
 
-:: 2. RUN SCRIPT
-python3 hyperwall.py
-if %ERRORLEVEL% EQU 9009 (
-    python hyperwall.py
+set PY=
+where py >nul 2>&1 && set PY=py
+if "%PY%"=="" where python >nul 2>&1 && set PY=python
+if "%PY%"=="" where python3 >nul 2>&1 && set PY=python3
+
+if "%PY%"=="" (
+    echo.
+    echo ========================================================
+    echo  CRITICAL ERROR: Python not found on PATH
+    echo ========================================================
+    echo Run bootstrap_v8.ps1 from PowerShell 7 or install Python.
+    pause
+    exit /b 1
 )
 
-:: 3. CATCH CRASHES
+%PY% hyperwall_v8.py
+
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo ========================================================
-    echo  SCRIPT CRASHED
+    echo  HYPERWALL V8 CRASHED
     echo ========================================================
     pause
 )
+
+endlocal

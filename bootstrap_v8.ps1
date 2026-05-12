@@ -39,6 +39,22 @@ $pyVersion = & $pyExe --version 2>&1
 Write-Ok "$pyExe -- $pyVersion"
 $results['python'] = "$pyExe ($pyVersion)"
 
+# --- 1b. Worktree sanity ------------------------------------------------------
+Write-Step "Checking HyperWall source files"
+$shimPath = Join-Path $PSScriptRoot 'hyperwall_v8.py'
+$packagePath = Join-Path $PSScriptRoot 'hyperwall'
+if (-not (Test-Path $shimPath)) {
+    Write-Fail "hyperwall_v8.py is missing. It is a tracked repo file."
+    Write-Host "  Restore it with: git restore --source=HEAD -- hyperwall_v8.py"
+    Write-Host "  Then rerun bootstrap_v8.ps1."
+    exit 1
+}
+if (-not (Test-Path $packagePath -PathType Container)) {
+    Write-Fail "hyperwall/ package directory missing. Re-pull the repo."
+    exit 1
+}
+Write-Ok "Source shim and package present"
+
 # --- 2. pip install dependencies ---------------------------------------------
 Write-Step "Installing Python deps"
 $pkgs = @('python-mpv', 'PyQt6', 'requests', 'pyinstaller')
