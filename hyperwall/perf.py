@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import platform
 from logging.handlers import RotatingFileHandler
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -50,6 +51,8 @@ MOUSE_IDLE_MS           = 3_000     # cursor auto-hide
 MPV_OPTS = dict(
     vo                         = "gpu-next",
     gpu_api                    = "d3d11",
+
+
     hwdec                      = "nvdec-copy",
     profile                    = "fast",
     video_sync                 = "audio",
@@ -71,6 +74,55 @@ MPV_OPTS = dict(
     audio_buffer               = 1.0,
     msg_level                  = "all=warn,cplayer=info,ao=error,ao/wasapi=fatal",
 )
+
+# Cell-specific tuning constants
+HISTORY_MAXLEN = 50
+PLAYED_ANYTHING_THRESHOLD = 0.05
+MIN_NEXT_INTERVAL_S = 0.75
+SEEK_SLIDER_MAX = 1000
+SEEK_FRACTION_MAX = 0.90
+
+# Controller-specific tuning constants
+API_POOL_MAX_WORKERS = 4
+
+# Transcoding profile parameters for Emby stream URLs
+TRANSCODE_VIDEO_CODEC    = "h264"
+TRANSCODE_AUDIO_CODEC    = "aac"
+TRANSCODE_AUDIO_CHANNELS = 2
+TRANSCODE_MAX_HEIGHT     = 1080
+TRANSCODE_MAX_WIDTH      = 1920
+TRANSCODE_MAX_FRAMERATE  = 30
+TRANSCODE_VIDEO_BITRATE  = 12000000
+
+def _get_platform_specific_mpv_opts():
+    if platform.system() == "Windows":
+        return {
+            "gpu_api": "d3d11",
+            "hwdec":   "nvdec-copy",
+            "ao":      "wasapi",
+            "vo":      "gpu-next",
+        }
+    elif platform.system() == "Linux":
+        return {
+            "gpu_api": "opengl",  # or "vulkan" if preferred/available
+            "hwdec":   "auto-copy", # mpv will try vaapi, vdpau, etc.
+            "ao":      "pulse",   # or "alsa"
+            "vo":      "gpu",
+        }
+    elif platform.system() == "Darwin": # macOS
+        return {
+            "gpu_api": "opengl",
+            "hwdec":   "videotoolbox",
+            "ao":      "coreaudio",
+            "vo":      "gpu",
+        }
+    return {} # Default for unknown OS
+
+_PLATFORM_OPTS = _get_platform_specific_mpv_opts()
+
+# Apply platform-specific defaults, but allow MPV_OPTS to override
+MPV_OPTS.update(_PLATFORM_OPTS)
+
 
 STATS_ENABLED = os.environ.get("HYPERWALL_STATS") == "1"
 

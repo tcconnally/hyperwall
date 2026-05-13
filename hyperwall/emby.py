@@ -3,10 +3,18 @@ import logging
 import threading
 import requests
 import urllib3
+import platform
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger("HyperWall")
+
+# Configuration Constants
+EMBY_API_TIMEOUT_SHORT = 5
+EMBY_API_TIMEOUT_MEDIUM = 10
+EMBY_API_TIMEOUT_LONG = 30
+EMBY_CLEANUP_ITEM_LIMIT = 500
+EMBY_CONTENT_LOAD_LIMIT = 10000
 
 # ── Hybrid URL routing ────────────────────────────────────────────────────────
 # Default to normalizing >1080p sources before they hit the wall. Direct 4K is
@@ -44,9 +52,13 @@ class EmbyAPISession:
     def test_connection(self) -> bool:
         try:
             r = self.session.get(f"{self.server_url}/System/Info/Public",
-                                 timeout=5, verify=False)
+                                 timeout=EMBY_API_TIMEOUT_SHORT, verify=False)
             return r.status_code == 200
-        except Exception:
+        except requests.exceptions.RequestException as e:
+            logger.error("Connection test failed: %s", e)
+            return False
+        except Exception as e:
+            logger.critical("Unexpected error during connection test: %s", e)
             return False
 
     def authenticate(self) -> bool:
@@ -62,7 +74,7 @@ class EmbyAPISession:
                         ),
                     },
                     json={"Username": self.username, "Pw": self._password},
-                    timeout=10, verify=False,
+                    timeout=EMBY_API_TIMEOUT_MEDIUM, verify=False,
                 )
                 r.raise_for_status()
                 d = r.json()
@@ -70,8 +82,11 @@ class EmbyAPISession:
                 self.user_id      = d.get("User", {}).get("Id")
                 logger.info("Authenticated. User ID: %s", self.user_id)
                 return bool(self.access_token and self.user_id)
-            except Exception as e:
+            except requests.exceptions.RequestException as e:
                 logger.error("Authentication error: %s", e)
+                return False
+            except Exception as e:
+                logger.critical("Unexpected error during authentication: %s", e)
                 return False
 
     def _h(self) -> dict: return {"X-Emby-Token": self.access_token}
@@ -107,8 +122,8 @@ class CleanupWorker(QObject):
                     "Recursive": "true",
                     "IncludeItemTypes": "Video,MusicVideo,Movie,Episode",
                     "Tags": "ToDelete",
-                    "Limit": "500",
-                }, timeout=10,
+                    "Limit": str(EMBY_CLEANUP_ITEM_LIMIT),
+                }, timeout=EMBY_API_TIMEOUT_MEDIUM,
             )
             items = r.json().get("Items", [])
             if not items:
@@ -120,15 +135,21 @@ class CleanupWorker(QObject):
                 name = item.get("Name", "Unknown")
                 self.progress.emit(name)
                 try:
-                    self.api.delete(f"/Items/{item['Id']}", timeout=7)
+                    self.api.delete(f"/Items/{item['Id']}", timeout=EMBY_API_TIMEOUT_MEDIUM)
                     logger.info("Maintenance: Deleted '%s'", name)
                     ok += 1
-                except Exception as e:
+                except requests.exceptions.RequestException as e:
                     logger.error("Maintenance: Failed '%s': %s", name, e)
                     fail += 1
+                except Exception as e:
+                    logger.critical("Unexpected error during item deletion: %s", e)
+                    fail += 1
             self.finished.emit(ok, fail)
+        except requests.exceptions.RequestException as e:
+            logger.error("Maintenance cleanup failed to fetch items: %s", e)
+            self.finished.emit(0, -1)
         except Exception as e:
-            logger.error("Maintenance crash: %s", e)
+            logger.critical("Unexpected error during maintenance cleanup: %s", e)
             self.finished.emit(0, -1)
 
 class ContentLoaderThread(QThread):
@@ -143,7 +164,7 @@ class ContentLoaderThread(QThread):
     def run(self):
         all_items: list[dict] = []
         try:
-            views = self.api.get(f"/Users/{self.api.user_id}/Views", timeout=10).json().get("Items", [])
+            views = self.api.get(f"/Users/{self.api.user_id}/Views", timeout=EMBY_API_TIMEOUT_MEDIUM).json().get("Items", [])
             view_map = {v["Name"]: v["Id"] for v in views}
             for lib in self.library_names:
                 lid = view_map.get(lib)
@@ -156,11 +177,13 @@ class ContentLoaderThread(QThread):
                         "ParentId": lid, "Recursive": "true",
                         "IncludeItemTypes": "Video,MusicVideo,Movie,Episode",
                         "Fields": "MediaSources,MediaStreams,UserData,Tags",
-                        "Limit": "10000",
-                    }, timeout=30,
+                        "Limit": str(EMBY_CONTENT_LOAD_LIMIT),
+                    }, timeout=EMBY_API_TIMEOUT_LONG,
                 ).json().get("Items", [])
                 logger.info("Library '%s': %d items", lib, len(items))
                 all_items.extend(items)
+        except requests.exceptions.RequestException as e:
+            logger.error("Content loader failed to fetch items: %s", e)
         except Exception as e:
-            logger.error("Content loader error: %s", e)
+            logger.critical("Unexpected error during content loading: %s", e)
         self.finished.emit(all_items)

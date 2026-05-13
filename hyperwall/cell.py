@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import platform
 import time as _time
 from collections import deque
 from PyQt6.QtCore import (
@@ -15,7 +16,9 @@ from .perf import (
     logger, STREAM_START_STAGGER_MS, MAX_RETRIES, CONTROLS_HEIGHT, 
     CONTROLS_OPACITY, AUTOHIDE_MS, OVERLAY_SHOW_MS, MOUSE_IDLE_MS,
     MPV_OPTS, STATS_ENABLED, STATS_COUNTER_PROPS, STATS_INFO_PROPS,
-    apply_perf_env, _MPV_LOG_NOISE
+    apply_perf_env, _MPV_LOG_NOISE,
+    HISTORY_MAXLEN, PLAYED_ANYTHING_THRESHOLD, MIN_NEXT_INTERVAL_S,
+    SEEK_SLIDER_MAX, SEEK_FRACTION_MAX
 )
 
 # Late import for mpv to avoid module-level load error
@@ -56,17 +59,28 @@ class _ClickSlider(QSlider):
         super().mousePressEvent(event)
 
 class VideoCell(QWidget):
+    """Represents a single video playback cell in the HyperWall.
+
+    Manages the mpv player instance, UI controls (play, seek, mute, etc.),
+    and interactions with the Emby API for media tagging and favoriting.
+    Each VideoCell operates independently within its allocated display area.
+    """
     request_next = pyqtSignal(object, bool)
     request_prev = pyqtSignal(object)
     _sig_eof   = pyqtSignal(int, str)
     _sig_time  = pyqtSignal(int, float, float)
 
     def __init__(self, controller):
+        """Initializes a VideoCell.
+
+        Args:
+            controller: The main WallController instance orchestrating all cells.
+        """
         super().__init__()
         _import_mpv()
         self.controller       = controller
         self.current_item: dict | None = None
-        self.history: deque[dict] = deque(maxlen=50)
+        self.history: deque[dict] = deque(maxlen=HISTORY_MAXLEN)
         self.looping          = False
         self.muted            = True
         self._dragging        = False
@@ -132,17 +146,19 @@ class VideoCell(QWidget):
         self._sig_time.connect(self._handle_time, Qt.ConnectionType.QueuedConnection)
 
     def _destroy_mpv(self):
+        """Terminates the current mpv player instance and cleans up resources."""
         if self._mpv is None:
             return
         if STATS_ENABLED:
             self._flush_stats()
         try:
             self._mpv.terminate()
-        except Exception as e:
-            logger.warning("mpv terminate raised: %s", e)
+        except Exception:
+            logger.exception("mpv terminate raised")
         self._mpv = None
 
     def _flush_stats(self):
+        """Collects and flushes current mpv playback statistics into total counters."""
         if self._mpv is not None:
             for prop in STATS_COUNTER_PROPS:
                 try:
@@ -150,25 +166,33 @@ class VideoCell(QWidget):
                     if v is not None:
                         self._stats_current[prop] = float(v)
                 except Exception:
-                    pass
+                    logger.exception("Error fetching mpv counter prop: %s", prop)
             for prop in STATS_INFO_PROPS:
                 try:
                     v = self._mpv[prop]
                     if v is not None:
                         self._stats_info[prop] = v
                 except Exception:
-                    pass
+                    logger.exception("Error fetching mpv info prop: %s", prop)
         for k, v in self._stats_current.items():
             self._stats_total[k] = self._stats_total.get(k, 0.0) + v
         self._stats_current.clear()
 
     def _ensure_mpv(self):
+        """Ensures an mpv player instance is initialized. Creates one if it doesn't exist.
+
+        Handles platform-specific `winId()` masking for Windows and temporary
+        redirection of C stdio to suppress noisy FFmpeg logs during initialization.
+        """
         if self._mpv is not None:
             return
         # Mask to 32-bit to prevent HWND sign-extension on Windows (mpv #10189).
         # Without this, winId() can become negative on systems with long uptimes,
         # causing mpv to create detached windows instead of embedded playback.
-        wid = int(self.video_frame.winId()) & 0xFFFFFFFF
+        if platform.system() == "Windows":
+            wid = int(self.video_frame.winId()) & 0xFFFFFFFF
+        else:
+            wid = int(self.video_frame.winId())
         if wid == 0:
             logger.warning("video_frame.winId() == 0 — widget not realized yet.")
             return
@@ -185,10 +209,12 @@ class VideoCell(QWidget):
             sys.stdout, sys.stderr = _std_saved
             _devnull.close()
         try: m["mute"] = self.muted
-        except Exception: pass
+        except Exception:
+            logger.exception("Error setting mpv mute property")
         if self.looping:
             try: m["loop-file"] = "inf"
-            except Exception: pass
+            except Exception:
+                logger.exception("Error setting mpv loop-file property")
 
         self._mpv_gen += 1
         gen = self._mpv_gen
@@ -198,7 +224,8 @@ class VideoCell(QWidget):
             try:
                 reason = ev.event.get("reason", "eof")
             except Exception:
-                reason = "eof"
+                reason = "Error in _on_end_file callback"
+                logger.exception("Error in mpv end-file callback")
             self._sig_eof.emit(gen, str(reason))
 
         @m.property_observer("time-pos")
@@ -207,7 +234,7 @@ class VideoCell(QWidget):
                 return
             if gen != self._mpv_gen:
                 return
-            if value > 0.05 and not self._played_anything:
+            if value > PLAYED_ANYTHING_THRESHOLD and not self._played_anything:
                 self._played_anything = True
             self._sig_time.emit(gen, float(value), float(self._duration_s or 0))
 
@@ -235,6 +262,15 @@ class VideoCell(QWidget):
         self._mpv = m
 
     def _mpv_log(self, level, component, message):
+        """Custom log handler for mpv messages.
+
+        Filters out known noisy warnings and routes messages to the HyperWall logger.
+
+        Args:
+            level (str): The log level (e.g., 'warn', 'error', 'info').
+            component (str): The mpv component originating the message.
+            message (str): The log message content.
+        """
         text = message.strip()
         if level == "warn" and any(pat in text for pat in _MPV_LOG_NOISE):
             return
@@ -245,15 +281,25 @@ class VideoCell(QWidget):
             logger.warning(msg)
 
     def showEvent(self, event):
+        """Handles the show event for the QWidget.
+        Ensures the video frame's native window ID is ready.
+        """
         super().showEvent(event)
         self.video_frame.winId()
 
     def resizeEvent(self, event):
+        """Handles the resize event for the QWidget.
+        Repositions the title overlay if visible.
+
+        Args:
+            event (QResizeEvent): The resize event.
+        """
         super().resizeEvent(event)
         if self._title_overlay.isVisible():
             self._reposition_overlay()
 
     def _build_controls(self):
+        """Constructs the UI elements for the video controls (slider, buttons, labels)."""
         self.controls_frame = QFrame(self)
         self.controls_frame.setObjectName("controls")
         self.controls_frame.setFixedHeight(CONTROLS_HEIGHT)
@@ -272,7 +318,7 @@ class VideoCell(QWidget):
         outer.setSpacing(1)
 
         self.seek_slider = _ClickSlider(Qt.Orientation.Horizontal)
-        self.seek_slider.setRange(0, 1000)
+        self.seek_slider.setRange(0, SEEK_SLIDER_MAX)
         self.seek_slider.setFixedHeight(10)
         self.seek_slider.sliderPressed.connect(self._seek_press)
         self.seek_slider.sliderReleased.connect(self._seek_release)
@@ -325,12 +371,18 @@ class VideoCell(QWidget):
 
     @staticmethod
     def _fmt_time(s: float) -> str:
+        """Formats a time in seconds into a human-readable string (e.g., '1:23' or '1:02:23')."""
         s = max(0, int(s))
         m, s = divmod(s, 60)
         h, m = divmod(m, 60)
         return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
     def _fade_controls(self, visible: bool):
+        """Fades the control bar in or out.
+
+        Args:
+            visible (bool): True to show controls, False to hide.
+        """
         self._ctrl_anim.stop()
         if visible:
             self.controls_frame.setVisible(True)
@@ -339,20 +391,34 @@ class VideoCell(QWidget):
         self._ctrl_anim.start()
 
     def _on_ctrl_fade_done(self):
+        """Callback for when the control fade animation finishes.
+        Hides the control frame if it has faded out completely.
+        """
         if self._ctrl_effect.opacity() < 0.01:
             self.controls_frame.setVisible(False)
 
     def _autohide_controls(self):
+        """Hides the controls after a period of inactivity."""
         self.controls_visible = False
         self.controller.controls_visible = False
         self._fade_controls(False)
 
     def set_controls_visible(self, visible: bool):
+        """Sets the visibility of the video controls.
+
+        Args:
+            visible (bool): True to show controls, False to hide.
+        """
         self.controls_visible = visible
         self._autohide_timer.stop()
         self._fade_controls(visible)
 
     def _show_title_overlay(self, title: str):
+        """Displays a title overlay on the video cell.
+
+        Args:
+            title (str): The title text to display.
+        """
         self._overlay_show_timer.stop()
         self._overlay_anim.stop()
         self._title_overlay.setText(title)
@@ -364,6 +430,7 @@ class VideoCell(QWidget):
         self._overlay_show_timer.start(OVERLAY_SHOW_MS)
 
     def _reposition_overlay(self):
+        """Repositions the title overlay to be centered at the bottom of the video frame."""
         vw, ovl = self.video_frame, self._title_overlay
         ovl.adjustSize()
         w = min(ovl.sizeHint().width(), max(vw.width() - 24, 0))
@@ -373,15 +440,25 @@ class VideoCell(QWidget):
         ovl.setFixedWidth(w); ovl.move(x, y)
 
     def _fade_overlay_out(self):
+        """Starts the animation to fade out the title overlay."""
         self._overlay_anim.setStartValue(1.0)
         self._overlay_anim.setEndValue(0.0)
         self._overlay_anim.start()
 
     def _on_overlay_fade_done(self):
+        """Callback for when the title overlay fade animation finishes.
+        Hides the overlay if it has faded out completely.
+        """
         if self._overlay_effect.opacity() < 0.01:
             self._title_overlay.hide()
 
     def play(self, item: dict, url: str):
+        """Starts playback of a new media item in the cell.
+
+        Args:
+            item (dict): The Emby media item dictionary.
+            url (str): The direct URL for the media stream.
+        """
         if self.current_item is not item:
             self._retry_count     = 0
             self._force_transcode = False
@@ -407,16 +484,25 @@ class VideoCell(QWidget):
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
             self.btn_play.setText("⏸")
-        except Exception as e:
-            logger.error("mpv loadfile failed: %s", e)
+        except Exception:
+            logger.exception("mpv loadfile failed")
             self._sig_eof.emit(self._mpv_gen, "error")
             return
         self._show_title_overlay(title)
 
     def release(self):
+        """Releases the mpv player instance and associated resources."""
         self._destroy_mpv()
 
     def _handle_eof(self, gen: int, reason: str):
+        """Handles the end-of-file (EOF) event from mpv.
+
+        Triggers next video request or error handling based on the reason.
+
+        Args:
+            gen (int): The generation ID of the mpv instance.
+            reason (str): The reason for EOF (e.g., 'eof', 'error').
+        """
         if gen != self._mpv_gen:
             return
         if reason == "error":
@@ -432,12 +518,16 @@ class VideoCell(QWidget):
                     self._mpv.seek(0, "absolute")
                     self._mpv["pause"] = False
                 except Exception:
-                    pass
+                    logger.exception("Error seeking mpv player in loop")
             else:
                 self._request_next_throttled(False)
 
     def _request_next_throttled(self, is_retry: bool):
-        MIN_NEXT_INTERVAL_S = 0.75
+        """Requests the next video with a throttling mechanism to prevent rapid re-requests.
+
+        Args:
+            is_retry (bool): True if this is a retry attempt, False otherwise.
+        """
         now = _time.monotonic()
         if not is_retry and (now - self._last_next_request_ts) < MIN_NEXT_INTERVAL_S:
             logger.warning("next_video throttled (last fire %.2fs ago)",
@@ -447,6 +537,9 @@ class VideoCell(QWidget):
         self.request_next.emit(self, is_retry)
 
     def _on_error(self):
+        """Handles playback errors, including retry logic and transcoding escalation.
+        If max retries are reached, it requests the next video.
+        """
         self._retry_count += 1
         logger.warning("Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES)
         if self._retry_count <= MAX_RETRIES:
@@ -461,78 +554,106 @@ class VideoCell(QWidget):
             self._request_next_throttled(False)
 
     def _handle_time(self, gen: int, pos: float, dur: float):
+        """Updates the seek slider and time label based on mpv's time position.
+
+        Args:
+            gen (int): The generation ID of the mpv instance.
+            pos (float): Current playback position in seconds.
+            dur (float): Total duration of the media in seconds.
+        """
         if gen != self._mpv_gen:
             return
         if not self.controls_visible:
             return
         if not self._dragging and dur > 0:
-            self.seek_slider.setValue(int(pos / dur * 1000))
+            self.seek_slider.setValue(int(pos / dur * SEEK_SLIDER_MAX))
         self.lbl_time.setText(f"{self._fmt_time(pos)} / {self._fmt_time(dur)}")
 
     def _seek_press(self):
+        """Handles the event when the seek slider is pressed.
+        Pauses playback and stops the autohide timer.
+        """
         self._dragging = True
         self._autohide_timer.stop()
         if self._mpv is not None:
             try: self._mpv["pause"] = True
-            except Exception: pass
+            except Exception:
+                logger.exception("Error pausing mpv player during seek")
 
     def _seek_release(self):
+        """Handles the event when the seek slider is released.
+        Seeks to the new position and resumes playback.
+        """
         if self._mpv is not None and self._duration_s > 0:
             try:
-                frac = min(self.seek_slider.value() / 1000.0, 0.90)
+                frac = min(self.seek_slider.value() / SEEK_SLIDER_MAX, SEEK_FRACTION_MAX)
                 target = frac * self._duration_s
                 self._mpv.seek(target, "absolute")
                 self._mpv["pause"] = False
                 self.btn_play.setText("⏸")
-            except Exception as e:
-                logger.warning("seek failed: %s", e)
+            except Exception:
+                logger.exception("seek failed")
         self._dragging = False
 
     def _toggle_play(self):
+        """Toggles the play/pause state of the video and updates the play button icon."""
         if self._mpv is None: return
         try:
             new_pause = not bool(self._mpv["pause"])
             self._mpv["pause"] = new_pause
             self.btn_play.setText("▶" if new_pause else "⏸")
         except Exception:
-            pass
+            logger.exception("Error toggling play/pause in mpv")
 
     def _toggle_loop(self):
+        """Toggles looping for the current video."""
         self.looping = self.btn_loop.isChecked()
         if self._mpv is not None:
             try:
                 self._mpv["loop-file"] = "inf" if self.looping else "no"
             except Exception:
-                pass
+                logger.exception("Error toggling loop-file in mpv")
+
+    def _set_muted(self, state: bool):
+        """Sets the mute state of the mpv player and updates the UI.
+
+        Args:
+            state (bool): True to mute, False to unmute.
+        """
+        self.muted = state
+        if self._mpv is not None:
+            try: self._mpv["mute"] = state
+            except Exception:
+                logger.exception("Error setting mpv mute state")
+        self.btn_mute.setChecked(state)
+        self.btn_mute.setText("🔇" if state else "🔊")
 
     def _toggle_mute(self):
-        muted = self.btn_mute.isChecked()
-        self.muted = muted
-        if self._mpv is not None:
-            try: self._mpv["mute"] = muted
-            except Exception: pass
-        self.btn_mute.setText("🔇" if muted else "🔊")
-        if not muted and self.vol_slider.value() == 0:
+        """Toggles the mute state. If unmuting and volume is 0, sets volume to 70."""
+        self._set_muted(not self.muted)
+        if not self.muted and self.vol_slider.value() == 0:
             self.vol_slider.setValue(70)
 
     def _vol_changed(self, val: int):
+        """Handles volume slider value changes.
+        Updates mpv volume and adjusts mute state if volume reaches 0 or goes above 0.
+
+        Args:
+            val (int): New volume value (0-100).
+        """
         if self._mpv is not None:
             try: self._mpv["volume"] = float(val)
-            except Exception: pass
+            except Exception:
+                logger.exception("Error setting mpv volume")
         if val > 0 and self.muted:
-            self.muted = False
-            if self._mpv is not None:
-                try: self._mpv["mute"] = False
-                except Exception: pass
-            self.btn_mute.setChecked(False); self.btn_mute.setText("🔊")
+            self._set_muted(False)
         elif val == 0 and not self.muted:
-            self.muted = True
-            if self._mpv is not None:
-                try: self._mpv["mute"] = True
-                except Exception: pass
-            self.btn_mute.setChecked(True); self.btn_mute.setText("🔇")
+            self._set_muted(True)
 
     def _toggle_tag(self):
+        """Toggles the 'ToDelete' tag on the current media item in Emby.
+        Updates the UI and notifies the controller to update tags via API.
+        """
         if not self.current_item: return
         raw = self.current_item.setdefault("Tags", [])
         tags = ([t.get("Name", "") for t in raw]
@@ -544,6 +665,9 @@ class VideoCell(QWidget):
         self.controller.update_tags(self.current_item)
 
     def _toggle_fav(self):
+        """Toggles the 'IsFavorite' status of the current media item in Emby.
+        Updates the UI and notifies the controller to update favorite status via API.
+        """
         if not self.current_item: return
         new = self.btn_fav.isChecked()
         self.current_item.setdefault("UserData", {})["IsFavorite"] = new

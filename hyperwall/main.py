@@ -1,6 +1,7 @@
 import os
 import sys
 import ctypes
+import platform
 import logging
 import configparser
 from PyQt6.QtCore import Qt, QThread, QTimer
@@ -56,7 +57,7 @@ def main():
     logger.info("Runtime: %s", runtime_banner())
 
     # 4. Set priority
-    if not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
+    if platform.system() == "Windows" and not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
         try:
             ctypes.windll.kernel32.SetPriorityClass(
                 ctypes.windll.kernel32.GetCurrentProcess(), 0x00000080  # HIGH
