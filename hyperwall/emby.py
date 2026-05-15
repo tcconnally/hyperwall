@@ -46,7 +46,8 @@ class EmbyAPISession:
             r = self.session.get(f"{self.server_url}/System/Info/Public",
                                  timeout=5, verify=False)
             return r.status_code == 200
-        except Exception:
+        except requests.exceptions.RequestException as e:
+            logger.error("Connection test failed: %s", e)
             return False
 
     def authenticate(self) -> bool:
@@ -70,7 +71,7 @@ class EmbyAPISession:
                 self.user_id      = d.get("User", {}).get("Id")
                 logger.info("Authenticated. User ID: %s", self.user_id)
                 return bool(self.access_token and self.user_id)
-            except Exception as e:
+            except requests.exceptions.RequestException as e:
                 logger.error("Authentication error: %s", e)
                 return False
 
@@ -100,9 +101,11 @@ class CleanupWorker(QObject):
     @pyqtSlot()
     def run(self):
         logger.info("Maintenance: Starting cleanup...")
+        path_items = ""
         try:
+            path_items = f"/Users/{self.api.user_id}/Items"
             r = self.api.get(
-                f"/Users/{self.api.user_id}/Items",
+                path_items,
                 params={
                     "Recursive": "true",
                     "IncludeItemTypes": "Video,MusicVideo,Movie,Episode",
@@ -119,16 +122,21 @@ class CleanupWorker(QObject):
                     break
                 name = item.get("Name", "Unknown")
                 self.progress.emit(name)
+                path_delete_item = ""
                 try:
-                    self.api.delete(f"/Items/{item['Id']}", timeout=7)
+                    path_delete_item = f"/Items/{item['Id']}"
+                    self.api.delete(path_delete_item, timeout=7)
                     logger.info("Maintenance: Deleted '%s'", name)
                     ok += 1
-                except Exception as e:
-                    logger.error("Maintenance: Failed '%s': %s", name, e)
+                except requests.exceptions.RequestException as e:
+                    logger.error("Maintenance: Failed to delete '%s' via %s: %s", name, path_delete_item, e)
                     fail += 1
             self.finished.emit(ok, fail)
+        except requests.exceptions.RequestException as e:
+            logger.error("Maintenance failed to fetch items from %s: %s", path_items, e)
+            self.finished.emit(0, -1)
         except Exception as e:
-            logger.error("Maintenance crash: %s", e)
+            logger.error("Maintenance crash: %s", e) # Catch other potential non-request errors
             self.finished.emit(0, -1)
 
 class ContentLoaderThread(QThread):
@@ -142,16 +150,20 @@ class ContentLoaderThread(QThread):
 
     def run(self):
         all_items: list[dict] = []
+        path_views = ""
+        path_library_items = ""
         try:
-            views = self.api.get(f"/Users/{self.api.user_id}/Views", timeout=10).json().get("Items", [])
+            path_views = f"/Users/{self.api.user_id}/Views"
+            views = self.api.get(path_views, timeout=10).json().get("Items", [])
             view_map = {v["Name"]: v["Id"] for v in views}
             for lib in self.library_names:
                 lid = view_map.get(lib)
                 if not lid:
                     logger.warning("Library '%s' not found.", lib); continue
                 self.progress.emit(f"Loading '{lib}'…")
+                path_library_items = f"/Users/{self.api.user_id}/Items"
                 items = self.api.get(
-                    f"/Users/{self.api.user_id}/Items",
+                    path_library_items,
                     params={
                         "ParentId": lid, "Recursive": "true",
                         "IncludeItemTypes": "Video,MusicVideo,Movie,Episode",
@@ -161,6 +173,10 @@ class ContentLoaderThread(QThread):
                 ).json().get("Items", [])
                 logger.info("Library '%s': %d items", lib, len(items))
                 all_items.extend(items)
+        except requests.exceptions.RequestException as e:
+            logger.error("Content loader error while fetching %s or library items: %s", path_views, e)
+            all_items.clear() # Ensure no partial data is returned on error
         except Exception as e:
-            logger.error("Content loader error: %s", e)
+            logger.error("Content loader crash: %s", e)
+            all_items.clear()
         self.finished.emit(all_items)

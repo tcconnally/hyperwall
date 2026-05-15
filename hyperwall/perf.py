@@ -28,13 +28,21 @@ logger = logging.getLogger("HyperWall")
 logger.setLevel(logging.INFO)
 _fmt = logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
+class MPVLogFilter(logging.Filter):
+    def filter(self, record):
+        if "mpv[" in record.msg and any(pat in record.msg for pat in _MPV_LOG_NOISE):
+            return False
+        return True
+
 def setup_logging(log_file: str):
     if not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
         _fh = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
         _fh.setFormatter(_fmt)
+        _fh.addFilter(MPVLogFilter()) # Add the custom filter here
         logger.addHandler(_fh)
     _ch = logging.StreamHandler(sys.stdout)
     _ch.setFormatter(_fmt)
+    _ch.addFilter(MPVLogFilter()) # Add the custom filter here
     logger.addHandler(_ch)
 
 # ── Tuning constants ──────────────────────────────────────────────────────────

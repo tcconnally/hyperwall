@@ -3,6 +3,8 @@ import sys
 import ctypes
 import logging
 import configparser
+import requests # Added for RequestException
+import requests.exceptions # Added for RequestException
 from PyQt6.QtCore import Qt, QThread, QTimer
 from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QLabel, QMessageBox
 
@@ -44,6 +46,7 @@ def main():
                f"Install:\n  pip install python-mpv\n\n"
                f"And place mpv-2.dll next to this script:\n  {SCRIPT_DIR}\n\n"
                f"Download: https://mpv.io/installation/  (use shobon-mpv builds)")
+        logger.critical(msg)
         try:
             app = QApplication.instance() or QApplication(sys.argv)
             QMessageBox.critical(None, "HyperWall — libmpv missing", msg)
@@ -85,10 +88,11 @@ def main():
         }
         with open(CONFIG_FILE, "w") as f:
             cfg.write(f)
+        msg = (f"config.ini created at:\n{os.path.abspath(CONFIG_FILE)}\n\n"
+               "Fill in Emby server URL, username, password, then restart.")
+        logger.info(msg)
         QMessageBox.information(
-            None, "Config Created",
-            f"config.ini created at:\n{os.path.abspath(CONFIG_FILE)}\n\n"
-            "Fill in Emby server URL, username, password, then restart.",
+            None, "Config Created", msg
         )
         sys.exit(0)
 
@@ -97,18 +101,21 @@ def main():
     s_user = cfg.get("Login", "username",   fallback="")
     s_pass = cfg.get("Login", "password",   fallback="")
     if not s_url or not s_user:
-        QMessageBox.critical(None, "Config Error",
-                             "server_url and username must be set in config.ini.")
+        msg = "server_url and username must be set in config.ini."
+        logger.critical(f"Config Error: {msg}")
+        QMessageBox.critical(None, "Config Error", msg)
         sys.exit(1)
 
     api = EmbyAPISession(s_url, s_user, s_pass)
     if not api.test_connection():
-        QMessageBox.critical(None, "Connection Error",
-                             f"Cannot reach Emby server at:\n{s_url}")
+        msg = f"Cannot reach Emby server at:\n{s_url}"
+        logger.critical(f"Connection Error: {msg}")
+        QMessageBox.critical(None, "Connection Error", msg)
         sys.exit(1)
     if not api.authenticate():
-        QMessageBox.critical(None, "Auth Error",
-                             "Authentication failed.\nCheck username and password.")
+        msg = "Authentication failed.\nCheck username and password."
+        logger.critical(f"Auth Error: {msg}")
+        QMessageBox.critical(None, "Auth Error", msg)
         sys.exit(1)
 
     if cfg.getboolean("Settings", "cleanup_on_startup", fallback=False):
@@ -132,7 +139,11 @@ def main():
     try:
         r = api.get(f"/Users/{api.user_id}/Views", timeout=10)
         libs = sorted(v["Name"] for v in r.json().get("Items", []))
-    except Exception:
+    except requests.exceptions.RequestException as e:
+        logger.error("Failed to fetch user views from Emby API: %s", e)
+        libs = []
+    except Exception as e:
+        logger.error("An unexpected error occurred while fetching user views: %s", e)
         libs = []
 
     wiz = SetupWizard(cfg, app.screens(), libs)
@@ -141,8 +152,9 @@ def main():
 
     s = wiz.get_settings()
     if not s["screens"] or not s["libraries"]:
-        QMessageBox.warning(None, "Setup Error",
-                            "Select at least one display and one library.")
+        msg = "Select at least one display and one library."
+        logger.warning(f"Setup Error: {msg}")
+        QMessageBox.warning(None, "Setup Error", msg)
         api.close(); sys.exit(1)
 
     if not cfg.has_section("Settings"):
