@@ -43,8 +43,8 @@ class SetupWizard(QDialog):
         self.list_disp.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
         self._screen_map: dict[str, object] = {}
         last_screens = config.get("Settings", "last_screens", fallback="").split(",")
-        for s in screens:
-            label = f"{s.name()}  [{s.geometry().width()}×{s.geometry().height()}]"
+        for idx, s in enumerate(screens, 1):
+            label = f"Monitor {idx} — {s.name()}  [{s.geometry().width()}×{s.geometry().height()}]"
             item = QListWidgetItem(label); self.list_disp.addItem(item)
             self._screen_map[label] = s
             if s.name() in last_screens:

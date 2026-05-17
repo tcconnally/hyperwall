@@ -146,7 +146,20 @@ def main():
         logger.error("An unexpected error occurred while fetching user views: %s", e)
         libs = []
 
-    wiz = SetupWizard(cfg, app.screens(), libs)
+    def _ordered_screens(app):
+        """Return screens sorted to match Windows monitor numbering (left-to-right)."""
+        screens = list(app.screens())
+        if not screens:
+            return screens
+        primary = app.primaryScreen()
+        others = [s for s in screens if s is not primary]
+        others.sort(key=lambda s: (s.geometry().x(), s.geometry().y()))
+        ordered = [primary] + others if primary in screens else others
+        return ordered
+
+    # Order matches Windows Display Settings (Monitor 1, 2, ... left-to-right)
+    ordered_screens = _ordered_screens(app)
+    wiz = SetupWizard(cfg, ordered_screens, libs)
     if wiz.exec() != QDialog.DialogCode.Accepted:
         api.close(); sys.exit(0)
 
