@@ -92,12 +92,14 @@ Verify after first apply: open NVIDIA Profile Inspector → search "HyperWall" i
 
 ## Hardware tuning (locked to your spec)
 
-- `vo=gpu-next` — Blackwell + HDR pipeline; better than `gpu` on RTX 50-series
-- `hwdec=nvdec` — confirmed no session limit on Blackwell (NVDEC perf headroom is ~17% utilization at 12 cells)
-- `target-colorspace-hint=yes` — for HDR-on Windows desktop on the UltraGears
-- `cache=yes`, `cache-secs=10`, `demuxer-max-bytes=256MiB`, `demuxer-readahead-secs=20` — generous, your 32 GB RAM swallows it
-- `video-sync=display-resample` — clean at 240 Hz, depends on G-Sync being off (handled by the .nip)
+- `vo=gpu-next` — Blackwell + HDR pipeline
+- `hwdec=nvdec` — confirmed no session limit on Blackwell
+- `target-colorspace-hint=yes` — for HDR on UltraGears
+- `cache=yes`, `cache-secs=10`, `demuxer-max-bytes=256MiB`, `demuxer-readahead-secs=20` — generous, 32 GB RAM
+- `video-sync=display-resample` — clean at 240 Hz (G-Sync off via .nip)
 - `interpolation=no` — no motion interp at 12 cells
+
+**Transition improvement (v8.2+)**: VideoCell now reuses the mpv instance across normal clips instead of destroy+recreate. Combined with libmpv loadfile pre-buffering, this delivers the near-seamless EOF→next behavior.
 - `stream-lavf-o=reconnect=...` — auto-reconnect HLS on transient HTTP failures
 
 ---

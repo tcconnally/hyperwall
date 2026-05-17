@@ -398,8 +398,13 @@ class VideoCell(QWidget):
         self.btn_tag.setChecked("ToDelete" in tag_names)
         self.btn_fav.setChecked(item.get("UserData", {}).get("IsFavorite", False))
 
-        self._destroy_mpv()
-        self._ensure_mpv()
+        # Reuse existing mpv instance for normal clip transitions.
+        # This enables libmpv decoder/context reuse and internal pre-buffering,
+        # delivering the near-seamless end-of-clip → next-clip behavior documented
+        # in INSTRUCTIONS_v8.md. Only recreate on first play or after error paths.
+        if self._mpv is None or self._force_transcode:
+            self._destroy_mpv()
+            self._ensure_mpv()
         if self._mpv is None:
             logger.error("mpv not initialized — cannot play.")
             return

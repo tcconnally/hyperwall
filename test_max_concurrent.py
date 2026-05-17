@@ -1,3 +1,9 @@
+# Smoke test import (added by audit follow-up)
+try:
+    from hyperwall.perf import MPV_OPTS
+    print('hyperwall package smoke OK')
+except Exception as ex:
+    print('Smoke import failed:', ex)
 """
 HyperWall v8 -- max concurrent stress test.
 

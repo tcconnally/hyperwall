@@ -8,7 +8,11 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger("HyperWall")
 
-# ── Hybrid URL routing ────────────────────────────────────────────────────────
+# ── Hybrid URL routing (matches INSTRUCTIONS_v8.md) ─────────────────────────
+# Default: Always REMUX path.
+# Escalation: On retry #2 in VideoCell._on_error, _force_transcode flips the
+# Emby request to VideoCodec=h264 (transcode). needs_transcode() is a size
+# heuristic only; the real control lives in cell retry logic.
 # Default to normalizing >1080p sources before they hit the wall. Direct 4K is
 # fine in isolation, but 8 simultaneous cells create visible frame pacing pain.
 _AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1"

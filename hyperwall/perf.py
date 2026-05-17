@@ -19,6 +19,13 @@ LOG_FILE     = os.path.join(SCRIPT_DIR, "hyperwall.log")
 LAUNCHER_EXE = os.path.join(SCRIPT_DIR, "hyperwall_v8.exe")
 NIP_FILE     = os.path.join(SCRIPT_DIR, "hyperwall_v8.nip")
 NPI_EXE      = os.path.join(SCRIPT_DIR, "tools", "nvidiaProfileInspector.exe")
+# Fallback search if tools/ missing (user may have installed NPI elsewhere)
+if not os.path.exists(NPI_EXE):
+    for p in [os.environ.get("NPI_PATH", ""), "/usr/local/bin", "/opt/nvidia"]:
+        cand = os.path.join(p, "nvidiaProfileInspector.exe") if p else ""
+        if cand and os.path.exists(cand):
+            NPI_EXE = cand
+            break
 NV_SENTINEL  = os.path.join(SCRIPT_DIR, ".hyperwall_v8_nvprofile.sentinel")
 
 os.environ["PATH"] = SCRIPT_DIR + os.pathsep + os.environ.get("PATH", "")
@@ -54,19 +61,20 @@ AUTOHIDE_MS             = 5_000     # one-shot startup auto-hide
 OVERLAY_SHOW_MS         = 3_000     # title overlay before fade
 MOUSE_IDLE_MS           = 3_000     # cursor auto-hide
 
-# mpv tuning — locked to the hardware spec.
+# mpv tuning — locked to Blackwell + 240 Hz UltraGears + 32 GB RAM.
+# Matches INSTRUCTIONS_v8.md and real hardware constraints.
 MPV_OPTS = dict(
     vo                         = "gpu-next",
     gpu_api                    = "d3d11",
-    hwdec                      = "nvdec-copy",
+    hwdec                      = "nvdec",
     profile                    = "fast",
-    video_sync                 = "audio",
+    video_sync                 = "display-resample",
     interpolation              = "no",
-    target_colorspace_hint     = "no",
+    target_colorspace_hint     = "yes",
     cache                      = "yes",
-    cache_secs                 = 5,
-    demuxer_max_bytes          = "128MiB",
-    demuxer_readahead_secs     = 5,
+    cache_secs                 = 10,
+    demuxer_max_bytes          = "256MiB",
+    demuxer_readahead_secs     = 20,
     network_timeout            = 15,
     stream_lavf_o              = "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
     keep_open                  = "no",
