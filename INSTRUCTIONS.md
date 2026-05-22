@@ -47,15 +47,15 @@ The bootstrap script auto-fetches `mpv-dev-x86_64-v3-*.7z` from <https://github.
 Download the latest release from <https://github.com/Orbmu2k/nvidiaProfileInspector>. Unzip and place at:
 
 ```
-C:\Users\<YourUsername>\path\to\wall\tools\nvidiaProfileInspector.exe
+<wall_dir>\tools\nvidiaProfileInspector.exe
 ```
 
-(Edit `NPI_EXE` in `hyperwall/perf.py` to match your actual install path, or drop `nvidiaProfileInspector.exe` next to `hyperwall_v8.exe` — the auto-discovery logic finds it there.)
+(Where `<wall_dir>` is the directory where HyperWall is installed, e.g. `C:\Apps\hyperwall`. Or simply drop `nvidiaProfileInspector.exe` next to `hyperwall_v8.exe` — the auto-discovery logic finds it there without any path editing.)
 
 ### 4. Build the launcher exe
 
 ```cmd
-cd C:\Users\<YourUsername>\path\to\wall
+cd <wall_dir>
 build_v8.bat
 ```
 
@@ -69,7 +69,7 @@ Launch `hyperwall_v8.exe` directly (not via `python hyperwall_v8.py`). On first 
 
 `launch.bat` starts v8 only. It launches `hyperwall_v8.exe` when the bundled exe is current; if the exe is older than checked-out source, it warns and falls back to `python hyperwall_v8.py`. The legacy v7.4 monolith is not launched by this batch file.
 
-Point `C:\Users\<YourUsername>\path\to\hyperwall.lnk` at either `hyperwall_v8.exe` directly or this updated `launch.bat`.
+Point your desktop shortcut (e.g. `hyperwall.lnk`) at either `hyperwall_v8.exe` directly or `launch.bat` inside `<wall_dir>`.
 
 ---
 

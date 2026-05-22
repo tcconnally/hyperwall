@@ -185,18 +185,26 @@ class VideoCell(QWidget):
         # Suppress FFmpeg C-level log output during instance creation.
         # With 8-12 cells, all instances route logs to the first handler
         # (python-mpv issue #126). Redirect C stdio temporarily.
+        # Open devnull outside the try block so it outlives the MPV() call;
+        # restore stdout/stderr in finally before closing, so sys.stdout/stderr
+        # are never left pointing at a closed file handle on exception paths.
         _std_saved = (sys.stdout, sys.stderr)
+        _devnull = open(os.devnull, "w")
         try:
-            with open(os.devnull, "w") as _devnull:
-                sys.stdout = sys.stderr = _devnull
-                m = mpv.MPV(wid=wid, log_handler=self._mpv_log, **apply_perf_env(MPV_OPTS))
+            sys.stdout = sys.stderr = _devnull
+            m = mpv.MPV(wid=wid, log_handler=self._mpv_log, **apply_perf_env(MPV_OPTS))
         finally:
             sys.stdout, sys.stderr = _std_saved
-        try: m["mute"] = self.muted
-        except Exception: pass
+            _devnull.close()
+        try:
+            m["mute"] = self.muted
+        except Exception as e:
+            logger.debug("mpv: failed to set initial mute: %s", e)
         if self.looping:
-            try: m["loop-file"] = "inf"
-            except Exception: pass
+            try:
+                m["loop-file"] = "inf"
+            except Exception as e:
+                logger.debug("mpv: failed to set initial loop-file: %s", e)
 
         self._mpv_gen += 1
         gen = self._mpv_gen
@@ -355,22 +363,29 @@ class VideoCell(QWidget):
     def enterEvent(self, event):
         self._mouse_in_cell = True
         if not self.controls_visible:
-            self.set_controls_visible(True)
-        # Restart idle timer when mouse enters
+            self._fade_controls(True)
+            self.controls_frame.raise_()
+            self.controls_visible = True
+        # Restart idle timer — don't call set_controls_visible here, it would
+        # stop the timer we're about to start.
         self._autohide_timer.start(AUTOHIDE_MS)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self._mouse_in_cell = False
-        # Start hide timer when mouse leaves (unless pinned)
-        if not self.controls_visible:
+        # Start hide timer whenever mouse leaves and controls are showing.
+        # (Previous code had the guard inverted — only started timer when
+        # controls were already hidden, which is a no-op.)
+        if self.controls_visible:
             self._autohide_timer.start(MOUSE_IDLE_MS)
         super().leaveEvent(event)
 
     def mouseMoveEvent(self, event):
         self._mouse_in_cell = True
         if not self.controls_visible:
-            self.set_controls_visible(True)
+            self._fade_controls(True)
+            self.controls_frame.raise_()
+            self.controls_visible = True
         # Reset idle timeout on any mouse movement inside the cell
         self._autohide_timer.start(AUTOHIDE_MS)
         super().mouseMoveEvent(event)
@@ -386,11 +401,15 @@ class VideoCell(QWidget):
 
     def set_controls_visible(self, visible: bool):
         self.controls_visible = visible
-        self._autohide_timer.stop()
         if visible:
             self._fade_controls(True)
             self.controls_frame.raise_()  # ensure on top of video
+            # Restart autohide so globally-shown controls still disappear
+            # after the idle timeout (previously stopped the timer and never
+            # restarted it, causing controls to stay up forever after 'C').
+            self._autohide_timer.start(AUTOHIDE_MS)
         else:
+            self._autohide_timer.stop()
             self._fade_controls(False)
 
 
@@ -488,8 +507,9 @@ class VideoCell(QWidget):
                 try:
                     self._mpv.seek(0, "absolute")
                     self._mpv["pause"] = False
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Loop seek failed: %s", e)
+                    self._request_next_throttled(False)
             else:
                 self._request_next_throttled(False)
 
@@ -557,42 +577,50 @@ class VideoCell(QWidget):
             new_pause = not bool(self._mpv["pause"])
             self._mpv["pause"] = new_pause
             self.btn_play.setText("▶" if new_pause else "⏸")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("toggle_play failed: %s", e)
 
     def _toggle_loop(self):
         self.looping = self.btn_loop.isChecked()
         if self._mpv is not None:
             try:
                 self._mpv["loop-file"] = "inf" if self.looping else "no"
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("toggle_loop failed: %s", e)
 
     def _toggle_mute(self):
         muted = self.btn_mute.isChecked()
         self.muted = muted
         if self._mpv is not None:
-            try: self._mpv["mute"] = muted
-            except Exception: pass
+            try:
+                self._mpv["mute"] = muted
+            except Exception as e:
+                logger.debug("toggle_mute failed: %s", e)
         self.btn_mute.setText("🔇" if muted else "🔊")
         if not muted and self.vol_slider.value() == 0:
             self.vol_slider.setValue(70)
 
     def _vol_changed(self, val: int):
         if self._mpv is not None:
-            try: self._mpv["volume"] = float(val)
-            except Exception: pass
+            try:
+                self._mpv["volume"] = float(val)
+            except Exception as e:
+                logger.debug("vol_changed failed: %s", e)
         if val > 0 and self.muted:
             self.muted = False
             if self._mpv is not None:
-                try: self._mpv["mute"] = False
-                except Exception: pass
+                try:
+                    self._mpv["mute"] = False
+                except Exception as e:
+                    logger.debug("vol_changed mute-clear failed: %s", e)
             self.btn_mute.setChecked(False); self.btn_mute.setText("🔊")
         elif val == 0 and not self.muted:
             self.muted = True
             if self._mpv is not None:
-                try: self._mpv["mute"] = True
-                except Exception: pass
+                try:
+                    self._mpv["mute"] = True
+                except Exception as e:
+                    logger.debug("vol_changed mute-set failed: %s", e)
             self.btn_mute.setChecked(True); self.btn_mute.setText("🔇")
 
     def _toggle_tag(self):

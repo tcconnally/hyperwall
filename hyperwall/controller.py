@@ -203,7 +203,8 @@ class WallController:
         if not active_mpvs: return
         try:
             any_playing = any(not bool(c._mpv["pause"]) for c in active_mpvs)
-        except Exception:
+        except Exception as e:
+            logger.debug("Pause state read failed, assuming paused: %s", e)
             any_playing = False
         for c in active_mpvs:
             try:
@@ -284,12 +285,17 @@ class WallController:
             self._dump_stats_json()
         # Signal no new submissions, then drain in-flight API calls (session-stop
         # requests fired above) with a short bounded wait before tearing down.
+        # Use a daemon thread to enforce the timeout — shutdown(wait=True) has no
+        # built-in deadline, and a hung network call would stall Qt's quit loop.
         self._api_pool_closed = True
-        try:
-            self._api_pool.shutdown(wait=True, cancel_futures=False)
-        except TypeError:
-            # Python < 3.9 — cancel_futures not supported
-            self._api_pool.shutdown(wait=True)
+        import threading as _threading
+        _drain = _threading.Thread(
+            target=self._api_pool.shutdown, kwargs={"wait": True}, daemon=True
+        )
+        _drain.start()
+        _drain.join(timeout=6.0)  # slightly longer than the longest API timeout (5 s)
+        if _drain.is_alive():
+            logger.warning("API pool drain timed out — forcing shutdown.")
         try:
             QApplication.instance().removeEventFilter(self._escape_filter)
         except Exception as e:
