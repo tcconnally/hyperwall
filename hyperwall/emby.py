@@ -5,7 +5,6 @@ import requests
 import urllib3
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger("HyperWall")
 
 # ── Hybrid URL routing (matches INSTRUCTIONS_v8.md) ─────────────────────────
@@ -30,6 +29,7 @@ def needs_transcode(item: dict) -> bool:
 # ── Emby API Session ──────────────────────────────────────────────────────────
 class EmbyAPISession:
     def __init__(self, server_url: str, username: str, password: str):
+        self.verify_ssl = True
         self.server_url = server_url.rstrip("/")
         self.username   = username
         self._password  = password
@@ -48,7 +48,7 @@ class EmbyAPISession:
     def test_connection(self) -> bool:
         try:
             r = self.session.get(f"{self.server_url}/System/Info/Public",
-                                 timeout=5, verify=False)
+                                 timeout=5, verify=self.verify_ssl)
             return r.status_code == 200
         except requests.exceptions.RequestException as e:
             logger.error("Connection test failed: %s", e)
@@ -67,7 +67,7 @@ class EmbyAPISession:
                         ),
                     },
                     json={"Username": self.username, "Pw": self._password},
-                    timeout=10, verify=False,
+                    timeout=10, verify=self.verify_ssl,
                 )
                 r.raise_for_status()
                 d = r.json()
@@ -82,13 +82,13 @@ class EmbyAPISession:
     def _h(self) -> dict: return {"X-Emby-Token": self.access_token}
 
     def get(self, path: str, **kw):
-        return self.session.get(f"{self.server_url}{path}", headers=self._h(), verify=False, **kw)
+        return self.session.get(f"{self.server_url}{path}", headers=self._h(), verify=self.verify_ssl, **kw)
 
     def post(self, path: str, **kw):
-        return self.session.post(f"{self.server_url}{path}", headers=self._h(), verify=False, **kw)
+        return self.session.post(f"{self.server_url}{path}", headers=self._h(), verify=self.verify_ssl, **kw)
 
     def delete(self, path: str, **kw):
-        return self.session.delete(f"{self.server_url}{path}", headers=self._h(), verify=False, **kw)
+        return self.session.delete(f"{self.server_url}{path}", headers=self._h(), verify=self.verify_ssl, **kw)
 
     def close(self): self.session.close()
 

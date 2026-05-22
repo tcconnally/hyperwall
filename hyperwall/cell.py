@@ -28,8 +28,9 @@ def _import_mpv():
 
 CTRL_STYLE = """
     QFrame#controls {
-        background: rgba(55, 55, 55, 220);
-        border-top: 1px solid rgba(255, 255, 255, 18);
+        background: rgba(22, 22, 22, 210);
+        border-top: 1px solid rgba(255, 255, 255, 22);
+        border-radius: 4px 4px 0 0;
     }
     QLabel { color: #ccc; font-family: 'Segoe UI'; font-size: 9px; background: transparent; }
     QPushButton {
@@ -81,12 +82,14 @@ class VideoCell(QWidget):
         self._stats_info:    dict[str, object]  = {}
         self._played_anything = False
         self._last_next_request_ts = 0.0
+        self._mouse_in_cell = False
         self._emby_session_id: str | None = None
         self._emby_item_id:    str | None = None
 
         self.setStyleSheet("background: black;")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
+        # Main layout: video takes full area. Controls are overlaid on top.
         vbox = QVBoxLayout(self)
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
@@ -100,7 +103,10 @@ class VideoCell(QWidget):
         vbox.addWidget(self.video_frame, 1)
 
         self._build_controls()
-        vbox.addWidget(self.controls_frame)
+        # Controls are positioned absolutely on top of video (overlay mode)
+        self.controls_frame.setParent(self)
+        self.controls_frame.hide()
+        self._reposition_controls()
 
         self._autohide_timer = QTimer(self)
         self._autohide_timer.setSingleShot(True)
@@ -127,6 +133,9 @@ class VideoCell(QWidget):
         self._overlay_show_timer = QTimer(self)
         self._overlay_show_timer.setSingleShot(True)
         self._overlay_show_timer.timeout.connect(self._fade_overlay_out)
+
+        self.setMouseTracking(True)
+        self._mouse_in_cell = False
 
         self._sig_eof.connect(self._handle_eof, Qt.ConnectionType.QueuedConnection)
         self._sig_time.connect(self._handle_time, Qt.ConnectionType.QueuedConnection)
@@ -176,14 +185,13 @@ class VideoCell(QWidget):
         # Suppress FFmpeg C-level log output during instance creation.
         # With 8-12 cells, all instances route logs to the first handler
         # (python-mpv issue #126). Redirect C stdio temporarily.
-        _devnull = open(os.devnull, "w")
         _std_saved = (sys.stdout, sys.stderr)
         try:
-            sys.stdout = sys.stderr = _devnull
-            m = mpv.MPV(wid=wid, log_handler=self._mpv_log, **apply_perf_env(MPV_OPTS))
+            with open(os.devnull, "w") as _devnull:
+                sys.stdout = sys.stderr = _devnull
+                m = mpv.MPV(wid=wid, log_handler=self._mpv_log, **apply_perf_env(MPV_OPTS))
         finally:
             sys.stdout, sys.stderr = _std_saved
-            _devnull.close()
         try: m["mute"] = self.muted
         except Exception: pass
         if self.looping:
@@ -250,6 +258,7 @@ class VideoCell(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._reposition_controls()
         if self._title_overlay.isVisible():
             self._reposition_overlay()
 
@@ -342,7 +351,35 @@ class VideoCell(QWidget):
         if self._ctrl_effect.opacity() < 0.01:
             self.controls_frame.setVisible(False)
 
+    # --- Hover / idle mouse reveal for controls ---
+    def enterEvent(self, event):
+        self._mouse_in_cell = True
+        if not self.controls_visible:
+            self.set_controls_visible(True)
+        # Restart idle timer when mouse enters
+        self._autohide_timer.start(AUTOHIDE_MS)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._mouse_in_cell = False
+        # Start hide timer when mouse leaves (unless pinned)
+        if not self.controls_visible:
+            self._autohide_timer.start(MOUSE_IDLE_MS)
+        super().leaveEvent(event)
+
+    def mouseMoveEvent(self, event):
+        self._mouse_in_cell = True
+        if not self.controls_visible:
+            self.set_controls_visible(True)
+        # Reset idle timeout on any mouse movement inside the cell
+        self._autohide_timer.start(AUTOHIDE_MS)
+        super().mouseMoveEvent(event)
+
     def _autohide_controls(self):
+        if self._mouse_in_cell:
+            # Still hovering — just restart timer
+            self._autohide_timer.start(AUTOHIDE_MS)
+            return
         self.controls_visible = False
         self.controller.controls_visible = False
         self._fade_controls(False)
@@ -350,7 +387,18 @@ class VideoCell(QWidget):
     def set_controls_visible(self, visible: bool):
         self.controls_visible = visible
         self._autohide_timer.stop()
-        self._fade_controls(visible)
+        if visible:
+            self._fade_controls(True)
+            self.controls_frame.raise_()  # ensure on top of video
+        else:
+            self._fade_controls(False)
+
+
+    def _reposition_controls(self):
+        if hasattr(self, "controls_frame"):
+            h = self.controls_frame.height()
+            self.controls_frame.setGeometry(0, self.height() - h, self.width(), h)
+            self.controls_frame.raise_()
 
     def _show_title_overlay(self, title: str):
         self._overlay_show_timer.stop()
@@ -371,6 +419,10 @@ class VideoCell(QWidget):
         x = vw.x() + (vw.width() - w) // 2
         y = vw.y() + vw.height() - h - 20
         ovl.setFixedWidth(w); ovl.move(x, y)
+
+    def _maybe_hide_on_leave(self):
+        if not self._mouse_in_cell and not self.controls_visible:
+            self._fade_controls(False)
 
     def _fade_overlay_out(self):
         self._overlay_anim.setStartValue(1.0)
@@ -452,6 +504,12 @@ class VideoCell(QWidget):
         self.request_next.emit(self, is_retry)
 
     def _on_error(self):
+        """2-tier Always-REMUX strategy + retry-2 escalation to transcode.
+        - Default (retries 0/1): Always request direct/remux stream from Emby.
+        - Retry >=2: _force_transcode=True forces mpv recreate (in play()) +
+          upstream uses transcoded URL (h264 etc.).
+        - Reset on next play() or MAX_RETRIES. (needs_transcode() is only heuristic.)
+        """
         self._retry_count += 1
         logger.warning("Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES)
         if self._retry_count <= MAX_RETRIES:

@@ -21,13 +21,6 @@ from .perf import (
 from .cell import VideoCell
 from .emby import ContentLoaderThread
 
-# Optional companion module
-try:
-    from hyperwall_remix import remix_walls as _remix_walls
-except ImportError:
-    _remix_walls = None
-
-
 class _EmergencyKeyFilter(QObject):
     """App-level last-resort key handler for shortcuts stolen by child widgets.
 
@@ -93,7 +86,6 @@ class WallController:
                 ("F",      lambda: self._set_filter("favorites")),
                 ("A",      lambda: self._set_filter("all")),
                 ("S",      self._toggle_stats_overlay),
-                ("R",      self._open_remix_dialog),
                 ("Escape", self._shutdown),
             ):
                 shortcut = QShortcut(QKeySequence(key), win)
@@ -206,16 +198,6 @@ class WallController:
             c.set_controls_visible(self.controls_visible)
         logger.info("Controls: %s", "VISIBLE" if self.controls_visible else "HIDDEN")
 
-    def _open_remix_dialog(self):
-        if _remix_walls is None:
-            logger.warning("Remix unavailable: hyperwall_remix module missing.")
-            return
-        parent = self.windows[0] if self.windows else None
-        try:
-            _remix_walls(parent)
-        except Exception:
-            logger.exception("Remix dialog failed to launch")
-
     def _global_toggle_pause(self):
         active_mpvs = [c for c in self.cells if c._mpv is not None]
         if not active_mpvs: return
@@ -227,7 +209,8 @@ class WallController:
             try:
                 c._mpv["pause"] = any_playing
                 c.btn_play.setText("▶" if any_playing else "⏸")
-            except Exception: pass
+            except Exception as e:
+                logger.debug("Pause toggle failed on cell: %s", e)
 
     def _set_filter(self, mode: str):
         if mode == "favorites":
@@ -293,19 +276,24 @@ class WallController:
                 except Exception as e:
                     logger.warning("stats flush failed: %s", e)
         for c in self.cells:
-            try: c.release()
-            except Exception: pass
+            try:
+                c.release()
+            except Exception as e:
+                logger.warning("Cell release failed: %s", e)
         if STATS_ENABLED:
             self._dump_stats_json()
+        # Signal no new submissions, then drain in-flight API calls (session-stop
+        # requests fired above) with a short bounded wait before tearing down.
         self._api_pool_closed = True
         try:
-            self._api_pool.shutdown(wait=False, cancel_futures=False)
+            self._api_pool.shutdown(wait=True, cancel_futures=False)
         except TypeError:
-            self._api_pool.shutdown(wait=False)
+            # Python < 3.9 — cancel_futures not supported
+            self._api_pool.shutdown(wait=True)
         try:
             QApplication.instance().removeEventFilter(self._escape_filter)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("removeEventFilter failed: %s", e)
         self.api.close()
         logger.info("Cleanup complete.")
 

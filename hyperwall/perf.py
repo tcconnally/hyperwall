@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import sys
 from logging.handlers import RotatingFileHandler
 
@@ -19,16 +20,33 @@ LOG_FILE     = os.path.join(SCRIPT_DIR, "hyperwall.log")
 LAUNCHER_EXE = os.path.join(SCRIPT_DIR, "hyperwall_v8.exe")
 NIP_FILE     = os.path.join(SCRIPT_DIR, "hyperwall_v8.nip")
 NPI_EXE      = os.path.join(SCRIPT_DIR, "tools", "nvidiaProfileInspector.exe")
-# Fallback search if tools/ missing (user may have installed NPI elsewhere)
+# Resilient fallback: relative tools/, NPI_PATH, Program Files, Downloads, ~, PATH via shutil.which.
+# Removes fragile/hardcoded user-specific paths; works across installs and build modes.
 if not os.path.exists(NPI_EXE):
-    for p in [os.environ.get("NPI_PATH", ""), "/usr/local/bin", "/opt/nvidia"]:
-        cand = os.path.join(p, "nvidiaProfileInspector.exe") if p else ""
-        if cand and os.path.exists(cand):
-            NPI_EXE = cand
-            break
+    search_dirs = [
+        os.environ.get("NPI_PATH", ""),
+        os.environ.get("PROGRAMFILES", ""),
+        os.environ.get("PROGRAMFILES(X86)", ""),
+        os.path.expanduser(r"~\Downloads"),
+        os.path.expanduser("~"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
+    ]
+    for base in search_dirs:
+        if not base:
+            continue
+        for sub in ("", "tools", "bin"):
+            cand = os.path.join(base, sub, "nvidiaProfileInspector.exe")
+            if os.path.exists(cand):
+                NPI_EXE = cand
+                break
+        else:
+            continue
+        break
+    else:
+        found = shutil.which("nvidiaProfileInspector.exe") or shutil.which("nvidiaProfileInspector")
+        if found:
+            NPI_EXE = found
 NV_SENTINEL  = os.path.join(SCRIPT_DIR, ".hyperwall_v8_nvprofile.sentinel")
-
-os.environ["PATH"] = SCRIPT_DIR + os.pathsep + os.environ.get("PATH", "")
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logger = logging.getLogger("HyperWall")
@@ -55,14 +73,18 @@ def setup_logging(log_file: str):
 # ── Tuning constants ──────────────────────────────────────────────────────────
 STREAM_START_STAGGER_MS = 300       # ms between cell starts
 MAX_RETRIES             = 3         # then skip the dead stream
-CONTROLS_HEIGHT         = 36        # px
-CONTROLS_OPACITY        = 0.65
+CONTROLS_HEIGHT         = 44        # px  — larger for better hit area + modern look
+CONTROLS_OPACITY        = 0.82      # more opaque when visible, still translucent
 AUTOHIDE_MS             = 5_000     # one-shot startup auto-hide
 OVERLAY_SHOW_MS         = 3_000     # title overlay before fade
 MOUSE_IDLE_MS           = 3_000     # cursor auto-hide
 
-# mpv tuning — locked to Blackwell + 240 Hz UltraGears + 32 GB RAM.
-# Matches INSTRUCTIONS_v8.md and real hardware constraints.
+# ── MPV hardware tuning (Blackwell B200/B100 series + 240 Hz UltraGear) ──────
+# Monitor: LG 27" 240 Hz UltraGear (native 240 Hz, G-Sync Compatible, HDR400)
+# GPU:    NVIDIA Blackwell (nvdec / CUDA offload, d3d11 + gpu-next)
+# RAM:    32 GB system (generous demuxer/cache to absorb 4K remux bursts)
+# Values below are chosen for low-latency 240 Hz playback with HDR hinting.
+# Must stay in sync with INSTRUCTIONS_v8.md and actual deployed hardware.
 MPV_OPTS = dict(
     vo                         = "gpu-next",
     gpu_api                    = "d3d11",

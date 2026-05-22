@@ -1,140 +1,164 @@
-# HyperWall — Project Instructions
+# HyperWall 8.1 — Setup & Behavior
 
-## What This Is
+Active v8/v8.1 runtime. Same `config.ini`. Backend is now `python-mpv` (libmpv); the Qt media stack is gone. Legacy v7.4 is quarantined under `legacy/hyperwall_v7_4.py` so normal launch paths cannot accidentally run it.
 
-This file documents the legacy v7.4 monolith (`legacy/hyperwall_v7_4.py`). The active v8/v8.1 runtime lives in `hyperwall_v8.py` plus the `hyperwall/` package; use `INSTRUCTIONS_v8.md` for current launcher/build steps.
+---
 
-HyperWall v7.4 (`legacy/hyperwall_v7_4.py`) is a fullscreen video wall application that streams
-content from a local Emby media server across one or more monitors in a
-configurable grid. It runs on a single Windows machine in a closed local network.
+## What's new vs. 7.4
 
-**Current version:** 7.3  
-**Stack:** Python, PyQt6, QMediaPlayer / QAudioOutput / QVideoWidget, requests  
-**Displays:** Dual LG ULTRAGEAR+ monitors (8–12 simultaneous streams typical)  
-**Config:** `config.ini` — `[Login]` section (server_url, username, password)
+| Area | 7.4 | 8.0 |
+|---|---|---|
+| Decoder | Qt6 ffmpeg / D3D11 swapchain | libmpv, `vo=gpu-next`, `hwdec=nvdec` |
+| Stream tiers | DIRECT / REMUX / TRANSCODE (3-tier routing) | **Always-REMUX** (one path; force-transcode only on retry-2 escalation) |
+| Bad-audio set | Maintained `_BAD_AUDIO` for TrueHD/DTS-HD | Gone — Emby always re-muxes audio to AAC stereo |
+| Codec env vars | `QT_FFMPEG_*` env block | Removed; mpv handles HW selection |
+| Position update throttle | Manual 250 ms gate in `_on_position` | mpv `time-pos` observer fires at its own (low) rate |
+| Retry escalation | Same 3-retry exponential backoff | Same; `_force_transcode` now flips `VideoCodec=copy` → `VideoCodec=h264` |
+| Process isolation | None | Bundled `hyperwall_v8.exe` so NVIDIA driver applies a per-app G-Sync-off profile |
 
-### Key Classes
+UX is intentionally close to 7.4, with one important audio correction: there is no global mute/unmute shortcut. Audio is controlled per cell only, and multiple cells may be unmuted at the same time. Shortcuts are `C/Space/F/A/S/R/Esc`; the controls strip, title overlay, and cleanup-on-startup flow remain.
 
-| Class | Role |
+---
+
+## First-time setup
+
+### 1. One-shot bootstrap (recommended)
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File .\bootstrap_v8.ps1
+```
+
+Use `pwsh` (PowerShell 7+), not `powershell` (5.1) -- 5.1's cp1252 decoding chokes on UTF-8 scripts. The script does steps 2-4 below, runs the build, and prints a diagnostics block at the end.
+
+If you'd rather do it manually, the steps are:
+
+### 1a. Dependencies (manual)
+
+```cmd
+pip install python-mpv pyqt6 requests pyinstaller
+```
+
+### 2. libmpv DLL
+
+The bootstrap script auto-fetches `mpv-dev-x86_64-v3-*.7z` from <https://github.com/zhongfly/mpv-winbuild/releases/latest> and extracts `mpv-2.dll` via `py7zr`. If you're doing this manually, download that archive, extract, and place `mpv-2.dll` next to `hyperwall_v8.py`.
+
+### 3. NVIDIA Profile Inspector
+
+Download the latest release from <https://github.com/Orbmu2k/nvidiaProfileInspector>. Unzip and place at:
+
+```
+C:\Users\<YourUsername>\path\to\wall\tools\nvidiaProfileInspector.exe
+```
+
+(Edit `NPI_EXE` in `hyperwall/perf.py` to match your actual install path, or drop `nvidiaProfileInspector.exe` next to `hyperwall_v8.exe` — the auto-discovery logic finds it there.)
+
+### 4. Build the launcher exe
+
+```cmd
+cd C:\Users\<YourUsername>\path\to\wall
+build_v8.bat
+```
+
+Produces `hyperwall_v8.exe` in the same dir.
+
+### 5. First run
+
+Launch `hyperwall_v8.exe` directly (not via `python hyperwall_v8.py`). On first run it will UAC-prompt to silent-import `hyperwall_v8.nip` into the NVIDIA driver. Approve once. A sentinel file is written with the driver version.
+
+### 6. Update / use the shortcut
+
+`launch.bat` starts v8 only. It launches `hyperwall_v8.exe` when the bundled exe is current; if the exe is older than checked-out source, it warns and falls back to `python hyperwall_v8.py`. The legacy v7.4 monolith is not launched by this batch file.
+
+Point `C:\Users\<YourUsername>\path\to\hyperwall.lnk` at either `hyperwall_v8.exe` directly or this updated `launch.bat`.
+
+---
+
+## G-Sync isolation — how the non-fragile bit works
+
+NVIDIA driver profiles match by executable basename. Generic `python.exe` profiles would touch every Python program on the machine — fragile. Instead:
+
+1. PyInstaller bundles the script into `hyperwall_v8.exe` — a unique basename only HyperWall uses.
+2. `hyperwall_v8.nip` targets that exact basename, sets:
+   - **VRR Mode = Fully disabled** (no G-Sync hunting between mixed-FPS cells)
+   - **VRR Requested State = Off** (kernel-level VRR disable for this app)
+   - **Power management = Prefer maximum performance** (no clock-gating mid-wall)
+   - **Threaded optimization = On** (helps with 12 concurrent decode contexts)
+3. On every launch, `hyperwall_v8.py` reads `nvidia-smi` for the current driver version and compares it against `.hyperwall_v8_nvprofile.sentinel`. Match → no-op (silent). Mismatch (= driver was reinstalled and wiped custom profiles) → UAC-prompts NPI's `-silentImport` to reapply, writes new sentinel.
+4. If you launch via `python hyperwall_v8.py` instead of the exe, the script logs a warning and continues — isolation is just disabled, nothing breaks.
+
+Verify after first apply: open NVIDIA Profile Inspector → search "HyperWall" in the profile dropdown → confirm VRR Mode = Fully disabled and the executable list contains `hyperwall_v8.exe`.
+
+---
+
+## Hardware tuning (Blackwell B200/B100 + 240 Hz UltraGear)
+- Monitor: LG 27" 240 Hz UltraGear (native 240 Hz, G-Sync Compatible, HDR400)
+- GPU: NVIDIA Blackwell (nvdec / CUDA offload, d3d11 + gpu-next)
+- `vo=gpu-next`, `gpu_api=d3d11`, `hwdec=nvdec`
+- `profile=fast`, `video-sync=display-resample`, `interpolation=no`
+- `target_colorspace_hint=yes` — HDR hinting
+- `cache=yes`, `cache-secs=10`, `demuxer_max_bytes=256MiB`, `demuxer_readahead_secs=20` — generous for 4K remux bursts on 32 GB RAM
+- `network_timeout=15`, `stream_lavf_o=reconnect=1,...`
+- `ao=wasapi`, `audio_buffer=1.0`
+- All values chosen for low-latency 240 Hz playback with HDR.
+
+
+---
+
+## Files in this drop
+
+| File | Purpose |
 |---|---|
-| `EmbyAPISession` | Thread-safe HTTP session; wraps all Emby API calls |
-| `CleanupWorker` | QThread worker; deletes items tagged `ToDelete` on startup |
-| `ContentLoaderThread` | QThread; fetches library metadata async so UI launches immediately |
-| `VideoCell` | Single player tile — QMediaPlayer + floating controls overlay |
-| `WallController` | Owns all cells, windows, routing logic, and global shortcuts |
-| `SetupWizard` | QDialog; shown once per launch to pick displays, libraries, grid |
+| `hyperwall_v8.py` | The deliverable. Run via `python hyperwall_v8.py` for dev, or `hyperwall_v8.exe` for production. |
+| `hyperwall_v8.nip` | NVIDIA Profile Inspector profile. Targets `hyperwall_v8.exe` only. |
+| `build_v8.bat` | PyInstaller one-file build. Bundles `mpv-2.dll`. |
+| `tools/nvidiaProfileInspector.exe` | You install this once. HyperWall calls it when sentinel is stale. |
+| `.hyperwall_v8_nvprofile.sentinel` | Auto-managed. Holds the driver version of the last profile apply. |
 
 ---
 
-## Environment Assumptions
+## Smoke tests (per brief)
 
-This is a **single-user, single-machine, air-gapped** deployment. There is no
-need to defend against:
+### Static repo guards
 
-- Multiple simultaneous users
-- Untrusted network input
-- Edge-case screen configurations beyond the two known monitors
-- Graceful handling of missing dependencies (fail fast is fine)
+After pulling a branch, run the no-dependency guard suite before building:
 
-Do not add complexity in service of hypothetical users or environments that
-don't exist.
+```powershell
+python .\tests\run_repo_guards.py
+```
 
----
+These checks prevent the specific v8 footguns we already hit: root `hyperwall.py` returning, `launch.bat` pointing at legacy code, global `M` mute returning, missing Escape emergency filter, or missing runtime identity logging.
 
-## Core Design Principles
+### Manual wall smoke
 
-### 1. Performance First
+Run after build, in order:
 
-Every decision should favour throughput and latency over safety margins.
+1. Launch → wizard appears with last selections preselected
+2. Set `cleanup_on_startup=true`, tag a clip, relaunch → progress dialog → wizard → wall
+3. Wall comes up across selected monitors, all cells start within ~4 s
+4. `C` toggles controls; fade is smooth
+5. Click anywhere on seek bar → playhead jumps there
+6. Speaker button and volume slider affect only that cell; unmuting one cell does not mute any other cell
+7. Multiple cells can remain unmuted simultaneously
+8. `F` → favorites only; `A` → all
+9. Trash button on a clip → tag added (verify in Emby UI)
+10. Star button → favorite added
+11. Mouse idle 3 s → cursor disappears; move → reappears
+12. 4K source plays without frame drops (Emby transcodes it down to 1080p server-side via REMUX path)
+13. Two simultaneous heavy sources play without stutter
+14. **Video transitions visibly smoother than 7.4** — this is the new bar; mpv's pre-buffered loadfile + libmpv decoder reuse should make end-of-clip → next-clip near-seamless
 
-- **HIGH process priority** — already set; do not raise to REALTIME (starves OS with 8+ streams).
-- **Hardware decode** — `QT_FFMPEG_DECODING_HW_DEVICE_TYPES=d3d11va,cuda,dxva2`
-  is set at startup; do not remove or wrap in a try/except that silently skips it.
-- **25 ms stream stagger** — cells start with a 25 ms offset between each. Do
-  not increase this. Do not make it configurable unless asked.
-- **Three-tier stream routing** — DIRECT ≤80 Mbps (static file), REMUX 80–120
-  Mbps (HLS stream-copy, audio→AAC), TRANSCODE >120 Mbps (QSV H264 at 80 Mbps).
-  Thresholds live in `WallController`. Do not lower them.
-- **Position update throttle** — `_on_position` skips updates <250ms apart to
-  reduce UI overhead at 8–12 streams (~360 signals/sec → ~48).
-- **No polling timers for UI state** — use player signals (`positionChanged`,
-  `mediaStatusChanged`) rather than `QTimer` intervals wherever possible.
-- **Background threads for all network I/O** — API calls for tagging, favoriting,
-  and content loading must never block the Qt event loop.
-
-### 2. Minimal UI
-
-The wall is meant to be watched, not operated. Controls are hidden by default
-and toggled with `C`. When adding UI elements, ask: *would a user ever need this
-while the wall is running?* If the answer is rarely, it doesn't belong on screen.
-
-- **No tooltips, status bars, or informational dialogs during playback.**
-- **No animations or transitions.** Black gaps between videos are fine.
-- **No per-cell labels or overlays unless part of the controls strip.** The
-  title label inside the controls frame is sufficient.
-- **Controls strip is a bottom overlay** — video fills 100% of the cell via
-  absolute geometry; controls float above it. Do not revert to a VBox layout
-  that shrinks the video area.
-- **Dark theme only.** Background `#0e0e0e`, accent `#3b8edb`. Do not introduce
-  additional colours.
-
-### 3. Keep It Simple
-
-Prefer fewer lines over more. Prefer deleting code over adding it. If a feature
-request can be satisfied by changing a constant rather than adding a class,
-change the constant.
-
-- **No config file migrations.** If a new setting is needed, give it a sensible
-  default via `fallback=` in `cfg.get()`; never write a migration routine.
-- **No plugin architecture, no abstract base classes, no factory patterns.**
-- **No third-party dependencies beyond PyQt6 and requests.** Both are already
-  installed.
-- **Legacy single file.** v7.4 is quarantined in `legacy/hyperwall_v7_4.py`. Active v8 work belongs in `hyperwall_v8.py` and the `hyperwall/` package; do not recreate a root `hyperwall.py` launcher.
+If any regress vs. 7.4, that's a release blocker per the brief.
 
 ---
 
-## Keyboard Shortcuts (do not remove or reassign)
+## Known-uncertain items (flag if seen)
 
-| Key | Action |
-|---|---|
-| `C` | Toggle controls visibility on all cells |
-| `Space` | Global pause / resume |
-| `F` | Filter to favorites only |
-| `A` | Reset filter (show all) |
-| `Escape` | Shutdown |
-
-Audio is per-cell only: use each cell's speaker button and volume slider. HyperWall intentionally has no global mute/unmute because multiple cells may be unmuted simultaneously.
-
-Shortcuts must work even when embedded media/native child widgets have focus. v8 keeps normal shortcuts registered per fullscreen window and also installs an app-level Escape-only event filter as a last-resort emergency shutdown path.
+- **`vo=gpu-next` stability** on your specific 32.0.15.9636 driver — Blackwell + gpu-next is recent; if you see hangs at startup, change `MPV_OPTS["vo"]` from `"gpu-next"` to `"gpu"` and report.
+- **Title overlay z-order over mpv wid** — Qt child widget over a native HWND is reliable on Win11 but worth eyeballing. If the overlay vanishes behind the video, fallback is mpv's own OSD via `show-text` (would need a small refactor).
+- **NPI setting IDs** for VRR — I used the documented IDs but they have shifted between NPI versions before. After first import, open NPI and confirm the `HyperWall` profile shows VRR Mode = Fully disabled. If it doesn't, manually toggle it once in NPI and re-export the .nip.
 
 ---
 
-## API Conventions
+## Rollback
 
-- All Emby calls go through `EmbyAPISession.get()`, `.post()`, or `.delete()`.
-  Do not call `self.api.session.*` directly from outside `EmbyAPISession`.
-- Tag updates require a GET-then-POST cycle (Emby's PATCH support is unreliable).
-  The helper lives in `WallController.update_tags()`.
-- `verify=False` is intentional — the local Emby server uses a self-signed cert.
-  Do not add a config option to toggle this.
-
----
-
-## What Not to Do
-
-- Do not add a system tray icon.
-- Do not add a "restore session" dialog — settings are always persisted to
-  `config.ini` and pre-selected in the wizard automatically.
-- Do not add network retry logic to `EmbyAPISession` itself — retries belong in
-  the specific worker that needs them (e.g. `VideoCell._on_error`).
-- Do not add logging beyond INFO level in normal operation. Debug logs create
-  noise in `hyperwall.log` and slow down hot paths.
-- Shutdown uses `QApplication.quit()` — the `os._exit(0)` hard-kill was only
-  needed for the overlay layout (7.0/7.1) which caused Qt HWND deadlocks on
-  teardown. The VBoxLayout approach shuts down cleanly.
-
----
-
-## Local directory cleanup
-
-Run `cleanup_wall_dir.ps1 -Apply` after confirming the v8 launcher works; it moves old logs, caches, build leftovers, and the legacy v7 monolith into `_archive/` instead of deleting them.
+7.4 is preserved as `legacy/hyperwall_v7_4.py` for archaeology only. Normal launcher/build paths are v8-only. To roll back deliberately, run `python legacy/hyperwall_v7_4.py` after confirming the old monolith still matches your current `config.ini` and dependency set.

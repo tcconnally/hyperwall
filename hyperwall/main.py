@@ -34,6 +34,19 @@ def _handle_exception(et, ev, tb):
         return
     logger.critical("UNHANDLED EXCEPTION", exc_info=(et, ev, tb))
 
+
+def _ordered_screens(app):
+    """Return screens sorted to match Windows monitor numbering (left-to-right, top-to-bottom)."""
+    screens = list(app.screens())
+    if not screens:
+        return screens
+    primary = app.primaryScreen()
+    others = [s for s in screens if s is not primary]
+    # Sort by virtual position (x then y) — this usually matches Windows Display Settings order
+    others.sort(key=lambda s: (s.geometry().x(), s.geometry().y()))
+    ordered = [primary] + others if primary in screens else others
+    return ordered
+
 def main():
     sys.excepthook = _handle_exception
 
@@ -107,6 +120,11 @@ def main():
         sys.exit(1)
 
     api = EmbyAPISession(s_url, s_user, s_pass)
+    api.verify_ssl = cfg.getboolean("Login", "verify_ssl", fallback=True)
+    if not api.verify_ssl:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        logger.warning("SSL verification disabled — set verify_ssl = true in config.ini for production.")
     if not api.test_connection():
         msg = f"Cannot reach Emby server at:\n{s_url}"
         logger.critical(f"Connection Error: {msg}")
@@ -145,17 +163,6 @@ def main():
     except Exception as e:
         logger.error("An unexpected error occurred while fetching user views: %s", e)
         libs = []
-
-    def _ordered_screens(app):
-        """Return screens sorted to match Windows monitor numbering (left-to-right)."""
-        screens = list(app.screens())
-        if not screens:
-            return screens
-        primary = app.primaryScreen()
-        others = [s for s in screens if s is not primary]
-        others.sort(key=lambda s: (s.geometry().x(), s.geometry().y()))
-        ordered = [primary] + others if primary in screens else others
-        return ordered
 
     # Order matches Windows Display Settings (Monitor 1, 2, ... left-to-right)
     ordered_screens = _ordered_screens(app)
