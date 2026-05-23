@@ -20,11 +20,17 @@ from .controller import WallController, MouseIdleHider
 from .version import runtime_banner
 
 # Late import for mpv
-# On Windows, ctypes does not search the script directory for DLLs — only
-# system %PATH%.  Prepend SCRIPT_DIR so mpv-2.dll / libmpv-2.dll placed
-# next to hyperwall.py will be found.
-if os.name == "nt" and os.path.isdir(SCRIPT_DIR):
-    os.environ["PATH"] = SCRIPT_DIR + os.pathsep + os.environ.get("PATH", "")
+# On Windows, Python 3.8+ tightened DLL search — os.add_dll_directory()
+# is the correct API to make script-dir DLLs visible to ctypes.
+# (PATH manipulation alone is not sufficient.)
+if os.name == "nt":
+    _mpv_dll_dir = SCRIPT_DIR
+    if os.path.isdir(_mpv_dll_dir):
+        try:
+            os.add_dll_directory(_mpv_dll_dir)
+        except AttributeError:
+            # Python < 3.8 fallback
+            os.environ["PATH"] = _mpv_dll_dir + os.pathsep + os.environ.get("PATH", "")
 
 mpv = None
 _MPV_IMPORT_ERR = None
