@@ -42,7 +42,8 @@ if not exist "mpv-2.dll" (
     echo ========================================================
     echo  CRITICAL ERROR: mpv-2.dll NOT FOUND!
     echo ========================================================
-    echo Download libmpv: https://mpv.io/installation/  ^(shobon-mpv builds^)
+    echo Download libmpv: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+    echo Get mpv-dev-x86_64-YYYYMMDD-git-XXXXXXX.7z from shinchiro
     echo Place mpv-2.dll next to this script and re-run.
     pause
     exit /b 1

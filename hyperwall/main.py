@@ -58,7 +58,8 @@ def main():
         msg = (f"python-mpv failed to load: {_MPV_IMPORT_ERR}\n\n"
                f"Install:\n  pip install python-mpv\n\n"
                f"And place mpv-2.dll next to this script:\n  {SCRIPT_DIR}\n\n"
-               f"Download: https://mpv.io/installation/  (use shobon-mpv builds)")
+               f"Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\\n"
+               f"Get mpv-dev-x86_64-YYYYMMDD-git-XXXXXXX.7z from shinchiro")
         logger.critical(msg)
         try:
             app = QApplication.instance() or QApplication(sys.argv)
