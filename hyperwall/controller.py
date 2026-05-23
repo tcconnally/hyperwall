@@ -60,6 +60,11 @@ class WallController:
         QApplication.instance().installEventFilter(self._escape_filter)
 
         self._build_displays()
+        # Show all windows at once to avoid ghost flashes from sequential
+        # creation of native video-frame handles.
+        for win in self.windows:
+            win.showFullScreen()
+            logger.info("Display active: %s", win.windowTitle())
         self._start_async_load()
 
     def _build_displays(self):
@@ -93,9 +98,8 @@ class WallController:
                 self._shortcuts.append(shortcut)
 
             win.setGeometry(screen.geometry())
-            win.showFullScreen()
             self.windows.append(win)
-            logger.info("Display active: %s", screen.name())
+            logger.info("Display built: %s", screen.name())
 
     def _start_async_load(self):
         self.loader = ContentLoaderThread(self.api, self.settings["libraries"])
