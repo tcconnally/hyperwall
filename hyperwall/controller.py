@@ -21,6 +21,38 @@ from .perf import (
 from .cell import VideoCell
 from .emby import ContentLoaderThread
 
+# ── GPU telemetry helper ────────────────────────────────────────────────────
+def _query_gpu_telemetry() -> dict | None:
+    """Query NVIDIA GPU VRAM, utilisation, decoder load, temp via nvidia-smi.
+
+    Returns a dict on success, None if nvidia-smi is unavailable or fails.
+    Called at stats dump time so it never blocks the Qt event loop.
+    """
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.used,memory.total,utilization.gpu,utilization.decoder,temperature.gpu,pstate",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True, timeout=3,
+            creationflags=0x08000000 if os.name == "nt" else 0,  # CREATE_NO_WINDOW
+        )
+        parts = [p.strip() for p in out.strip().split(",")]
+        if len(parts) >= 6:
+            return {
+                "memory_used":   parts[0],
+                "memory_total":  parts[1],
+                "gpu_util":      parts[2],
+                "decoder_util":  parts[3],
+                "temp":          parts[4],
+                "pstate":        parts[5],
+            }
+    except Exception as e:
+        logger.debug("GPU telemetry unavailable: %s", e)
+    return None
+
 class _EmergencyKeyFilter(QObject):
     """App-level last-resort key handler for shortcuts stolen by child widgets.
 
@@ -126,21 +158,32 @@ class WallController:
                               lambda c=cell: self.next_video(c, False))
 
     def _build_url(self, item: dict, force_transcode: bool = False) -> tuple[str, str]:
-        from .emby import needs_transcode
+        from .emby import classify_item
         iid  = item["Id"]
         key  = self.api.access_token
         base = self.api.server_url
         sid  = uuid.uuid4().hex
 
-        auto_transcode = needs_transcode(item)
-        if force_transcode or auto_transcode:
+        classification = classify_item(item)
+        # 'immediate' forces transcode on first load; 'auto' does the
+        # resolution/bitrate/subtitle gate.  force_transcode (retry escalation)
+        # overrides everything.
+        auto_transcode = classification != "direct" or force_transcode
+        if force_transcode or classification == "immediate":
             url = (f"{base}/Videos/{iid}/master.m3u8?api_key={key}"
                    f"&VideoCodec=h264&AudioCodec=aac&MaxAudioChannels=2"
                    f"&MaxHeight=1080&MaxWidth=1920"
                    f"&MaxFramerate=30&VideoBitrate=12000000"
                    f"&PlaySessionId={sid}")
-            tag = "TRANSCODE/retry" if force_transcode else "TRANSCODE/auto"
+            tag = "TRANSCODE/immediate" if classification == "immediate" else "TRANSCODE/retry"
             logger.info("[%s] %s", tag, item.get("Name"))
+        elif classification == "auto":
+            url = (f"{base}/Videos/{iid}/master.m3u8?api_key={key}"
+                   f"&VideoCodec=h264&AudioCodec=aac&MaxAudioChannels=2"
+                   f"&MaxHeight=1080&MaxWidth=1920"
+                   f"&MaxFramerate=30&VideoBitrate=12000000"
+                   f"&PlaySessionId={sid}")
+            logger.info("[TRANSCODE/auto] %s", item.get("Name"))
         else:
             url = f"{base}/Videos/{iid}/stream?api_key={key}&static=true"
             logger.info("[DIRECT] %s", item.get("Name"))
@@ -339,6 +382,7 @@ class WallController:
                 "info":   {k: v for k, v in c._stats_info.items()},
                 "last_item": (c.current_item or {}).get("Name"),
             })
+        gpu_snapshot = _query_gpu_telemetry()
         payload = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "n_cells": len(self.cells),
@@ -347,6 +391,7 @@ class WallController:
                 "HYPERWALL_STATS", "HYPERWALL_HDR_HINT", "HYPERWALL_HWDEC",
                 "HYPERWALL_GPU_API", "HYPERWALL_PROFILE", "HYPERWALL_VIDEO_SYNC",
             ) if os.environ.get(k) is not None},
+            "gpu": gpu_snapshot,
             "cells": cells_payload,
         }
         out = os.path.join(SCRIPT_DIR, f"hyperwall_stats_{int(time.time())}.json")
@@ -357,6 +402,14 @@ class WallController:
         except Exception as e:
             logger.warning("STATS dump failed: %s", e)
             return
+        if gpu_snapshot:
+            g = gpu_snapshot
+            logger.info(
+                "STATS GPU  mem=%s/%s  util=%s%%  dec=%s%%  temp=%s°C  pstate=%s",
+                g.get("memory_used"), g.get("memory_total"),
+                g.get("gpu_util"), g.get("decoder_util"),
+                g.get("temp"), g.get("pstate"),
+            )
         for s in cells_payload:
             t = s["totals"]
             i = s["info"]

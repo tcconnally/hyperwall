@@ -71,7 +71,9 @@ def setup_logging(log_file: str):
     logger.addHandler(_ch)
 
 # ── Tuning constants ──────────────────────────────────────────────────────────
-STREAM_START_STAGGER_MS = 300       # ms between cell starts
+STREAM_START_STAGGER_MS = 2_000     # ms between cell starts — gives Emby transcode
+# pipeline time to initialise before the next cell fires.  300 ms was too
+# aggressive for ffmpeg probe + encoder init (500–1500 ms per transcode).
 MAX_RETRIES             = 3         # then skip the dead stream
 CONTROLS_HEIGHT         = 44        # px  — larger for better hit area + modern look
 CONTROLS_OPACITY        = 0.82      # more opaque when visible, still translucent
@@ -79,24 +81,34 @@ AUTOHIDE_MS             = 5_000     # one-shot startup auto-hide
 OVERLAY_SHOW_MS         = 3_000     # title overlay before fade
 MOUSE_IDLE_MS           = 3_000     # cursor auto-hide
 
-# ── MPV hardware tuning (Blackwell B200/B100 series + 240 Hz UltraGear) ──────
+# ── MPV hardware tuning (Blackwell + 240 Hz UltraGear) ──────────────────────
 # Monitor: LG 27" 240 Hz UltraGear (native 240 Hz, G-Sync Compatible, HDR400)
-# GPU:    NVIDIA Blackwell (nvdec / CUDA offload, d3d11 + gpu-next)
-# RAM:    32 GB system (generous demuxer/cache to absorb 4K remux bursts)
-# Values below are chosen for low-latency 240 Hz playback with HDR hinting.
-# Must stay in sync with INSTRUCTIONS_v8.md and actual deployed hardware.
+# GPU:    NVIDIA Blackwell (d3d11va zero-copy decode, d3d11 + gpu-next render)
+# RAM:    32 GB system
+#
+# v8.2 production hardening (2026-05-23):
+#   hwdec=nvdec → d3d11va    — zero-copy decode (no PCIe frame round-trip)
+#   profile=fast  → removed  — was setting correct-pts=no, harming A/V sync
+#   +d3d11-sync-interval=1   — enforce vsync on composited desktop
+#   +d3d11-flip=yes          — flip-model presentation (lower latency)
+#   demuxer 256MiB → 64MiB   — local LAN doesn't need huge read-ahead
+#   audio_buffer 1.0 → 0.2   — reduced from 1s for faster mute/unmute
+#   stagger 300ms → 2000ms   — give Emby transcode pipeline time to breathe
+#
+# Must stay in sync with deployed hardware and the principal-engineer audit.
 MPV_OPTS = dict(
     vo                         = "gpu-next",
     gpu_api                    = "d3d11",
-    hwdec                      = "nvdec",
-    profile                    = "fast",
+    hwdec                      = "d3d11va",
+    d3d11_sync_interval        = 1,
+    d3d11_flip                 = "yes",
     video_sync                 = "display-resample",
     interpolation              = "no",
     target_colorspace_hint     = "yes",
     cache                      = "yes",
     cache_secs                 = 10,
-    demuxer_max_bytes          = "256MiB",
-    demuxer_readahead_secs     = 20,
+    demuxer_max_bytes          = "64MiB",
+    demuxer_readahead_secs     = 10,
     network_timeout            = 15,
     stream_lavf_o              = "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
     keep_open                  = "always",
@@ -108,7 +120,7 @@ MPV_OPTS = dict(
     ytdl                       = False,
     ao                         = "wasapi",
     audio_client_name          = "HyperWall",
-    audio_buffer               = 1.0,
+    audio_buffer               = 0.2,
     msg_level                  = "all=warn,cplayer=info,ao=error,ao/wasapi=fatal",
 )
 

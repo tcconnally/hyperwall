@@ -82,6 +82,7 @@ class VideoCell(QWidget):
         self._stats_info:    dict[str, object]  = {}
         self._played_anything = False
         self._last_next_request_ts = 0.0
+        self._stall_count     = 0
         self._mouse_in_cell = False
         self._emby_session_id: str | None = None
         self._emby_item_id:    str | None = None
@@ -113,6 +114,14 @@ class VideoCell(QWidget):
         self._autohide_timer.timeout.connect(self._autohide_controls)
         self._autohide_timer.start(AUTOHIDE_MS)
 
+        # Mid-playback stall detection — fires every 2 s to check cache health.
+        # If the demuxer cache stays nearly empty for 3 consecutive ticks (6 s),
+        # the stream is considered stalled and triggers error recovery.
+        self._heartbeat_timer = QTimer(self)
+        self._heartbeat_timer.setInterval(2_000)
+        self._heartbeat_timer.timeout.connect(self._heartbeat)
+        # Started in play(); stopped in _destroy_mpv().
+
         self._title_overlay = QLabel("", self)
         self._title_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_overlay.setWordWrap(False)
@@ -143,6 +152,7 @@ class VideoCell(QWidget):
     def _destroy_mpv(self):
         if self._mpv is None:
             return
+        self._heartbeat_timer.stop()
         if STATS_ENABLED:
             self._flush_stats()
         mpv_ref = self._mpv
@@ -498,6 +508,8 @@ class VideoCell(QWidget):
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
             self.btn_play.setText("⏸")
+            self._stall_count = 0
+            self._heartbeat_timer.start()
         except Exception as e:
             logger.error("mpv loadfile failed: %s", e)
             self._sig_eof.emit(self._mpv_gen, "error")
@@ -540,23 +552,73 @@ class VideoCell(QWidget):
 
     def _on_error(self):
         """2-tier Always-REMUX strategy + retry-2 escalation to transcode.
+
         - Default (retries 0/1): Always request direct/remux stream from Emby.
         - Retry >=2: _force_transcode=True forces mpv recreate (in play()) +
           upstream uses transcoded URL (h264 etc.).
-        - Reset on next play() or MAX_RETRIES. (needs_transcode() is only heuristic.)
+        - If classify_item() would have routed to immediate transcode, escalate
+          on the very first error (don't waste a retry on hostile codecs).
+        - Reset on next play() or MAX_RETRIES.
         """
         self._retry_count += 1
         logger.warning("Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES)
         if self._retry_count <= MAX_RETRIES:
-            if self._retry_count >= 2 and not self._force_transcode:
-                self._force_transcode = True
-                logger.info("Escalating to server transcode after repeated failures.")
+            # Escalate immediately if classifier says this content needs transcode
+            if self._retry_count >= 1 and not self._force_transcode:
+                if self.current_item is not None:
+                    from .emby import classify_item
+                    classification = classify_item(self.current_item)
+                    if classification == "immediate" or self._retry_count >= 2:
+                        self._force_transcode = True
+                        logger.info("Escalating to server transcode%s.",
+                                    " (immediate-hostile content)"
+                                    if classification == "immediate"
+                                    else " after repeated failures")
             QTimer.singleShot((2 ** self._retry_count) * 1000,
                               lambda: self._request_next_throttled(True))
         else:
             logger.error("Max retries reached — skipping.")
             self._force_transcode = False
             self._request_next_throttled(False)
+
+    def _heartbeat(self):
+        """Check mpv cache health + hwdec status every 2 s; trigger recovery on sustained stall."""
+        if self._mpv is None:
+            self._heartbeat_timer.stop()
+            return
+        gen = self._mpv_gen
+        try:
+            paused = bool(self._mpv["pause"])
+            if paused:
+                self._stall_count = 0  # user-paused → not a stall
+                return
+            # demuxer-cache-duration: seconds buffered ahead (None if unknown)
+            cache_dur = self._mpv.get("demuxer-cache-duration", None)
+            if cache_dur is not None and cache_dur < 0.5:
+                self._stall_count += 1
+                if self._stall_count >= 3:
+                    logger.warning("Stream stall detected (cache %.2fs × %d ticks) — recovering.",
+                                   cache_dur, self._stall_count)
+                    self._heartbeat_timer.stop()
+                    self._sig_eof.emit(gen, "error")
+                    return
+            else:
+                self._stall_count = max(0, self._stall_count - 1)
+            # ── HW decode session exhaustion check ──────────────────────────
+            # When cells exceed the GPU's NVDEC / D3D11VA session limit, mpv
+            # silently falls back to software decoding.  Log a one-shot warning.
+            if not getattr(self, "_hwdec_warned", False):
+                hwdec = self._mpv.get("hwdec-current", None)
+                if hwdec == "no":
+                    logger.warning("Cell fell back to software decoding — GPU decoder session limit reached.")
+                    self._hwdec_warned = True
+        except Exception:
+            # mpv handle may be dead — increment and trigger on sustained failures
+            self._stall_count += 1
+            if self._stall_count >= 3:
+                logger.warning("mpv unresponsive for %d ticks — recovering.", self._stall_count)
+                self._heartbeat_timer.stop()
+                self._sig_eof.emit(gen, "error")
 
     def _handle_time(self, gen: int, pos: float, dur: float):
         if gen != self._mpv_gen:

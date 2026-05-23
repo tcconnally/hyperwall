@@ -87,13 +87,16 @@ def main():
     setup_logging(LOG_FILE)
     logger.info("Runtime: %s", runtime_banner())
 
-    # 4. Set priority
+    # 4. Set priority — ABOVE_NORMAL for a foreground video wall. HIGH (0x80)
+    # risks starving network I/O and preventing CPU C-state transitions during
+    # idle periods between I/O.  mpv manages its own critical threads via MMCSS
+    # ("Playback" / "Pro Audio") which are always above process priority.
     if not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
         try:
             ctypes.windll.kernel32.SetPriorityClass(
-                ctypes.windll.kernel32.GetCurrentProcess(), 0x00000080  # HIGH
+                ctypes.windll.kernel32.GetCurrentProcess(), 0x00008000  # ABOVE_NORMAL
             )
-            logger.info("Kernel: Priority set to HIGH.")
+            logger.info("Kernel: Priority set to ABOVE_NORMAL.")
         except Exception:
             pass
 
