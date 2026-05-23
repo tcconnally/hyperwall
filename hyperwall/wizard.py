@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 class SetupWizard(QDialog):
     def __init__(self, config, screens, libraries: list[str]):
         super().__init__()
-        self.setWindowTitle("HyperWall 8.0")
+        self.setWindowTitle("HyperWall 8.2")
         self.resize(720, 540)
         self.setStyleSheet("""
             QDialog { background: #0e0e0e; color: #eee; font-family: 'Segoe UI'; }
@@ -31,7 +31,7 @@ class SetupWizard(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20); layout.setSpacing(14)
 
-        title = QLabel("HYPERWALL  8.0")
+        title = QLabel("HYPERWALL  8.2")
         title.setStyleSheet("font-size: 24px; font-weight: 900; color: white; letter-spacing: 3px;")
         layout.addWidget(title)
 

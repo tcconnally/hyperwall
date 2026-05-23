@@ -9,23 +9,25 @@ def read(rel: str) -> str:
 
 
 def test_v8_shim_exists_and_delegates_to_package():
-    shim = ROOT / "hyperwall_v8.py"
+    shim = ROOT / "hyperwall.py"
     assert shim.exists()
-    text = read("hyperwall_v8.py")
+    text = read("hyperwall.py")
     assert "from hyperwall import main" in text
     assert "main()" in text
 
 
 def test_legacy_monolith_is_not_active_root_entrypoint():
-    assert not (ROOT / "hyperwall.py").exists()
-    assert (ROOT / "legacy" / "hyperwall_v7_4.py").exists()
+    # hyperwall.py is the shim entry point (delegates to hyperwall package).
+    # The legacy monolith (integrated wall + wizard + emby in one file) is gone.
+    text = read("hyperwall.py")
+    assert "from hyperwall import main" in text
+    assert "main()" in text
 
 
 def test_launcher_targets_v8_and_never_legacy_monolith():
     launch = read("launch.bat")
     assert "hyperwall_v8.exe" in launch
-    assert "hyperwall_v8.py" in launch
-    assert "hyperwall.py" not in launch
+    assert "hyperwall.py" in launch
     assert "EXE_STALE" in launch
 
 
@@ -59,6 +61,6 @@ def test_runtime_banner_is_logged_on_startup():
     version = read("hyperwall/version.py")
     assert "runtime_banner" in main
     assert "logger.info(\"Runtime: %s\", runtime_banner())" in main
-    assert "APP_VERSION = \"8.1\"" in version
+    assert "APP_VERSION = \"8.2\"" in version
     assert "git_branch" in version
     assert "git_commit" in version

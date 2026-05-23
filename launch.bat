@@ -10,28 +10,28 @@ REM This prevents accidentally testing an old PyInstaller build after git pull.
 set EXE_STALE=
 if exist "hyperwall_v8.exe" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$exe = Get-Item -LiteralPath 'hyperwall_v8.exe'; $srcItems = @(); if (Test-Path -LiteralPath 'hyperwall_v8.py') { $srcItems += Get-Item -LiteralPath 'hyperwall_v8.py' }; $srcItems += Get-ChildItem -LiteralPath 'hyperwall' -Filter '*.py' -File -Recurse; $src = $srcItems | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($src -and $src.LastWriteTime -gt $exe.LastWriteTime) { exit 10 } else { exit 0 }"
+        "$exe = Get-Item -LiteralPath 'hyperwall_v8.exe'; $srcItems = @(); if (Test-Path -LiteralPath 'hyperwall.py') { $srcItems += Get-Item -LiteralPath 'hyperwall.py' }; $srcItems += Get-ChildItem -LiteralPath 'hyperwall' -Filter '*.py' -File -Recurse; $src = $srcItems | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($src -and $src.LastWriteTime -gt $exe.LastWriteTime) { exit 10 } else { exit 0 }"
     if errorlevel 10 set EXE_STALE=1
 )
 
 if exist "hyperwall_v8.exe" if not defined EXE_STALE (
     echo Launching bundled hyperwall_v8.exe
-    start "" "%CD%\hyperwall_v8.exe"
+    start "" "%CD%\\hyperwall_v8.exe"
     exit /b 0
 )
 
 if defined EXE_STALE (
     echo WARNING: hyperwall_v8.exe is older than the checked-out source.
-    echo Running Python source instead. Rebuild with build_v8.bat when ready.
+    echo Running Python source instead. Rebuild with build.bat when ready.
 )
 
-if not exist "hyperwall_v8.py" (
+if not exist "hyperwall.py" (
     echo.
     echo ========================================================
-    echo  CRITICAL ERROR: hyperwall_v8.py NOT FOUND!
+    echo  CRITICAL ERROR: hyperwall.py NOT FOUND!
     echo ========================================================
-    echo hyperwall_v8.py is a tracked repo file. Restore it with:
-    echo   git restore --source=HEAD -- hyperwall_v8.py
+    echo hyperwall.py is a tracked repo file. Restore it with:
+    echo   git restore --source=HEAD -- hyperwall.py
     echo Then rerun this launcher, or run bootstrap_v8.ps1 after the restore.
     pause
     exit /b 1
@@ -52,7 +52,7 @@ if "%PY%"=="" (
     exit /b 1
 )
 
-%PY% hyperwall_v8.py
+%PY% hyperwall.py
 
 if %ERRORLEVEL% NEQ 0 (
     echo.

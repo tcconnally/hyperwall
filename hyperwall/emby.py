@@ -40,7 +40,7 @@ class EmbyAPISession:
 
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent":      "HyperWall/8.0",
+            "User-Agent":      "HyperWall/8.2",
             "Accept":          "application/json",
             "Accept-Encoding": "gzip, deflate",
         })
@@ -63,7 +63,7 @@ class EmbyAPISession:
                         "Content-Type": "application/json",
                         "X-Emby-Authorization": (
                             f'MediaBrowser Client="HyperWall", Device="PC", '
-                            f'DeviceId="{self._device_id}", Version="8.0"'
+                            f'DeviceId="{self._device_id}", Version="8.2"'
                         ),
                     },
                     json={"Username": self.username, "Pw": self._password},

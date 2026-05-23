@@ -145,11 +145,12 @@ class VideoCell(QWidget):
             return
         if STATS_ENABLED:
             self._flush_stats()
-        try:
-            self._mpv.terminate()
-        except Exception as e:
-            logger.warning("mpv terminate raised: %s", e)
+        mpv_ref = self._mpv
         self._mpv = None
+        try:
+            mpv_ref.terminate()
+        except Exception as e:
+            logger.debug("mpv terminate raised: %s", e)
 
     def _flush_stats(self):
         if self._mpv is not None:
@@ -173,6 +174,11 @@ class VideoCell(QWidget):
 
     def _ensure_mpv(self):
         if self._mpv is not None:
+            return
+        # Widget must be visible and realized before creating mpv.
+        # Creating mpv with wid=0 or on a hidden widget causes ghost popups.
+        if not self.video_frame.isVisible():
+            logger.warning("video_frame not visible — deferring mpv creation.")
             return
         # Mask to 32-bit to prevent HWND sign-extension on Windows (mpv #10189).
         # Without this, winId() can become negative on systems with long uptimes,
@@ -469,11 +475,20 @@ class VideoCell(QWidget):
         self.btn_tag.setChecked("ToDelete" in tag_names)
         self.btn_fav.setChecked(item.get("UserData", {}).get("IsFavorite", False))
 
-        # Reuse existing mpv instance for normal clip transitions.
-        # This enables libmpv decoder/context reuse and internal pre-buffering,
-        # delivering the near-seamless end-of-clip → next-clip behavior documented
-        # in INSTRUCTIONS_v8.md. Only recreate on first play or after error paths.
-        if self._mpv is None or self._force_transcode:
+        # Reuse mpv instance for gapless transitions. keep-open=always + idle=yes
+        # keeps the process alive between tracks. Only recreate on first play,
+        # force-transcode escalation, or if the prior process died.
+        need_create = self._mpv is None or self._force_transcode
+        if not need_create and self._mpv is not None:
+            try:
+                # Verify process is still alive. A dead handle on loadfile
+                # blocks indefinitely and freezes the wall.
+                self._mpv["pause"]  # harmless property read; raises if dead
+            except Exception:
+                logger.warning("mpv process dead — recreating.")
+                need_create = True
+
+        if need_create:
             self._destroy_mpv()
             self._ensure_mpv()
         if self._mpv is None:

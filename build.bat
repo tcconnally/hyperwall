@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM HyperWall 8.0 -- PyInstaller build
+REM HyperWall 8.2 — PyInstaller build
 REM Output: hyperwall_v8.exe (one-file, no console).
 REM
 REM Why one-file:
@@ -16,9 +16,9 @@ REM ============================================================================
 setlocal
 cd /d "%~dp0"
 
-if not exist "hyperwall_v8.py" (
-    echo [ERROR] hyperwall_v8.py is missing. It is a tracked repo file.
-    echo Restore it with: git restore --source=HEAD -- hyperwall_v8.py
+if not exist "hyperwall.py" (
+    echo [ERROR] hyperwall.py is missing. It is a tracked repo file.
+    echo Restore it with: git restore --source=HEAD -- hyperwall.py
     exit /b 1
 )
 
@@ -58,7 +58,7 @@ echo [BUILD] Compiling hyperwall_v8.exe...
     --add-binary "mpv-2.dll;." ^
     --hidden-import mpv ^
     --collect-submodules PyQt6 ^
-    hyperwall_v8.py
+    hyperwall.py
 
 if errorlevel 1 (
     echo [ERROR] PyInstaller build failed.

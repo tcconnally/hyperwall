@@ -269,6 +269,14 @@ class WallController:
         if self._cleaned_up:
             return
         self._cleaned_up = True
+
+        # Hide all windows immediately so the user never sees a black/stuck frame.
+        for w in self.windows:
+            try:
+                w.hide()
+            except Exception:
+                pass
+
         for c in self.cells:
             self.stop_emby_session(c._emby_item_id, c._emby_session_id)
         if STATS_ENABLED:

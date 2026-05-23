@@ -20,6 +20,16 @@ import argparse, configparser, os, sys, time, threading, random
 import requests, urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# ── Package-level import smoke test (fail fast) ──────────────────────────────
+# Ensures the hyperwall package + core modules are importable and not broken
+# before expensive stress / churn logic runs. Catches packaging, syntax, or
+# circular-import regressions immediately.
+import hyperwall
+from hyperwall.cell import VideoCell
+from hyperwall.perf import MPV_OPTS, MAX_RETRIES
+from hyperwall.emby import EmbyAPISession
+
+
 WALL_DIR = os.path.dirname(os.path.abspath(__file__))
 os.environ["PATH"] = WALL_DIR + os.pathsep + os.environ.get("PATH", "")
 import mpv  # noqa

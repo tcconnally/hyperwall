@@ -12,8 +12,8 @@ import sys
 from pathlib import Path
 
 APP_NAME = "HyperWall"
-APP_VERSION = "8.1"
-PACKAGE_LABEL = "structured-package"
+APP_VERSION = "8.2"
+PACKAGE_LABEL = "d3d11-native-embed"
 
 
 def _repo_root() -> Path:

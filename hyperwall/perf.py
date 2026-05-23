@@ -18,7 +18,7 @@ else:
 CONFIG_FILE  = os.path.join(SCRIPT_DIR, "config.ini")
 LOG_FILE     = os.path.join(SCRIPT_DIR, "hyperwall.log")
 LAUNCHER_EXE = os.path.join(SCRIPT_DIR, "hyperwall_v8.exe")
-NIP_FILE     = os.path.join(SCRIPT_DIR, "hyperwall_v8.nip")
+NIP_FILE     = os.path.join(SCRIPT_DIR, "hyperwall.nip")
 NPI_EXE      = os.path.join(SCRIPT_DIR, "tools", "nvidiaProfileInspector.exe")
 # Resilient fallback: relative tools/, NPI_PATH, Program Files, Downloads, ~, PATH via shutil.which.
 # Removes fragile/hardcoded user-specific paths; works across installs and build modes.
@@ -99,7 +99,9 @@ MPV_OPTS = dict(
     demuxer_readahead_secs     = 20,
     network_timeout            = 15,
     stream_lavf_o              = "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
-    keep_open                  = "no",
+    keep_open                  = "always",
+    force_window               = "no",
+    idle                       = "yes",
     osd_level                  = 0,
     input_default_bindings     = False,
     input_vo_keyboard          = False,

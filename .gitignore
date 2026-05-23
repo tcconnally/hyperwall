@@ -28,3 +28,7 @@ stress_*.log
 
 # Test artifacts
 test_*_results.json
+
+# Perseus generated output
+.hermes.md
+.perseus/cache/
