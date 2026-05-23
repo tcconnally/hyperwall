@@ -23,11 +23,14 @@ from .version import runtime_banner
 # On Windows, Python 3.8+ tightened DLL search — os.add_dll_directory()
 # is the correct API to make script-dir DLLs visible to ctypes.
 # (PATH manipulation alone is not sufficient.)
+# NOTE: add_dll_directory() returns a cookie that MUST be kept alive.
+# If it's garbage-collected, the directory is removed from the search path.
+_mpv_dll_cookie = None
 if os.name == "nt":
     _mpv_dll_dir = SCRIPT_DIR
     if os.path.isdir(_mpv_dll_dir):
         try:
-            os.add_dll_directory(_mpv_dll_dir)
+            _mpv_dll_cookie = os.add_dll_directory(_mpv_dll_dir)
         except AttributeError:
             # Python < 3.8 fallback
             os.environ["PATH"] = _mpv_dll_dir + os.pathsep + os.environ.get("PATH", "")
