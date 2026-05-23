@@ -22,12 +22,18 @@ if not exist "hyperwall.py" (
     exit /b 1
 )
 
-if not exist "mpv-2.dll" (
-    echo [ERROR] mpv-2.dll not found in %CD%
-    echo Download libmpv: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
-    echo Get mpv-dev-x86_64-YYYYMMDD-git-XXXXXXX.7z from shinchiro
-    echo Drop mpv-2.dll next to this script and re-run.
+if not exist "mpv-2.dll" if not exist "libmpv-2.dll" (
+    echo [ERROR] No mpv-2.dll or libmpv-2.dll found in %CD%
+    echo Download from: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+    echo   (shinchiro mpv-dev-x86_64 build — extract libmpv-2.dll)
+    echo Drop it next to this script and re-run.
     exit /b 1
+)
+
+REM Use whichever DLL is present (shinchiro ships as libmpv-2.dll)
+if exist "libmpv-2.dll" if not exist "mpv-2.dll" (
+    echo [INFO] Renaming libmpv-2.dll ^-^> mpv-2.dll for PyInstaller
+    copy /y "libmpv-2.dll" "mpv-2.dll" >nul
 )
 
 REM Pick a Python launcher: prefer 'py' (Windows launcher), else 'python'.

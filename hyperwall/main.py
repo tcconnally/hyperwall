@@ -20,6 +20,12 @@ from .controller import WallController, MouseIdleHider
 from .version import runtime_banner
 
 # Late import for mpv
+# On Windows, ctypes does not search the script directory for DLLs — only
+# system %PATH%.  Prepend SCRIPT_DIR so mpv-2.dll / libmpv-2.dll placed
+# next to hyperwall.py will be found.
+if os.name == "nt" and os.path.isdir(SCRIPT_DIR):
+    os.environ["PATH"] = SCRIPT_DIR + os.pathsep + os.environ.get("PATH", "")
+
 mpv = None
 _MPV_IMPORT_ERR = None
 try:
@@ -58,8 +64,8 @@ def main():
         msg = (f"python-mpv failed to load: {_MPV_IMPORT_ERR}\n\n"
                f"Install:\n  pip install python-mpv\n\n"
                f"And place mpv-2.dll next to this script:\n  {SCRIPT_DIR}\n\n"
-               f"Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\\n"
-               f"Get mpv-dev-x86_64-YYYYMMDD-git-XXXXXXX.7z from shinchiro")
+               f"Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\n"
+               f"  (shinchiro build — extract libmpv-2.dll, place in script dir)")
         logger.critical(msg)
         try:
             app = QApplication.instance() or QApplication(sys.argv)

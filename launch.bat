@@ -37,14 +37,14 @@ if not exist "hyperwall.py" (
     exit /b 1
 )
 
-if not exist "mpv-2.dll" (
+if not exist "mpv-2.dll" if not exist "libmpv-2.dll" (
     echo.
     echo ========================================================
-    echo  CRITICAL ERROR: mpv-2.dll NOT FOUND!
+    echo  CRITICAL ERROR: mpv-2.dll / libmpv-2.dll not found!
     echo ========================================================
-    echo Download libmpv: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
-    echo Get mpv-dev-x86_64-YYYYMMDD-git-XXXXXXX.7z from shinchiro
-    echo Place mpv-2.dll next to this script and re-run.
+    echo Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+    echo   (shinchiro mpv-dev-x86_64 build — extract libmpv-2.dll)
+    echo Drop it next to this script and re-run.
     pause
     exit /b 1
 )
