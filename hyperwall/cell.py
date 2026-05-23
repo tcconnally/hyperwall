@@ -84,6 +84,7 @@ class VideoCell(QWidget):
         self._last_next_request_ts = 0.0
         self._stall_count     = 0
         self._mouse_in_cell = False
+        self._last_time_update = 0.0   # throttle for time-pos observer (item 6)
         self._emby_session_id: str | None = None
         self._emby_item_id:    str | None = None
 
@@ -468,7 +469,7 @@ class VideoCell(QWidget):
         if self._overlay_effect.opacity() < 0.01:
             self._title_overlay.hide()
 
-    def play(self, item: dict, url: str):
+    def play(self, item: dict, url: str, emby_token: str = ""):
         if self.current_item is not item:
             self._retry_count     = 0
             self._force_transcode = False
@@ -506,6 +507,14 @@ class VideoCell(QWidget):
             return
         try:
             self._mpv["mute"] = self.muted
+            # Inject Emby auth token via HTTP header — keeps key out of
+            # process listings and log files (was: api_key query param).
+            if emby_token:
+                self._mpv["http-header-fields"] = f"X-Emby-Token: {emby_token}"
+            # ── Pre-flight Emby health check ──────────────────────────────
+            # Issue a fast HEAD to the server before loadfile to avoid
+            # burning retries on an unreachable server.
+            self._preflight_health_check(url)
             self._mpv.command("loadfile", url)
             self.btn_play.setText("⏸")
             self._stall_count = 0
@@ -515,6 +524,25 @@ class VideoCell(QWidget):
             self._sig_eof.emit(self._mpv_gen, "error")
             return
         self._show_title_overlay(title)
+
+    @staticmethod
+    def _preflight_health_check(url: str):
+        """Issue a fast HEAD to the Emby server to verify connectivity.
+
+        Runs in the Qt thread, so this MUST be non-blocking — uses a
+        sub-second timeout.  If the server is unreachable, we log a
+        warning and let loadfile proceed (mpv has its own retry/backoff).
+        The point is early visibility, not blocking the pipeline.
+        """
+        import urllib.request as _ur
+        from urllib.parse import urlparse as _up
+        parsed = _up(url)
+        base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        try:
+            req = _ur.Request(base, method="HEAD")
+            _ur.urlopen(req, timeout=0.5)
+        except Exception as e:
+            logger.warning("Emby pre-flight failed (%s) — stream may stall.", e)
 
     def release(self):
         self._destroy_mpv()
@@ -612,6 +640,20 @@ class VideoCell(QWidget):
                 if hwdec == "no":
                     logger.warning("Cell fell back to software decoding — GPU decoder session limit reached.")
                     self._hwdec_warned = True
+            # ── Audio session monitoring ──────────────────────────────────
+            # WASAPI shared-mode has a platform limit of ~10–12 concurrent
+            # render clients per process. At 12+ cells with ao=wasapi, mpv
+            # silently falls back to ao=null (no audio output).  Log a
+            # one-shot warning so operators know to configure ao=null or
+            # reduce cell count.
+            if not getattr(self, "_audio_warned", False):
+                audio_dev = self._mpv.get("audio-device", None)
+                if audio_dev == "null":
+                    logger.warning(
+                        "Cell fell back to ao=null — WASAPI shared-mode limit "
+                        "likely exceeded (%d cells active). Set HYPERWALL_AO=null "
+                        "or reduce grid size.", len(self.controller.cells))
+                    self._audio_warned = True
         except Exception:
             # mpv handle may be dead — increment and trigger on sustained failures
             self._stall_count += 1
@@ -623,6 +665,14 @@ class VideoCell(QWidget):
     def _handle_time(self, gen: int, pos: float, dur: float):
         if gen != self._mpv_gen:
             return
+        # ── Throttle: skip UI updates within 100 ms to reduce GIL contention ──
+        # At 8+ cells × 60–240 fps, time-pos observers fire 80–240 times/second
+        # across all cells.  Each fires a pyqtSignal → queued-connection slot
+        # which acquires the GIL.  Cap at 10 Hz per cell.
+        now = _time.monotonic()
+        if now - self._last_time_update < 0.100:
+            return
+        self._last_time_update = now
         if not self.controls_visible:
             return
         if not self._dragging and dur > 0:

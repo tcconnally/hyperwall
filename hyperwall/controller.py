@@ -2,6 +2,7 @@ import logging
 import os
 import random
 import threading
+import time as _time
 import uuid
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +21,7 @@ from .perf import (
 )
 from .cell import VideoCell
 from .emby import ContentLoaderThread
+from .stats_server import StatsServer
 
 # ── GPU telemetry helper ────────────────────────────────────────────────────
 def _query_gpu_telemetry() -> dict | None:
@@ -91,6 +93,22 @@ class WallController:
         self._escape_filter = _EmergencyKeyFilter(self._shutdown)
         QApplication.instance().installEventFilter(self._escape_filter)
 
+        # ── GPU TDR (Timeout Detection & Recovery) tracking ─────────────
+        # When the GPU driver resets, all mpv instances die simultaneously.
+        # Track cell-death timestamps; if >50% of cells die within a 3 s
+        # window, trigger a full wall rebuild instead of per-cell retries.
+        self._tdr_deaths: deque[float] = deque(maxlen=64)
+        self._tdr_recovering = False
+
+        # ── Content pre-warming cache ────────────────────────────────────
+        # Pre-compute the next item's URL when a cell starts playing so the
+        # loadfile call on EOF is instant.  Key = cell index.
+        self._warm_cache: dict[int, tuple[str, str, dict]] = {}
+
+        # ── Real-time stats HTTP endpoint ──────────────────────────────
+        self._stats_server = StatsServer(port=9090, collect_fn=self._collect_stats)
+        self._stats_server.start()
+
         self._build_displays()
         # Show all windows at once to avoid ghost flashes from sequential
         # creation of native video-frame handles.
@@ -160,7 +178,6 @@ class WallController:
     def _build_url(self, item: dict, force_transcode: bool = False) -> tuple[str, str]:
         from .emby import classify_item
         iid  = item["Id"]
-        key  = self.api.access_token
         base = self.api.server_url
         sid  = uuid.uuid4().hex
 
@@ -170,22 +187,22 @@ class WallController:
         # overrides everything.
         auto_transcode = classification != "direct" or force_transcode
         if force_transcode or classification == "immediate":
-            url = (f"{base}/Videos/{iid}/master.m3u8?api_key={key}"
-                   f"&VideoCodec=h264&AudioCodec=aac&MaxAudioChannels=2"
+            url = (f"{base}/Videos/{iid}/master.m3u8"
+                   f"?VideoCodec=h264&AudioCodec=aac&MaxAudioChannels=2"
                    f"&MaxHeight=1080&MaxWidth=1920"
                    f"&MaxFramerate=30&VideoBitrate=12000000"
                    f"&PlaySessionId={sid}")
             tag = "TRANSCODE/immediate" if classification == "immediate" else "TRANSCODE/retry"
             logger.info("[%s] %s", tag, item.get("Name"))
         elif classification == "auto":
-            url = (f"{base}/Videos/{iid}/master.m3u8?api_key={key}"
-                   f"&VideoCodec=h264&AudioCodec=aac&MaxAudioChannels=2"
+            url = (f"{base}/Videos/{iid}/master.m3u8"
+                   f"?VideoCodec=h264&AudioCodec=aac&MaxAudioChannels=2"
                    f"&MaxHeight=1080&MaxWidth=1920"
                    f"&MaxFramerate=30&VideoBitrate=12000000"
                    f"&PlaySessionId={sid}")
             logger.info("[TRANSCODE/auto] %s", item.get("Name"))
         else:
-            url = f"{base}/Videos/{iid}/stream?api_key={key}&static=true"
+            url = f"{base}/Videos/{iid}/stream?static=true"
             logger.info("[DIRECT] %s", item.get("Name"))
         return url, sid
 
@@ -219,20 +236,58 @@ class WallController:
         url, sid = self._build_url(item, force_transcode)
         cell._emby_session_id = sid
         cell._emby_item_id    = item["Id"]
-        cell.play(item, url)
+        cell.play(item, url, self.api.access_token)
+
+    def _warm_next_for(self, cell: VideoCell, cell_idx: int):
+        """Pre-compute the next item's URL so loadfile on EOF is instant."""
+        if not self.filtered:
+            return
+        if not self.playlist and len(self.filtered) > 0:
+            shuffled = self.filtered[:]; random.shuffle(shuffled)
+            self.playlist = deque(shuffled)
+        if not self.playlist:
+            return
+        next_item = self.playlist[-1]  # peek, don't pop
+        url, sid = self._build_url(next_item)
+        self._warm_cache[cell_idx] = (url, sid, next_item)
 
     def next_video(self, cell: VideoCell, is_retry: bool = False):
         if not self.filtered: return
+        # ── TDR detection: mass death = GPU driver reset ──────────────────
+        if is_retry:
+            now = _time.monotonic()
+            self._tdr_deaths.append(now)
+            # Prune old entries (>3 s ago) from the front
+            TDR_WINDOW_S = 3.0
+            threshold = self.settings["grid"][0] * self.settings["grid"][1] // 2  # >50%
+            recent = sum(1 for t in self._tdr_deaths if now - t <= TDR_WINDOW_S)
+            if recent >= max(threshold, 2) and not self._tdr_recovering:
+                logger.critical(
+                    "GPU TDR DETECTED — %d cells died within %.1f s. "
+                    "Initiating full wall rebuild.", recent, TDR_WINDOW_S)
+                self._tdr_recovering = True
+                QTimer.singleShot(2000, self._tdr_rebuild)
+                return
         if is_retry and cell.current_item:
             self._hand_off(cell, cell.current_item, cell._force_transcode)
             return
         if cell.current_item:
             cell.history.append(cell.current_item)
-        if not self.playlist:
-            shuffled = self.filtered[:]; random.shuffle(shuffled)
-            self.playlist = deque(shuffled)
-        item = self.playlist.pop()
-        self._hand_off(cell, item)
+        # ── Pre-warming: use cached URL if available (gapless transition) ──
+        cell_idx = self.cells.index(cell)
+        if not is_retry and cell_idx in self._warm_cache:
+            url, sid, item = self._warm_cache.pop(cell_idx)
+            cell._emby_session_id = sid
+            cell._emby_item_id    = item["Id"]
+            cell.play(item, url, self.api.access_token)
+        else:
+            if not self.playlist:
+                shuffled = self.filtered[:]; random.shuffle(shuffled)
+                self.playlist = deque(shuffled)
+            item = self.playlist.pop()
+            self._hand_off(cell, item)
+        # ── Pre-warm next URL ──────────────────────────────────────────
+        self._warm_next_for(cell, cell_idx)
 
     def prev_video(self, cell: VideoCell):
         if cell.history:
@@ -270,6 +325,31 @@ class WallController:
             self.filtered = self.all_items[:]
         self.playlist.clear()
         logger.info("Filter: %s (%d items)", mode.upper(), len(self.filtered))
+        for i, c in enumerate(self.cells):
+            QTimer.singleShot(i * STREAM_START_STAGGER_MS,
+                              lambda cell=c: self.next_video(cell, False))
+
+    def _tdr_rebuild(self):
+        """Full wall rebuild after GPU driver reset (TDR)."""
+        logger.info("TDR recovery: destroying all mpv instances…")
+        for c in self.cells:
+            try:
+                c.release()
+            except Exception as e:
+                logger.warning("TDR: cell release failed: %s", e)
+        # Clear death tracker and recovery flag
+        self._tdr_deaths.clear()
+        self._tdr_recovering = False
+        # Reset all cell state
+        for c in self.cells:
+            c._retry_count = 0
+            c._force_transcode = False
+            c._stall_count = 0
+            c._hwdec_warned = getattr(c, "_hwdec_warned", True)  # keep if already set
+            c._audio_warned = getattr(c, "_audio_warned", True)
+        # Re-assign content with normal stagger
+        self.playlist.clear()
+        logger.info("TDR recovery: re-assigning %d cells…", len(self.cells))
         for i, c in enumerate(self.cells):
             QTimer.singleShot(i * STREAM_START_STAGGER_MS,
                               lambda cell=c: self.next_video(cell, False))
@@ -355,8 +435,38 @@ class WallController:
             QApplication.instance().removeEventFilter(self._escape_filter)
         except Exception as e:
             logger.debug("removeEventFilter failed: %s", e)
+        self._stats_server.stop()
         self.api.close()
         logger.info("Cleanup complete.")
+
+    def _collect_stats(self) -> dict:
+        """Live snapshot for the HTTP stats endpoint — non-blocking, thread-safe."""
+        import time as _time
+        cells_payload = []
+        for i, c in enumerate(self.cells):
+            c._flush_stats()
+            cells_payload.append({
+                "cell": i,
+                "totals": dict(c._stats_total),
+                "info":   {str(k): v for k, v in c._stats_info.items()},
+                "current": dict(c._stats_current),
+                "last_item": (c.current_item or {}).get("Name"),
+                "retry_count": c._retry_count,
+                "mpv_alive": c._mpv is not None,
+                "mpv_gen": c._mpv_gen,
+            })
+        gpu_snapshot = _query_gpu_telemetry()
+        return {
+            "ts": _time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "n_cells": len(self.cells),
+            "mpv_opts_effective": apply_perf_env(MPV_OPTS),
+            "env": {k: os.environ.get(k) for k in (
+                "HYPERWALL_STATS", "HYPERWALL_HDR_HINT", "HYPERWALL_HWDEC",
+                "HYPERWALL_GPU_API", "HYPERWALL_PROFILE", "HYPERWALL_VIDEO_SYNC",
+            ) if os.environ.get(k) is not None},
+            "gpu": gpu_snapshot,
+            "cells": cells_payload,
+        }
 
     def _toggle_stats_overlay(self):
         if not self.cells:
