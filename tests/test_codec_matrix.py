@@ -30,7 +30,7 @@ import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-WALL_DIR = os.path.dirname(os.path.abspath(__file__))
+WALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = os.path.join(WALL_DIR, "config.ini")
 
 # Make python-mpv find mpv-2.dll bundled next to this script.

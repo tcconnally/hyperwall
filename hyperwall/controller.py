@@ -59,18 +59,42 @@ class _EmergencyKeyFilter(QObject):
     """App-level last-resort key handler for shortcuts stolen by child widgets.
 
     Normal wall shortcuts stay registered per fullscreen window because that is
-    the proven multi-monitor Qt focus model for HyperWall. This filter is only
-    an additive safety net for Escape so exiting the wall never depends on which
-    cell/control/native mpv child currently owns focus.
+    the proven multi-monitor Qt focus model for HyperWall. This filter is an
+    additive safety net so critical keys (Escape for exit, C/Space/F/A/S for
+    playback/navigation) never depend on which cell/control/native mpv child
+    currently owns focus.
     """
 
-    def __init__(self, shutdown_callback):
+    _KEYS: dict[int, str] = {
+        Qt.Key.Key_Escape: "shutdown",
+        Qt.Key.Key_C:      "toggle_controls",
+        Qt.Key.Key_Space:  "toggle_pause",
+        Qt.Key.Key_F:      "filter_favorites",
+        Qt.Key.Key_A:      "filter_all",
+        Qt.Key.Key_S:      "toggle_stats",
+    }
+
+    def __init__(self, wall_controller):
         super().__init__()
-        self._shutdown_callback = shutdown_callback
+        self._wc = wall_controller
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
-            self._shutdown_callback()
+        if event.type() == QEvent.Type.KeyPress:
+            label = self._KEYS.get(event.key())
+            if label is None:
+                return False
+            if label == "shutdown":
+                self._wc._shutdown()
+            elif label == "toggle_controls":
+                self._wc._global_toggle_controls()
+            elif label == "toggle_pause":
+                self._wc._global_toggle_pause()
+            elif label == "filter_favorites":
+                self._wc._set_filter("favorites")
+            elif label == "filter_all":
+                self._wc._set_filter("all")
+            elif label == "toggle_stats":
+                self._wc._toggle_stats_overlay()
             return True
         return False
 
@@ -90,7 +114,7 @@ class WallController:
         self._api_pool_closed = False
         self._cleaned_up = False
         self._shutdown_requested = False
-        self._escape_filter = _EmergencyKeyFilter(self._shutdown)
+        self._escape_filter = _EmergencyKeyFilter(self)
         QApplication.instance().installEventFilter(self._escape_filter)
 
         # ── GPU TDR (Timeout Detection & Recovery) tracking ─────────────

@@ -30,7 +30,7 @@ from hyperwall.perf import MPV_OPTS, MAX_RETRIES
 from hyperwall.emby import EmbyAPISession
 
 
-WALL_DIR = os.path.dirname(os.path.abspath(__file__))
+WALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ["PATH"] = WALL_DIR + os.pathsep + os.environ.get("PATH", "")
 import mpv  # noqa
 

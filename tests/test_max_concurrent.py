@@ -1,9 +1,3 @@
-# Smoke test import (added by audit follow-up)
-try:
-    from hyperwall.perf import MPV_OPTS
-    print('hyperwall package smoke OK')
-except Exception as ex:
-    print('Smoke import failed:', ex)
 """
 HyperWall v8 -- max concurrent stress test.
 
@@ -37,7 +31,7 @@ import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-WALL_DIR = os.path.dirname(os.path.abspath(__file__))
+WALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG = os.path.join(WALL_DIR, "config.ini")
 
 os.environ["PATH"] = WALL_DIR + os.pathsep + os.environ.get("PATH", "")
