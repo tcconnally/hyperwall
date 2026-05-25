@@ -22,6 +22,7 @@ from .perf import (
 from .cell import VideoCell
 from .emby import ContentLoaderThread
 from .stats_server import StatsServer
+from .style import CYAN, TEXT_DIM
 
 # ── GPU telemetry helper ────────────────────────────────────────────────────
 def _query_gpu_telemetry() -> dict | None:
@@ -187,11 +188,12 @@ class WallController:
         if not items:
             logger.warning("No items returned — check config.ini libraries.")
             for cell in self.cells:
-                lbl = QLabel("No items found—check config.ini libraries", cell)
+                lbl = QLabel("◈  NO ITEMS FOUND — CHECK CONFIG.INI", cell)
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 lbl.setStyleSheet(
-                    "color: #666; font-size: 13px; font-family: 'Segoe UI';"
-                    " background: transparent;"
+                    f"color: {TEXT_DIM}; font-size: 13px;"
+                    f" font-family: 'Consolas', 'Segoe UI', monospace;"
+                    f" letter-spacing: 2px; background: transparent;"
                 )
                 lbl.resize(cell.video_frame.size()); lbl.show()
             return
@@ -487,6 +489,9 @@ class WallController:
             "env": {k: os.environ.get(k) for k in (
                 "HYPERWALL_STATS", "HYPERWALL_HDR_HINT", "HYPERWALL_HWDEC",
                 "HYPERWALL_GPU_API", "HYPERWALL_PROFILE", "HYPERWALL_VIDEO_SYNC",
+                "HYPERWALL_CACHE_SECS", "HYPERWALL_DEMUXER_MAX_BYTES",
+                "HYPERWALL_DEMUXER_READAHEAD_SECS", "HYPERWALL_AO",
+                "HYPERWALL_AUDIO_BUFFER",
             ) if os.environ.get(k) is not None},
             "gpu": gpu_snapshot,
             "cells": cells_payload,
@@ -524,6 +529,9 @@ class WallController:
             "env": {k: os.environ.get(k) for k in (
                 "HYPERWALL_STATS", "HYPERWALL_HDR_HINT", "HYPERWALL_HWDEC",
                 "HYPERWALL_GPU_API", "HYPERWALL_PROFILE", "HYPERWALL_VIDEO_SYNC",
+                "HYPERWALL_CACHE_SECS", "HYPERWALL_DEMUXER_MAX_BYTES",
+                "HYPERWALL_DEMUXER_READAHEAD_SECS", "HYPERWALL_AO",
+                "HYPERWALL_AUDIO_BUFFER",
             ) if os.environ.get(k) is not None},
             "gpu": gpu_snapshot,
             "cells": cells_payload,

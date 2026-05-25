@@ -17,6 +17,7 @@ from .perf import (
     MPV_OPTS, STATS_ENABLED, STATS_COUNTER_PROPS, STATS_INFO_PROPS,
     apply_perf_env, _MPV_LOG_NOISE
 )
+from .style import CYAN, MAGENTA, AMBER, BG_DEEP, BG_SURFACE, BG_RAISED, TEXT, TEXT_DIM, BORDER
 
 # Late import for mpv to avoid module-level load error
 mpv = None
@@ -26,25 +27,63 @@ def _import_mpv():
         import mpv as _mpv
         mpv = _mpv
 
-CTRL_STYLE = """
-    QFrame#controls {
-        background: rgba(22, 22, 22, 210);
-        border-top: 1px solid rgba(255, 255, 255, 22);
-        border-radius: 4px 4px 0 0;
-    }
-    QLabel { color: #ccc; font-family: 'Segoe UI'; font-size: 9px; background: transparent; }
-    QPushButton {
-        background: rgba(80, 80, 80, 180); border: 1px solid rgba(255,255,255,20);
-        border-radius: 2px; color: #eee; font-size: 11px; padding: 1px;
-        min-width: 22px; min-height: 22px; max-width: 22px; max-height: 22px;
-    }
-    QPushButton:hover   { background: #2563a8; border-color: #3b8edb; color: white; }
-    QPushButton:checked { background: #1e4f78; border-color: #3b8edb; color: white; }
-    QSlider::groove:horizontal { background: rgba(100,100,100,180); height: 3px; border-radius: 1px; }
-    QSlider::sub-page:horizontal { background: rgba(59,142,219,200); border-radius: 1px; }
-    QSlider::handle:horizontal {
-        background: rgba(220,220,220,220); width: 8px; margin: -2px 0; border-radius: 4px;
-    }
+CTRL_STYLE = f"""
+    QFrame#controls {{
+        background: rgba(10, 10, 15, 235);
+        border-top: 2px solid {CYAN};
+        border-left: 1px solid {BORDER};
+        border-right: 1px solid {BORDER};
+        border-bottom: none;
+        border-radius: 6px 6px 0 0;
+    }}
+    QLabel {{
+        color: {TEXT};
+        font-family: 'Consolas', 'Cascadia Code', 'Segoe UI', monospace;
+        font-size: 10px;
+        background: transparent;
+    }}
+    QPushButton {{
+        background: rgba(18, 18, 26, 220);
+        border: 1px solid {BORDER};
+        border-radius: 3px;
+        color: {TEXT};
+        font-size: 11px;
+        padding: 1px;
+        min-width: 24px; min-height: 24px;
+        max-width: 24px; max-height: 24px;
+    }}
+    QPushButton:hover {{
+        background: {CYAN};
+        border-color: {CYAN};
+        color: {BG_DEEP};
+    }}
+    QPushButton:pressed {{
+        background: #009faf;
+    }}
+    QPushButton:checked {{
+        background: {MAGENTA};
+        border-color: {MAGENTA};
+        color: white;
+    }}
+    QSlider::groove:horizontal {{
+        background: rgba(30, 30, 42, 220);
+        height: 4px;
+        border-radius: 2px;
+    }}
+    QSlider::sub-page:horizontal {{
+        background: {CYAN};
+        border-radius: 2px;
+    }}
+    QSlider::handle:horizontal {{
+        background: {CYAN};
+        width: 10px;
+        margin: -4px 0;
+        border-radius: 5px;
+        border: 1px solid {BG_DEEP};
+    }}
+    QSlider::handle:horizontal:hover {{
+        background: white;
+    }}
 """
 
 class _ClickSlider(QSlider):
@@ -127,9 +166,11 @@ class VideoCell(QWidget):
         self._title_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_overlay.setWordWrap(False)
         self._title_overlay.setStyleSheet(
-            "color: white; background: rgba(0,0,0,180);"
-            " font-family: 'Segoe UI'; font-size: 13px; font-weight: 600;"
-            " padding: 5px 14px; border-radius: 4px;"
+            f"color: {CYAN}; background: rgba(10,10,15,220);"
+            f" border: 1px solid {CYAN};"
+            f" font-family: 'Consolas', 'Cascadia Code', 'Segoe UI', monospace;"
+            f" font-size: 13px; font-weight: 700; letter-spacing: 1px;"
+            " padding: 6px 16px; border-radius: 4px;"
         )
         self._title_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._title_overlay.hide()
@@ -334,10 +375,10 @@ class VideoCell(QWidget):
         self.lbl_time.setFixedWidth(75)
         self.lbl_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        self.lbl_title = QLabel("Initializing…")
+        self.lbl_title = QLabel("◈  INITIALIZING…")
         self.lbl_title.setStyleSheet(
-            "color: white; font-family: 'Segoe UI'; font-size: 12px;"
-            " font-weight: 700; background: transparent;"
+            f"color: {CYAN}; font-family: 'Consolas', 'Cascadia Code', 'Segoe UI', monospace;"
+            f" font-size: 11px; font-weight: 700; letter-spacing: 1px; background: transparent;"
         )
 
         for w in (self.btn_prev, self.btn_play, self.btn_next, self.btn_loop,

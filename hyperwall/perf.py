@@ -95,6 +95,14 @@ MOUSE_IDLE_MS           = 3_000     # cursor auto-hide
 #   audio_buffer 1.0 → 0.2   — reduced from 1s for faster mute/unmute
 #   stagger 300ms → 2000ms   — give Emby transcode pipeline time to breathe
 #
+# v8.3 cyberpunk revamp (2026-05-25):
+#   +demuxer-cache-background=yes — pre-fill cache before playback, reduces
+#     initial stutter on multi-cell grids by having buffer headroom ready.
+#   cache_secs 10 → env-overridable via HYPERWALL_CACHE_SECS
+#   demuxer_max_bytes env-overridable via HYPERWALL_DEMUXER_MAX_BYTES
+#   +audio-fallback-to-null       — prevent mpv from blocking on WASAPI
+#     session exhaustion; makes cell count scalability explicit.
+#
 # Must stay in sync with deployed hardware and the principal-engineer audit.
 MPV_OPTS = dict(
     vo                         = "gpu-next",
@@ -109,6 +117,7 @@ MPV_OPTS = dict(
     cache_secs                 = 10,
     demuxer_max_bytes          = "64MiB",
     demuxer_readahead_secs     = 10,
+    demuxer_cache_background   = "yes",
     network_timeout            = 15,
     stream_lavf_o              = "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
     keep_open                  = "always",
@@ -121,6 +130,7 @@ MPV_OPTS = dict(
     ao                         = "wasapi",
     audio_client_name          = "HyperWall",
     audio_buffer               = 0.2,
+    audio_fallback_to_null     = "yes",
     msg_level                  = "all=warn,cplayer=info,ao=error,ao/wasapi=fatal",
 )
 
@@ -149,12 +159,25 @@ def apply_perf_env(opts: dict) -> dict:
             out["audio_buffer"] = float(v)
         except ValueError:
             pass
+    if (v := os.environ.get("HYPERWALL_CACHE_SECS")) is not None:
+        try:
+            out["cache_secs"] = int(v)
+        except ValueError:
+            pass
+    if (v := os.environ.get("HYPERWALL_DEMUXER_MAX_BYTES")) is not None:
+        out["demuxer_max_bytes"] = v
+    if (v := os.environ.get("HYPERWALL_DEMUXER_READAHEAD_SECS")) is not None:
+        try:
+            out["demuxer_readahead_secs"] = int(v)
+        except ValueError:
+            pass
     for var, key in (
         ("HYPERWALL_VO",          "vo"),
         ("HYPERWALL_HWDEC",       "hwdec"),
         ("HYPERWALL_GPU_API",     "gpu_api"),
         ("HYPERWALL_PROFILE",     "profile"),
         ("HYPERWALL_VIDEO_SYNC",  "video_sync"),
+        ("HYPERWALL_AO",          "ao"),
     ):
         if (v := os.environ.get(var)) is not None:
             out[key] = v

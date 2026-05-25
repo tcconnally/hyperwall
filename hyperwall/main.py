@@ -18,6 +18,7 @@ from .emby import EmbyAPISession, CleanupWorker
 from .wizard import SetupWizard
 from .controller import WallController, MouseIdleHider
 from .version import runtime_banner
+from .style import BG_DEEP, BG_SURFACE, BG_RAISED, CYAN, MAGENTA, TEXT, TEXT_DIM, BORDER, GLOBAL_QSS
 
 # Late import for mpv
 # On Windows, Python 3.8+ tightened DLL search — os.add_dll_directory()
@@ -103,6 +104,26 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    # ── Cyberpunk dark Fusion palette (native widget colours) ───────────
+    from PyQt6.QtGui import QPalette, QColor
+    p = app.palette()
+    p.setColor(QPalette.ColorRole.Window,          QColor(BG_DEEP))
+    p.setColor(QPalette.ColorRole.WindowText,       QColor(TEXT))
+    p.setColor(QPalette.ColorRole.Base,             QColor(BG_RAISED))
+    p.setColor(QPalette.ColorRole.AlternateBase,    QColor(BG_SURFACE))
+    p.setColor(QPalette.ColorRole.ToolTipBase,      QColor(BG_SURFACE))
+    p.setColor(QPalette.ColorRole.ToolTipText,      QColor(CYAN))
+    p.setColor(QPalette.ColorRole.Text,             QColor(TEXT))
+    p.setColor(QPalette.ColorRole.Button,           QColor(BG_RAISED))
+    p.setColor(QPalette.ColorRole.ButtonText,       QColor(CYAN))
+    p.setColor(QPalette.ColorRole.BrightText,       QColor(CYAN))
+    p.setColor(QPalette.ColorRole.Link,             QColor(CYAN))
+    p.setColor(QPalette.ColorRole.Highlight,        QColor(CYAN))
+    p.setColor(QPalette.ColorRole.HighlightedText,  QColor(BG_DEEP))
+    p.setColor(QPalette.ColorRole.PlaceholderText,  QColor(TEXT_DIM))
+    app.setPalette(p)
+    app.setStyleSheet(GLOBAL_QSS)
+
     # 5. Verify/apply NVIDIA profile
     ensure_nvidia_profile(LAUNCH_BASENAME, NIP_FILE, NPI_EXE, NV_SENTINEL, SCRIPT_DIR)
 
@@ -157,13 +178,19 @@ def main():
 
     if cfg.getboolean("Settings", "cleanup_on_startup", fallback=False):
         dlg = QDialog(); dlg.setWindowFlags(Qt.WindowType.FramelessWindowHint)
-        dlg.setStyleSheet("background: #111; border: 1px solid #2a2a2a;")
-        dlg.setMinimumWidth(340)
-        dl = QVBoxLayout(dlg); dl.setContentsMargins(28, 22, 28, 22)
-        lbl = QLabel("SYSTEM MAINTENANCE\nPurging tagged items…")
+        dlg.setStyleSheet(
+            f"background: {BG_DEEP}; border: 2px solid {CYAN};"
+            f" border-radius: 8px;"
+        )
+        dlg.setMinimumWidth(380)
+        dl = QVBoxLayout(dlg); dl.setContentsMargins(32, 26, 32, 26)
+        lbl = QLabel("SYSTEM MAINTENANCE\n◈  PURGING TAGGED ITEMS  ◈")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet("color: #3b8edb; font-weight: bold; font-size: 13px;"
-                          " font-family: 'Segoe UI'; background: transparent;")
+        lbl.setStyleSheet(
+            f"color: {CYAN}; font-weight: 900; font-size: 14px;"
+            f" font-family: 'Consolas', 'Cascadia Code', 'Segoe UI', monospace;"
+            f" letter-spacing: 2px; background: transparent;"
+        )
         dl.addWidget(lbl)
         t = QThread(); w = CleanupWorker(api); w.moveToThread(t)
         w.progress.connect(lambda name: lbl.setText(f"PURGING:\n{name[:42]}"))
