@@ -8,11 +8,10 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 logger = logging.getLogger("HyperWall")
 
 # ── Hybrid URL routing (matches INSTRUCTIONS_v8.md) ─────────────────────────
-# Default: direct-play.  On a modest grid (≤8 cells) with a modern GPU,
-# hardware decoders handle most codecs natively.  The retry escalation path
-# in VideoCell._on_error() catches anything that actually fails and re-routes
-# through server transcode automatically.
-# Set HYPERWALL_AUTO_TRANSCODE=1 for larger grids or weaker GPUs.
+# Default: direct-play for ≤1080p content.  4K is unconditionally transcoded
+# (Tier 0 resolution gate in classify_item) — direct-playing 4K on a multi-cell
+# wall saturates decode resources and drags down every cell.
+# Set HYPERWALL_AUTO_TRANSCODE=1 to also transcode based on codec/HDR/subs/bitrate.
 _AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "0") == "1"
 
 # ── Content classifier (v8.2 production hardening) ──────────────────────────
@@ -27,12 +26,12 @@ _AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "0") == "1"
 def classify_item(item: dict) -> str:
     """Return 'immediate', 'auto', or 'direct' for stream routing.
 
-    Factors considered: codec, colour depth, HDR, subtitle burn-in,
-    resolution, bitrate, and reference-frame pressure.
+    Resolution gate (>1080p → transcode) is UNCONDITIONAL — 4K direct-play
+    on a multi-cell wall saturates decode resources, chokes the network, and
+    drags down every cell (audio included).  All other gates are gated by
+    HYPERWALL_AUTO_TRANSCODE.
     """
-    if not _AUTO_TRANSCODE:
-        return "direct"
-
+    # Parse video stream info (needed for unconditional resolution gate)
     src = (item.get("MediaSources") or [{}])[0]
     streams = src.get("MediaStreams") or item.get("MediaStreams") or []
     v = next((s for s in streams if s.get("Type") == "Video"), {}) or {}
@@ -45,6 +44,17 @@ def classify_item(item: dict) -> str:
     hdr = v.get("VideoRange") or "SDR"
     ref_frames = v.get("RefFrames") or 0
     level = v.get("Level") or 0
+
+    # ── Tier 0: unconditional resolution gate ────────────────────────────
+    # 4K on a multi-cell wall overwhelms decode + network + GPU memory.
+    # This fires regardless of HYPERWALL_AUTO_TRANSCODE.
+    if width > 1920 or height > 1080:
+        logger.info("classify: %dx%d → auto transcode (4K gate)", width, height)
+        return "auto"
+
+    # ── Other gates gated by HYPERWALL_AUTO_TRANSCODE ─────────────────────
+    if not _AUTO_TRANSCODE:
+        return "direct"
 
     # ── Tier 1: codec gates (wall-hostile — high decode pressure at scale) ──
     # At 8+ simultaneous cells, even GPU-decodable codecs like HEVC/AV1/VP9
