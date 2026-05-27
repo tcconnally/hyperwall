@@ -103,25 +103,17 @@ MOUSE_IDLE_MS           = 3_000     # cursor auto-hide
 #   +audio-fallback-to-null       — prevent mpv from blocking on WASAPI
 #     session exhaustion; makes cell count scalability explicit.
 #
-# v8.4 frame-pacing tuning (2026-05-27):
+# v8.4 frame-pacing + audio tuning (2026-05-27):
 #   video_sync display-resample → audio — resample video to match audio
-#     clock instead of the reverse.  Much lighter on CPU; clean audio
-#     with no resampling artifacts.  Good enough A/V sync for a wall.
+#     clock instead of the reverse.  Audio is master; video drops/repeats
+#     frames to follow.  Clean audio, good enough sync for a wall.
 #   +video_sync_max_video_change=5 — cap per-frame correction at 5 ms.
-#     Prevents large jump corrections after a dropped-frame burst that
-#     would themselves cause visible stutter.
-#   audio_buffer 0.2 → 1.0     — 200ms was too small for 4 instances;
-#     buffer underruns caused audible clipping when unmuted.
+#   audio_buffer 0.2 → 2.0     — 200ms was too small for 4 instances;
+#     buffer underruns caused audible clipping.  2s gives 10× headroom.
 #   +correct_pts=yes — explicitly enforce correct PTS interpretation.
-#     Was previously inherited from a removed profile=fast preset.
-#   auto-transcode default 1 → 0 — on modest grids (≤8 cells) with a
-#     modern GPU, hardware decoders handle most codecs natively. Retry
-#     escalation catches failures automatically.
-#   Classifier narrowed: HEVC 8-bit / AV1 8-bit ≤1080p → direct-play.
+#   auto-transcode default 1 → 0 — 4K unconditionally transcoded (Tier 0
+#     gate).  ≤1080p direct-plays by default.
 #   +d3d11_sync_interval env-overridable via HYPERWALL_D3D11_SYNC.
-#   ao wasapi → null             — cells are muted; WASAPI shared-mode
-#     contention across 4 instances causes audio underruns and cutting
-#     out even when muted.  Set HYPERWALL_AO=wasapi to re-enable.
 #
 # Must stay in sync with deployed hardware and the principal-engineer audit.
 MPV_OPTS = dict(
@@ -149,10 +141,10 @@ MPV_OPTS = dict(
     input_default_bindings     = False,
     input_vo_keyboard          = False,
     ytdl                       = False,
-    ao                         = "null",
-    audio                      = "no",
+    ao                         = "wasapi",
     audio_client_name          = "HyperWall",
-    audio_buffer               = 1.0,
+    audio_buffer               = 2.0,
+    audio_fallback_to_null     = "yes",
     msg_level                  = "all=warn,cplayer=info,ao=error,ao/wasapi=fatal",
 )
 
