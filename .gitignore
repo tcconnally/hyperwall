@@ -1,34 +1,29 @@
-# Build artifacts
+# HyperWall — runtime artifacts (never commit)
+config.ini
+*.log
 hyperwall_v8.exe
-*.bak
-*.bak.*
-mpv-*.dll
+hyperwall_v8.spec
+
+# libmpv DLL (deployed, not committed)
+mpv-2.dll
+libmpv-2.dll
+
+# NVIDIA Profile Inspector tools (downloaded, not committed)
+tools/
+
+# Local sentinels and runtime outputs
+.hyperwall_v8_nvprofile.sentinel
+hyperwall_stats_*.json
+
+# Build artifacts
+build/
+dist/
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
-*.egg-info/
 
-# Per-user settings
-config.ini
-
-# Logs and stats (local only)
-hyperwall.log*
-hyperwall_stats_*.json
-launch_diag.log
-.hyperwall_v8_nvprofile.sentinel
-
-# Downloaded tools/binaries
-tools/*.exe
-tools/Reference.xml
-
-# Stress test artifacts
-stress_*.log
-
-# Test artifacts
-test_*_results.json
-
-# Perseus generated output
-.hermes.md
-.perseus/cache/
+# OS
+.DS_Store
+Thumbs.db

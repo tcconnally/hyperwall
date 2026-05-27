@@ -65,10 +65,11 @@ class StatsServer:
         self._httpd: HTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
-        if collect_fn is not None:
-            _StatsHandler.collect_fn = collect_fn
+        # Per-instance handler factory — avoids mutable class-level state.
+        _fn = collect_fn or (lambda: {"error": "no collector attached"})
+        _handler = type("_StatsHandler", (_StatsHandler,), {"collect_fn": _fn})
         # Bind early so we don't discover port-in-use failure at first request.
-        self._httpd = HTTPServer(("127.0.0.1", port), _StatsHandler)
+        self._httpd = HTTPServer(("127.0.0.1", port), _handler)
         self._httpd.timeout = 1.0  # poll _running flag every second
 
     def start(self):

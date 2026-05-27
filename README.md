@@ -1,6 +1,6 @@
 # HyperWall
 
-HyperWall is a fullscreen multi-monitor video wall for a local Emby server. The active runtime is the v8.1 rewrite: a small launcher shim (`hyperwall_v8.py`) plus the structured `hyperwall/` package, using `python-mpv`/libmpv instead of Qt's media stack.
+HyperWall is a fullscreen multi-monitor video wall for a local Emby server. The active runtime is the v8.2 rewrite: a small launcher shim (`hyperwall.py`) plus the structured `hyperwall/` package, using `python-mpv`/libmpv instead of Qt's media stack.
 
 The legacy v7.4 monolith is preserved only for archaeology at `legacy/hyperwall_v7_4.py`. Normal launch and build paths are v8-only.
 
@@ -32,7 +32,6 @@ Current global shortcuts:
 | `F` | Favorites filter |
 | `A` | All-items filter |
 | `S` | mpv stats overlay on cell 0 |
-| `R` | Remix dialog |
 | `Esc` | Shutdown |
 
 ## Quick start on Windows
@@ -88,8 +87,8 @@ After a successful rebuild, direct production launch is:
 
 | Path | Purpose |
 |---|---|
-| `hyperwall_v8.py` | v8 launcher shim; delegates to `hyperwall.main` |
-| `hyperwall/` | active v8.1 package |
+| `hyperwall.py` | v8 launcher shim; delegates to `hyperwall.main` |
+| `hyperwall/` | active v8.2 package |
 | `launch.bat` | safe launcher with stale-EXE detection |
 | `build_v8.bat` | PyInstaller build for `hyperwall_v8.exe` |
 | `bootstrap_v8.ps1` | installs deps/tools/DLL and builds |
@@ -97,7 +96,7 @@ After a successful rebuild, direct production launch is:
 | `config.example.ini` | safe template; real `config.ini` is ignored |
 | `hyperwall_v8.nip` | NVIDIA Profile Inspector profile targeting `hyperwall_v8.exe` |
 | `tests/run_repo_guards.py` | no-dependency guard suite |
-| `INSTRUCTIONS_v8.md` | detailed setup, tuning, and smoke-test notes |
+| `INSTRUCTIONS.md` | detailed setup, tuning, and smoke-test notes |
 
 ## NVIDIA / G-Sync isolation
 
@@ -131,7 +130,7 @@ On Linux/macOS clones, the same check is:
 
 ```bash
 python3 tests/run_repo_guards.py
-python3 -m py_compile hyperwall/*.py hyperwall_v8.py tests/*.py
+python3 -m py_compile hyperwall/*.py hyperwall.py tests/*.py
 ```
 
 Do not commit local runtime artifacts: `config.ini`, logs, built exe, downloaded tools, DLLs, sentinels, pycache, and stress-test outputs are intentionally ignored.

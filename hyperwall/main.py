@@ -71,11 +71,19 @@ def main():
 
     # 2. libmpv presence check
     if mpv is None:
+        if os.name == "nt":
+            lib_name = "mpv-2.dll"
+            lib_dir = SCRIPT_DIR
+            lib_src = ("Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\n"
+                       "  (shinchiro build — extract libmpv-2.dll, place in script dir)")
+        else:
+            lib_name = "libmpv.so"
+            lib_dir = SCRIPT_DIR
+            lib_src = "Install: apt install libmpv-dev (Debian/Ubuntu) or equivalent for your distro."
         msg = (f"python-mpv failed to load: {_MPV_IMPORT_ERR}\n\n"
                f"Install:\n  pip install python-mpv\n\n"
-               f"And place mpv-2.dll next to this script:\n  {SCRIPT_DIR}\n\n"
-               f"Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\n"
-               f"  (shinchiro build — extract libmpv-2.dll, place in script dir)")
+               f"And place {lib_name} next to this script:\n  {lib_dir}\n\n"
+               f"{lib_src}")
         logger.critical(msg)
         try:
             app = QApplication.instance() or QApplication(sys.argv)
@@ -92,7 +100,7 @@ def main():
     # risks starving network I/O and preventing CPU C-state transitions during
     # idle periods between I/O.  mpv manages its own critical threads via MMCSS
     # ("Playback" / "Pro Audio") which are always above process priority.
-    if not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
+    if os.name == "nt" and not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
         try:
             ctypes.windll.kernel32.SetPriorityClass(
                 ctypes.windll.kernel32.GetCurrentProcess(), 0x00008000  # ABOVE_NORMAL

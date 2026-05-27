@@ -47,9 +47,12 @@ def classify_item(item: dict) -> str:
     ref_frames = v.get("RefFrames") or 0
     level = v.get("Level") or 0
 
-    # ── Tier 1: codec gates (HW-decode-hostile) ──────────────────────────
-    HWDEC_HOSTILE = {"hevc", "av1", "vp9", "mpeg4", "wmv3", "vc1"}
-    if codec in HWDEC_HOSTILE:
+    # ── Tier 1: codec gates (wall-hostile — high decode pressure at scale) ──
+    # At 8+ simultaneous cells, even GPU-decodable codecs like HEVC/AV1/VP9
+    # can exhaust NVDEC session limits or cause pacing jitter. Route through
+    # server-side transcode to h264 for predictable decode load.
+    WALL_HOSTILE = {"hevc", "av1", "vp9", "mpeg4", "wmv3", "vc1"}
+    if codec in WALL_HOSTILE:
         if codec == "hevc" and (v.get("Profile") or "").endswith("10"):
             logger.info("classify: HEVC 10-bit → immediate transcode")
             return "immediate"

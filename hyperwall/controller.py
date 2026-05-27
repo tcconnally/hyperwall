@@ -22,7 +22,16 @@ from .perf import (
 from .cell import VideoCell
 from .emby import ContentLoaderThread
 from .stats_server import StatsServer
-from .style import CYAN, TEXT_DIM
+from .style import TEXT_DIM
+
+# Env vars reported in stats payloads
+_STATS_ENV_VARS: tuple[str, ...] = (
+    "HYPERWALL_STATS", "HYPERWALL_HDR_HINT", "HYPERWALL_HWDEC",
+    "HYPERWALL_GPU_API", "HYPERWALL_PROFILE", "HYPERWALL_VIDEO_SYNC",
+    "HYPERWALL_CACHE_SECS", "HYPERWALL_DEMUXER_MAX_BYTES",
+    "HYPERWALL_DEMUXER_READAHEAD_SECS", "HYPERWALL_AO",
+    "HYPERWALL_AUDIO_BUFFER",
+)
 
 # ── GPU telemetry helper ────────────────────────────────────────────────────
 def _query_gpu_telemetry() -> dict | None:
@@ -268,7 +277,7 @@ class WallController:
         """Pre-compute the next item's URL so loadfile on EOF is instant."""
         if not self.filtered:
             return
-        if not self.playlist and len(self.filtered) > 0:
+        if not self.playlist:
             shuffled = self.filtered[:]; random.shuffle(shuffled)
             self.playlist = deque(shuffled)
         if not self.playlist:
@@ -465,8 +474,8 @@ class WallController:
         self.api.close()
         logger.info("Cleanup complete.")
 
-    def _collect_stats(self) -> dict:
-        """Live snapshot for the HTTP stats endpoint — non-blocking, thread-safe."""
+    def _build_stats_payload(self) -> dict:
+        """Shared payload construction for _collect_stats and _dump_stats_json."""
         import time as _time
         cells_payload = []
         for i, c in enumerate(self.cells):
@@ -481,21 +490,19 @@ class WallController:
                 "mpv_alive": c._mpv is not None,
                 "mpv_gen": c._mpv_gen,
             })
-        gpu_snapshot = _query_gpu_telemetry()
         return {
             "ts": _time.strftime("%Y-%m-%dT%H:%M:%S"),
             "n_cells": len(self.cells),
             "mpv_opts_effective": apply_perf_env(MPV_OPTS),
-            "env": {k: os.environ.get(k) for k in (
-                "HYPERWALL_STATS", "HYPERWALL_HDR_HINT", "HYPERWALL_HWDEC",
-                "HYPERWALL_GPU_API", "HYPERWALL_PROFILE", "HYPERWALL_VIDEO_SYNC",
-                "HYPERWALL_CACHE_SECS", "HYPERWALL_DEMUXER_MAX_BYTES",
-                "HYPERWALL_DEMUXER_READAHEAD_SECS", "HYPERWALL_AO",
-                "HYPERWALL_AUDIO_BUFFER",
-            ) if os.environ.get(k) is not None},
-            "gpu": gpu_snapshot,
+            "env": {k: os.environ.get(k) for k in _STATS_ENV_VARS
+                    if os.environ.get(k) is not None},
+            "gpu": _query_gpu_telemetry(),
             "cells": cells_payload,
         }
+
+    def _collect_stats(self) -> dict:
+        """Live snapshot for the HTTP stats endpoint — non-blocking, thread-safe."""
+        return self._build_stats_payload()
 
     def _toggle_stats_overlay(self):
         if not self.cells:
@@ -513,29 +520,7 @@ class WallController:
 
     def _dump_stats_json(self):
         import json, time
-        cells_payload = []
-        for i, c in enumerate(self.cells):
-            cells_payload.append({
-                "cell": i,
-                "totals": dict(c._stats_total),
-                "info":   {k: v for k, v in c._stats_info.items()},
-                "last_item": (c.current_item or {}).get("Name"),
-            })
-        gpu_snapshot = _query_gpu_telemetry()
-        payload = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "n_cells": len(self.cells),
-            "mpv_opts_effective": apply_perf_env(MPV_OPTS),
-            "env": {k: os.environ.get(k) for k in (
-                "HYPERWALL_STATS", "HYPERWALL_HDR_HINT", "HYPERWALL_HWDEC",
-                "HYPERWALL_GPU_API", "HYPERWALL_PROFILE", "HYPERWALL_VIDEO_SYNC",
-                "HYPERWALL_CACHE_SECS", "HYPERWALL_DEMUXER_MAX_BYTES",
-                "HYPERWALL_DEMUXER_READAHEAD_SECS", "HYPERWALL_AO",
-                "HYPERWALL_AUDIO_BUFFER",
-            ) if os.environ.get(k) is not None},
-            "gpu": gpu_snapshot,
-            "cells": cells_payload,
-        }
+        payload = self._build_stats_payload()
         out = os.path.join(SCRIPT_DIR, f"hyperwall_stats_{int(time.time())}.json")
         try:
             with open(out, "w", encoding="utf-8") as f:
@@ -544,6 +529,7 @@ class WallController:
         except Exception as e:
             logger.warning("STATS dump failed: %s", e)
             return
+        gpu_snapshot = payload.get("gpu")
         if gpu_snapshot:
             g = gpu_snapshot
             logger.info(
@@ -552,7 +538,7 @@ class WallController:
                 g.get("gpu_util"), g.get("decoder_util"),
                 g.get("temp"), g.get("pstate"),
             )
-        for s in cells_payload:
+        for s in payload["cells"]:
             t = s["totals"]
             i = s["info"]
             logger.info(

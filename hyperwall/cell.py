@@ -454,7 +454,6 @@ class VideoCell(QWidget):
             self._autohide_timer.start(AUTOHIDE_MS)
             return
         self.controls_visible = False
-        self.controller.controls_visible = False
         self._fade_controls(False)
 
     def set_controls_visible(self, visible: bool):
@@ -570,20 +569,25 @@ class VideoCell(QWidget):
     def _preflight_health_check(url: str):
         """Issue a fast HEAD to the Emby server to verify connectivity.
 
-        Runs in the Qt thread, so this MUST be non-blocking — uses a
-        sub-second timeout.  If the server is unreachable, we log a
-        warning and let loadfile proceed (mpv has its own retry/backoff).
-        The point is early visibility, not blocking the pipeline.
+        Runs in a daemon thread so it never blocks the Qt event loop.
+        If the server is unreachable, we log a warning and let loadfile
+        proceed (mpv has its own retry/backoff).  The point is early
+        visibility, not blocking the pipeline.
         """
+        import threading as _th
         import urllib.request as _ur
         from urllib.parse import urlparse as _up
-        parsed = _up(url)
-        base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        try:
-            req = _ur.Request(base, method="HEAD")
-            _ur.urlopen(req, timeout=0.5)
-        except Exception as e:
-            logger.warning("Emby pre-flight failed (%s) — stream may stall.", e)
+
+        def _check():
+            parsed = _up(url)
+            base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            try:
+                req = _ur.Request(base, method="HEAD")
+                _ur.urlopen(req, timeout=0.5)
+            except Exception as e:
+                logger.warning("Emby pre-flight failed (%s) — stream may stall.", e)
+
+        _th.Thread(target=_check, daemon=True).start()
 
     def release(self):
         self._destroy_mpv()
