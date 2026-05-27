@@ -114,6 +114,9 @@ MOUSE_IDLE_MS           = 3_000     # cursor auto-hide
 #     escalation catches failures automatically.
 #   Classifier narrowed: HEVC 8-bit / AV1 8-bit ≤1080p → direct-play.
 #   +d3d11_sync_interval env-overridable via HYPERWALL_D3D11_SYNC.
+#   ao wasapi → null             — cells are muted; WASAPI shared-mode
+#     contention across 4 instances causes audio underruns and cutting
+#     out even when muted.  Set HYPERWALL_AO=wasapi to re-enable.
 #
 # Must stay in sync with deployed hardware and the principal-engineer audit.
 MPV_OPTS = dict(
@@ -141,7 +144,7 @@ MPV_OPTS = dict(
     input_default_bindings     = False,
     input_vo_keyboard          = False,
     ytdl                       = False,
-    ao                         = "wasapi",
+    ao                         = "null",
     audio_client_name          = "HyperWall",
     audio_buffer               = 0.2,
     audio_fallback_to_null     = "yes",
