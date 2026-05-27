@@ -103,28 +103,23 @@ MOUSE_IDLE_MS           = 3_000     # cursor auto-hide
 #   +audio-fallback-to-null       — prevent mpv from blocking on WASAPI
 #     session exhaustion; makes cell count scalability explicit.
 #
-# v8.4 frame-pacing + audio tuning (2026-05-27):
-#   video_sync display-resample → audio — resample video to match audio
-#     clock instead of the reverse.  Audio is master; video drops/repeats
-#     frames to follow.  Clean audio, good enough sync for a wall.
-#   +video_sync_max_video_change=5 — cap per-frame correction at 5 ms.
-#   audio_buffer 0.2 → 2.0     — 200ms was too small for 4 instances;
-#     buffer underruns caused audible clipping.  2s gives 10× headroom.
-#   +correct_pts=yes — explicitly enforce correct PTS interpretation.
-#   auto-transcode default 1 → 0 — 4K unconditionally transcoded (Tier 0
-#     gate).  ≤1080p direct-plays by default.
-#   +d3d11_sync_interval env-overridable via HYPERWALL_D3D11_SYNC.
+# v8.4 (2026-05-27) — minimum changes from v8.3:
+#   hwdec d3d11va → d3d11va-copy  — zero-copy hits GPU decoder session
+#     limits on multi-cell grids.  -copy decodes on GPU then copies frames
+#     to system RAM, avoiding interop contention.  Ample PCIe bandwidth.
+#   audio_buffer 0.2 → 2.0        — 200ms underruns on 4 WASAPI sessions.
+#   auto-transcode default 1 → 0  — 4K unconditionally transcoded (Tier 0
+#     gate in classify_item).  ≤1080p direct-plays by default.
+#   +HYPERWALL_D3D11_SYNC env override for d3d11_sync_interval.
 #
 # Must stay in sync with deployed hardware and the principal-engineer audit.
 MPV_OPTS = dict(
     vo                         = "gpu-next",
     gpu_api                    = "d3d11",
-    hwdec                      = "d3d11va",
+    hwdec                      = "d3d11va-copy",
     d3d11_sync_interval        = 1,
     d3d11_flip                 = "yes",
-    video_sync                 = "audio",
-    video_sync_max_video_change = 5,
-    correct_pts                 = "yes",
+    video_sync                 = "display-resample",
     interpolation              = "no",
     target_colorspace_hint     = "yes",
     cache                      = "yes",
