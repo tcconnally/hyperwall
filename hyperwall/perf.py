@@ -150,9 +150,9 @@ MPV_OPTS = dict(
     input_vo_keyboard          = False,
     ytdl                       = False,
     ao                         = "null",
+    audio                      = "no",
     audio_client_name          = "HyperWall",
     audio_buffer               = 1.0,
-    audio_fallback_to_null     = "yes",
     msg_level                  = "all=warn,cplayer=info,ao=error,ao/wasapi=fatal",
 )
 
