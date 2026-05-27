@@ -124,6 +124,7 @@ MPV_OPTS = dict(
     target_colorspace_hint     = "yes",
     cache                      = "yes",
     cache_secs                 = 10,
+    cache_pause_initial        = "yes",
     demuxer_max_bytes          = "64MiB",
     demuxer_readahead_secs     = 10,
     demuxer_cache_background   = "yes",
