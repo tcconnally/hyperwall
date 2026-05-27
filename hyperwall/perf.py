@@ -103,6 +103,20 @@ MOUSE_IDLE_MS           = 3_000     # cursor auto-hide
 #   +audio-fallback-to-null       — prevent mpv from blocking on WASAPI
 #     session exhaustion; makes cell count scalability explicit.
 #
+# v8.4 frame-pacing tuning (2026-05-27):
+#   video_sync display-resample → display-resample-vdrop
+#     — resample is CPU-heavy at 240 Hz with 4 simultaneous instances.
+#       vdrop drops/repeats frames instead of resampling audio — much
+#       lighter and appropriate for a video wall where cells are muted.
+#   +video_sync_max_video_change=5 — cap per-frame correction at 5 ms.
+#     Prevents large jump corrections after a dropped-frame burst that
+#     would themselves cause visible stutter.
+#   +video_latency_hacks=yes — enables multiple latency-reducing hacks
+#     (shorter GPU queues, faster buffer handoff) helpful in multi-cell.
+#   +correct_pts=yes — explicitly enforce correct PTS interpretation.
+#     Was previously inherited from a removed profile=fast preset.
+#   +d3d11_sync_interval env-overridable via HYPERWALL_D3D11_SYNC.
+#
 # Must stay in sync with deployed hardware and the principal-engineer audit.
 MPV_OPTS = dict(
     vo                         = "gpu-next",
@@ -110,7 +124,10 @@ MPV_OPTS = dict(
     hwdec                      = "d3d11va",
     d3d11_sync_interval        = 1,
     d3d11_flip                 = "yes",
-    video_sync                 = "display-resample",
+    video_sync                 = "display-resample-vdrop",
+    video_sync_max_video_change = 5,
+    video_latency_hacks         = "yes",
+    correct_pts                 = "yes",
     interpolation              = "no",
     target_colorspace_hint     = "yes",
     cache                      = "yes",
@@ -178,6 +195,7 @@ def apply_perf_env(opts: dict) -> dict:
         ("HYPERWALL_PROFILE",     "profile"),
         ("HYPERWALL_VIDEO_SYNC",  "video_sync"),
         ("HYPERWALL_AO",          "ao"),
+        ("HYPERWALL_D3D11_SYNC",  "d3d11_sync_interval"),
     ):
         if (v := os.environ.get(var)) is not None:
             out[key] = v

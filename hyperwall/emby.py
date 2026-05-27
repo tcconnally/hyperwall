@@ -8,13 +8,12 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 logger = logging.getLogger("HyperWall")
 
 # ── Hybrid URL routing (matches INSTRUCTIONS_v8.md) ─────────────────────────
-# Default: Always REMUX path.
-# Escalation: On retry #2 in VideoCell._on_error, _force_transcode flips the
-# Emby request to VideoCodec=h264 (transcode).  classify_item() provides the
-# pre-flight signal for when direct stream is unlikely to succeed.
-# Default to normalizing >1080p sources before they hit the wall. Direct 4K is
-# fine in isolation, but 8 simultaneous cells create visible frame pacing pain.
-_AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1"
+# Default: direct-play.  On a modest grid (≤8 cells) with a modern GPU,
+# hardware decoders handle most codecs natively.  The retry escalation path
+# in VideoCell._on_error() catches anything that actually fails and re-routes
+# through server transcode automatically.
+# Set HYPERWALL_AUTO_TRANSCODE=1 for larger grids or weaker GPUs.
+_AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "0") == "1"
 
 # ── Content classifier (v8.2 production hardening) ──────────────────────────
 # Replaces the single resolution-gate needs_transcode() with a multi-factor
@@ -51,10 +50,17 @@ def classify_item(item: dict) -> str:
     # At 8+ simultaneous cells, even GPU-decodable codecs like HEVC/AV1/VP9
     # can exhaust NVDEC session limits or cause pacing jitter. Route through
     # server-side transcode to h264 for predictable decode load.
+    # 
+    # v8.4: narrowed from {hevc,av1,vp9,mpeg4,wmv3,vc1} — Blackwell decodes
+    # HEVC 8-bit and AV1 in hardware.  Only flag high-pressure variants.
     WALL_HOSTILE = {"hevc", "av1", "vp9", "mpeg4", "wmv3", "vc1"}
+    HOSTILE_10BIT = {"hevc", "av1"}   # 10-bit variants exhaust decode resources
     if codec in WALL_HOSTILE:
         if codec == "hevc" and (v.get("Profile") or "").endswith("10"):
             logger.info("classify: HEVC 10-bit → immediate transcode")
+            return "immediate"
+        if codec == "av1" and (v.get("Profile") or "").endswith("10"):
+            logger.info("classify: AV1 10-bit → immediate transcode")
             return "immediate"
         if codec == "av1" and ref_frames > 8:
             logger.info("classify: AV1 high-ref → immediate transcode")
@@ -62,6 +68,14 @@ def classify_item(item: dict) -> str:
         if codec == "vp9" and (width > 1920 or height > 1080):
             logger.info("classify: VP9 >1080p → immediate transcode")
             return "immediate"
+        # v8.4: HEVC 8-bit and regular AV1 pass through to direct-play.
+        # Retry escalation handles them if they actually fail.
+        if codec in ("hevc", "av1") and codec not in HOSTILE_10BIT:
+            if width > 1920 or height > 1080:
+                logger.info("classify: %s >1080p → auto transcode", codec.upper())
+                return "auto"
+            # 1080p or below: let it direct-play, Blackwell handles it
+            return "direct"
 
     # ── Tier 2: HDR gate ────────────────────────────────────────────────
     if hdr not in ("SDR", ""):
