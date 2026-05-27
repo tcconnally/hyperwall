@@ -1,28 +1,26 @@
-# HyperWall — runtime artifacts (never commit)
-config.ini
-*.log
-hyperwall_v8.exe
-hyperwall_v8.spec
-
-# libmpv DLL (deployed, not committed)
-mpv-2.dll
-libmpv-2.dll
-
-# NVIDIA Profile Inspector tools (downloaded, not committed)
-tools/
-
-# Local sentinels and runtime outputs
-.hyperwall_v8_nvprofile.sentinel
-hyperwall_stats_*.json
+# Bytecode
+__pycache__/
+*.py[cod]
+*.pyo
 
 # Build artifacts
 build/
 dist/
+*.spec
+*.exe
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
+# Runtime
+config.ini
+hyperwall.log
+*.sentinel
+
+# DLLs / binaries
+mpv-2.dll
+libmpv-2.dll
+
+# IDE
+.vscode/
+.idea/
 
 # OS
 .DS_Store
