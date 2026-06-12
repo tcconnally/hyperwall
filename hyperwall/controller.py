@@ -288,11 +288,17 @@ class WallController:
                 try: c._flush_stats()
                 except Exception as e:
                     logger.warning("stats flush failed: %s", e)
-        for c in self.cells:
-            try:
-                c.release()
-            except Exception as e:
-                logger.warning("Cell release failed: %s", e)
+        # Terminate all mpv instances in parallel using threads so Esc exit
+        # is near-instant. Serial mpv.terminate() on 8-12 cells blocks the
+        # Qt main thread for multiple seconds. (#2)
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=min(len(self.cells), 32)) as _ex:
+            _futures = [_ex.submit(c.release) for c in self.cells]
+            _cf.wait(_futures, timeout=3.0)
+        # Report any cells that failed to terminate in time
+        for _f in _futures:
+            if _f.exception():
+                logger.warning("Cell release failed: %s", _f.exception())
         if STATS_ENABLED:
             self._dump_stats_json()
         # Signal no new submissions, then drain in-flight API calls (session-stop
