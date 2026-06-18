@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .perf import (
-    logger, STREAM_START_STAGGER_MS, MAX_RETRIES, CONTROLS_HEIGHT, 
+    logger, MAX_RETRIES, CONTROLS_HEIGHT,
     CONTROLS_OPACITY, AUTOHIDE_MS, OVERLAY_SHOW_MS, MOUSE_IDLE_MS,
     MPV_OPTS, STATS_ENABLED, STATS_COUNTER_PROPS, STATS_INFO_PROPS,
     apply_perf_env, _MPV_LOG_NOISE
@@ -60,7 +60,6 @@ class VideoCell(QWidget):
     request_next = pyqtSignal(object, bool)
     request_prev = pyqtSignal(object)
     _sig_eof   = pyqtSignal(int, str)
-    _sig_time  = pyqtSignal(int, float, float)
 
     def __init__(self, controller):
         super().__init__()
@@ -77,6 +76,10 @@ class VideoCell(QWidget):
         self._mpv = None
         self._mpv_gen         = 0
         self._duration_s      = 0.0
+        # Latest playback position, cached by the time-pos observer (no Qt work).
+        # The progress UI is repainted from this by a low-rate timer that only
+        # runs while controls are visible — see _ui_timer / _refresh_progress_ui.
+        self._play_pos        = 0.0
         self._stats_current: dict[str, float]   = {}
         self._stats_total:   dict[str, float]   = {}
         self._stats_info:    dict[str, object]  = {}
@@ -113,6 +116,14 @@ class VideoCell(QWidget):
         self._autohide_timer.timeout.connect(self._autohide_controls)
         self._autohide_timer.start(AUTOHIDE_MS)
 
+        # Progress-bar repaint timer. Runs only while controls are visible
+        # (started/stopped in _fade_controls / _on_ctrl_fade_done), so a wall
+        # sitting with controls hidden does zero GUI-thread work for playback
+        # position. 250 ms is plenty for a human reading a seek bar.
+        self._ui_timer = QTimer(self)
+        self._ui_timer.setInterval(250)
+        self._ui_timer.timeout.connect(self._refresh_progress_ui)
+
         self._title_overlay = QLabel("", self)
         self._title_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_overlay.setWordWrap(False)
@@ -138,7 +149,6 @@ class VideoCell(QWidget):
         self._mouse_in_cell = False
 
         self._sig_eof.connect(self._handle_eof, Qt.ConnectionType.QueuedConnection)
-        self._sig_time.connect(self._handle_time, Qt.ConnectionType.QueuedConnection)
 
     def _destroy_mpv(self):
         if self._mpv is None:
@@ -225,13 +235,14 @@ class VideoCell(QWidget):
 
         @m.property_observer("time-pos")
         def _on_time(_name, value):
-            if value is None:
+            # Runs on mpv's event thread, per frame. Keep it to a plain
+            # attribute write — no Qt signal, no allocation. The visible cell's
+            # _ui_timer reads _play_pos on the GUI thread at 250 ms.
+            if value is None or gen != self._mpv_gen:
                 return
-            if gen != self._mpv_gen:
-                return
+            self._play_pos = value
             if value > 0.05 and not self._played_anything:
                 self._played_anything = True
-            self._sig_time.emit(gen, float(value), float(self._duration_s or 0))
 
         @m.property_observer("duration")
         def _on_dur(_name, value):
@@ -357,6 +368,9 @@ class VideoCell(QWidget):
         self._ctrl_anim.stop()
         if visible:
             self.controls_frame.setVisible(True)
+            if not self._ui_timer.isActive():
+                self._refresh_progress_ui()   # paint immediately, don't wait 250 ms
+                self._ui_timer.start()
         self._ctrl_anim.setStartValue(self._ctrl_effect.opacity())
         self._ctrl_anim.setEndValue(CONTROLS_OPACITY if visible else 0.0)
         self._ctrl_anim.start()
@@ -364,6 +378,7 @@ class VideoCell(QWidget):
     def _on_ctrl_fade_done(self):
         if self._ctrl_effect.opacity() < 0.01:
             self.controls_frame.setVisible(False)
+            self._ui_timer.stop()
 
     # --- Hover / idle mouse reveal for controls ---
     def enterEvent(self, event):
@@ -445,10 +460,6 @@ class VideoCell(QWidget):
         y = vw.y() + vw.height() - h - 20
         ovl.setFixedWidth(w); ovl.move(x, y)
 
-    def _maybe_hide_on_leave(self):
-        if not self._mouse_in_cell and not self.controls_visible:
-            self._fade_controls(False)
-
     def _fade_overlay_out(self):
         self._overlay_anim.setStartValue(1.0)
         self._overlay_anim.setEndValue(0.0)
@@ -464,6 +475,7 @@ class VideoCell(QWidget):
             self._force_transcode = False
         self.current_item     = item
         self._duration_s      = 0.0
+        self._play_pos        = 0.0
         self._played_anything = False
 
         title = item.get("Name", "Unknown")
@@ -558,11 +570,10 @@ class VideoCell(QWidget):
             self._force_transcode = False
             self._request_next_throttled(False)
 
-    def _handle_time(self, gen: int, pos: float, dur: float):
-        if gen != self._mpv_gen:
-            return
-        if not self.controls_visible:
-            return
+    def _refresh_progress_ui(self):
+        """GUI-thread repaint of the seek bar from cached playback position.
+        Driven by _ui_timer, which only runs while controls are visible."""
+        pos, dur = self._play_pos, self._duration_s
         if not self._dragging and dur > 0:
             self.seek_slider.setValue(int(pos / dur * 1000))
         self.lbl_time.setText(f"{self._fmt_time(pos)} / {self._fmt_time(dur)}")
