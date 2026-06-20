@@ -17,7 +17,7 @@ Write-Host "[OK] Python: $(py --version 2>&1)" -ForegroundColor Green
 
 # ── 2. Python deps ───────────────────────────────────────────────────
 Write-Host "[*] Installing Python dependencies..."
-py -m pip install --quiet python-mpv pyqt6 requests flask pyinstaller py7zr
+py -m pip install --quiet python-mpv pyqt6 requests flask pyinstaller
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[FAIL] pip install failed" -ForegroundColor Red
     exit 1
@@ -41,19 +41,10 @@ if (-not (Test-Path "$ScriptDir\mpv-2.dll") -and -not (Test-Path "$ScriptDir\lib
         $sevenZip = "$ScriptDir\mpv-temp.7z"
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $sevenZip -TimeoutSec 120
         Write-Host "  Extracting..."
-        # Write a temp Python script to avoid backslash-escaping hell
-        # with inline -c + Windows paths.
-        $extractScript = @"
-import py7zr, shutil, sys, os
-src = r'$sevenZip'
-dst = r'$ScriptDir'
-a = py7zr.SevenZipFile(src)
-a.extract(path=dst)
-a.close()
-"@
-        $extractScript | Out-File -Encoding utf8 "$ScriptDir\_extract_mpv.py"
-        py "$ScriptDir\_extract_mpv.py"
-        Remove-Item "$ScriptDir\_extract_mpv.py" -ErrorAction SilentlyContinue
+        # Use 7-Zip (handles BCJ2 codec that py7zr can't).
+        $7z = Get-Command 7z -ErrorAction SilentlyContinue
+        if (-not $7z) { throw "7-Zip not found. Install: winget install 7zip.7zip" }
+        & 7z e $sevenZip -o"$ScriptDir" "mpv-2.dll" "libmpv-2.dll" -y | Out-Null
         $dll = Get-ChildItem "$ScriptDir" -Filter "mpv-2.dll" -Recurse -File | Select-Object -First 1
         if ($dll) {
             Move-Item $dll.FullName "$ScriptDir\mpv-2.dll" -Force
