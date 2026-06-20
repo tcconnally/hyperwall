@@ -17,7 +17,7 @@ from .nvprofile import ensure_nvidia_profile, maybe_relaunch_in_isolation
 from .emby import EmbyAPISession, CleanupWorker
 from .wizard import SetupWizard
 from .controller import WallController, MouseIdleHider
-from .version import runtime_banner
+from .version import runtime_banner, APP_VERSION
 
 # Lazy: web server is optional — won't fail if flask isn't installed.
 try:
