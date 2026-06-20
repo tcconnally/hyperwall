@@ -3,20 +3,30 @@ import sys
 import logging
 import subprocess
 import ctypes
+import platform
+
+_IS_WINDOWS = platform.system() == "Windows"
 
 logger = logging.getLogger("HyperWall")
 
 def nv_driver_version() -> str | None:
+    if not _IS_WINDOWS:
+        return None
     try:
+        extra = {}
+        if _IS_WINDOWS:
+            extra["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
-            text=True, timeout=5, creationflags=0x08000000,  # CREATE_NO_WINDOW
+            text=True, timeout=5, **extra,
         )
         return out.strip().splitlines()[0]
     except Exception:
         return None
 
 def ensure_nvidia_profile(launch_basename: str, nip_file: str, npi_exe: str, nv_sentinel: str, script_dir: str) -> None:
+    if not _IS_WINDOWS:
+        return
     if launch_basename != "hyperwall_v8.exe":
         logger.warning(
             "G-Sync isolation disabled — running as '%s', not hyperwall_v8.exe. "

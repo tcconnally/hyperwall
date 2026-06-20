@@ -1,6 +1,6 @@
 """
 PROJECT: HYPERWALL
-VERSION: 8.1 (Structured Package)
+VERSION: 8.2 (Structured Package)
 AUTHOR:  Thomas Connally / Clio
 DATE:    May 2026
 
