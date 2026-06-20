@@ -26,41 +26,96 @@ Write-Host "[OK] Python deps installed" -ForegroundColor Green
 
 # ── 3. mpv-2.dll ─────────────────────────────────────────────────────
 if (-not (Test-Path "$ScriptDir\mpv-2.dll") -and -not (Test-Path "$ScriptDir\libmpv-2.dll")) {
-    Write-Host "[*] Downloading mpv-2.dll from shinchiro builds..."
-    # Clean stale leftovers from a prior failed run
-    Remove-Item "$ScriptDir\mpv-temp.7z" -ErrorAction SilentlyContinue
-    Remove-Item "$ScriptDir\_extract_mpv.py" -ErrorAction SilentlyContinue
+    # Clean stale extracted dirs from prior failed runs (keep mpv-temp.7z if present — reuse it).
     Get-ChildItem "$ScriptDir" -Directory | Where-Object Name -match '^mpv' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    $ghUrl = "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases"
-    try {
-        $release = Invoke-RestMethod -Uri $ghUrl -TimeoutSec 15 | Select-Object -First 1
-        $asset = $release.assets | Where-Object name -match 'mpv-dev-x86_64.*\.7z$' | Select-Object -First 1
-        if (-not $asset) { throw "No 7z asset found" }
-        Write-Host "  Found: $($asset.name) ($([math]::Round($asset.size/1MB,1)) MB)"
-        Write-Host "  Downloading..."
-        $sevenZip = "$ScriptDir\mpv-temp.7z"
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $sevenZip -TimeoutSec 120
-        Write-Host "  Extracting..."
-        # Use 7-Zip (handles BCJ2 codec that py7zr can't).
-        $7z = Get-Command 7z -ErrorAction SilentlyContinue
-        if (-not $7z) { throw "7-Zip not found. Install: winget install 7zip.7zip" }
-        & 7z e $sevenZip -o"$ScriptDir" "mpv-2.dll" "libmpv-2.dll" -y | Out-Null
-        $dll = Get-ChildItem "$ScriptDir" -Filter "mpv-2.dll" -Recurse -File | Select-Object -First 1
-        if ($dll) {
-            Move-Item $dll.FullName "$ScriptDir\mpv-2.dll" -Force
-        } else {
-            # shinchiro ships as libmpv-2.dll
-            $dll = Get-ChildItem "$ScriptDir" -Filter "libmpv-2.dll" -Recurse -File | Select-Object -First 1
-            if ($dll) { Move-Item $dll.FullName "$ScriptDir\libmpv-2.dll" -Force }
+
+    $sevenZip = "$ScriptDir\mpv-temp.7z"
+    $needDownload = -not (Test-Path $sevenZip)
+
+    if ($needDownload) {
+        Write-Host "[*] Downloading mpv-2.dll from shinchiro builds..."
+        $ghUrl = "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases"
+        try {
+            $release = Invoke-RestMethod -Uri $ghUrl -TimeoutSec 15 | Select-Object -First 1
+            $asset = $release.assets | Where-Object name -match 'mpv-dev-x86_64.*\.7z$' | Select-Object -First 1
+            if (-not $asset) { throw "No 7z asset found" }
+            Write-Host "  Found: $($asset.name) ($([math]::Round($asset.size/1MB,1)) MB)"
+            Write-Host "  Downloading..."
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $sevenZip -TimeoutSec 120
+        } catch {
+            Write-Host "[WARN] Could not download mpv DLL archive: $_" -ForegroundColor Yellow
+            Write-Host "  Manual download: https://github.com/shinchiro/mpv-winbuild-cmake/releases/latest"
+            Write-Host "  Extract mpv-2.dll or libmpv-2.dll to: $ScriptDir"
+            # Skip to next section (NPI)
+            $sevenZip = $null
         }
-        Remove-Item "$ScriptDir\mpv-temp.7z" -ErrorAction SilentlyContinue
-        # Clean extracted dirs
-        Get-ChildItem "$ScriptDir" -Directory | Where-Object Name -match 'mpv' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "[OK] mpv-2.dll installed" -ForegroundColor Green
-    } catch {
-        Write-Host "[WARN] Could not auto-download mpv DLL: $_" -ForegroundColor Yellow
-        Write-Host "  Manual download: https://github.com/shinchiro/mpv-winbuild-cmake/releases/latest"
-        Write-Host "  Extract mpv-2.dll or libmpv-2.dll to: $ScriptDir"
+    } else {
+        Write-Host "[*] Using previously downloaded mpv-temp.7z (28.9 MB) — extracting..."
+    }
+
+    if ($sevenZip -and (Test-Path $sevenZip)) {
+        # ── Resolve 7-Zip executable ──
+        # Priority: 1) installed 7z on PATH  2) bundled 7zr.exe  3) auto-download 7zr.exe
+        $7zExe = $null
+        $7zSource = $null
+
+        # 1) System-installed 7z
+        $sys7z = Get-Command 7z -ErrorAction SilentlyContinue
+        if ($sys7z) {
+            $7zExe = "7z"
+            $7zSource = "system"
+        }
+
+        # 2) Previously downloaded 7zr.exe next to this script
+        if (-not $7zExe) {
+            $bundled7zr = "$ScriptDir\7zr.exe"
+            if (Test-Path $bundled7zr) {
+                $7zExe = $bundled7zr
+                $7zSource = "bundled"
+            }
+        }
+
+        # 3) Auto-download portable 7zr.exe (standalone console, .7z only, ~300 KB, zero install)
+        if (-not $7zExe) {
+            Write-Host "  [*] 7-Zip not installed — downloading portable 7zr.exe..."
+            try {
+                $7zrUrl = "https://www.7-zip.org/a/7zr.exe"
+                Invoke-WebRequest -Uri $7zrUrl -OutFile "$ScriptDir\7zr.exe" -TimeoutSec 30
+                if (Test-Path "$ScriptDir\7zr.exe") {
+                    $7zExe = "$ScriptDir\7zr.exe"
+                    $7zSource = "auto-downloaded"
+                    Write-Host "  [OK] Portable 7zr.exe ready (no install needed)" -ForegroundColor Green
+                }
+            } catch {
+                Write-Host "  [WARN] Could not download 7zr.exe: $_" -ForegroundColor Yellow
+            }
+        }
+
+        if ($7zExe) {
+            Write-Host "  Extracting (7zr from $7zSource)..."
+            try {
+                & $7zExe e $sevenZip -o"$ScriptDir" "mpv-2.dll" "libmpv-2.dll" -y | Out-Null
+                $dll = Get-ChildItem "$ScriptDir" -Filter "mpv-2.dll" -Recurse -File | Select-Object -First 1
+                if ($dll) {
+                    Move-Item $dll.FullName "$ScriptDir\mpv-2.dll" -Force
+                } else {
+                    # shinchiro ships as libmpv-2.dll
+                    $dll = Get-ChildItem "$ScriptDir" -Filter "libmpv-2.dll" -Recurse -File | Select-Object -First 1
+                    if ($dll) { Move-Item $dll.FullName "$ScriptDir\libmpv-2.dll" -Force }
+                }
+                Remove-Item $sevenZip -ErrorAction SilentlyContinue
+                # Clean extracted dirs
+                Get-ChildItem "$ScriptDir" -Directory | Where-Object Name -match 'mpv' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Host "[OK] mpv-2.dll installed" -ForegroundColor Green
+            } catch {
+                Write-Host "[WARN] Extraction failed: $_" -ForegroundColor Yellow
+                Write-Host "  Manual: open mpv-temp.7z in Explorer and drag mpv-2.dll to $ScriptDir"
+            }
+        } else {
+            Write-Host "[WARN] mpv-temp.7z downloaded but no 7-Zip available to extract." -ForegroundColor Yellow
+            Write-Host "  Install 7-Zip:  winget install 7zip.7zip"
+            Write-Host "  Then re-run this script."
+        }
     }
 } else {
     Write-Host "[OK] mpv-2.dll already present" -ForegroundColor Green

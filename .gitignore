@@ -18,6 +18,8 @@ hyperwall_v8.exe
 tools/nvidiaProfileInspector.exe
 mpv-2.dll
 libmpv-2.dll
+7zr.exe
+mpv-temp.7z
 
 # ── Stats dumps ────────────────────────────────────────────────────────────
 hyperwall_stats_*.json
