@@ -1,29 +1,52 @@
-# HyperWall
+# Hyperwall v9
 
-HyperWall is a fullscreen multi-monitor video wall for a local Emby server. The active runtime is the v8.2 rewrite: a small launcher shim (`hyperwall_v8.py`) plus the structured `hyperwall/` package, using `python-mpv`/libmpv instead of Qt's media stack.
+Fullscreen multi-monitor video wall for Emby media servers. Select displays
+and libraries in a wizard, and Hyperwall fills each monitor with a grid of
+hardware-accelerated video cells powered by libmpv.
 
-The legacy v7.4 monolith is preserved only for archaeology at `legacy/hyperwall_v7_4.py`. Normal launch and build paths are v8-only.
+## Features
 
-## Current status
+- **Multi-monitor** — each monitor gets its own fullscreen window with a
+  configurable grid of video cells (1x1 to 6x6)
+- **libmpv backend** — hardware-accelerated decode via nvdec/d3d11
+  (NVIDIA Blackwell), 240 Hz G-Sync compatible, HDR hinting
+- **Emby integration** — streams directly from your Emby server with
+  auto-transcode for 4K sources, favorites filtering, and per-cell
+  tag/favorite controls
+- **Web remote** — built-in dark-mode control page on port 8585
+  (phone/tablet — no app install needed)
+- **G-Sync isolation** — per-app NVIDIA Profile Inspector profile
+  disables VRR for Hyperwall only, avoiding mixed-FPS jitter
 
-- Active branch: `main`
-- Active entry points: `launch.bat`, `hyperwall_v8.py`, and built `hyperwall_v8.exe`
-- Local-only config: `config.ini` copied from `config.example.ini`
-- Legacy root `hyperwall.py`: intentionally absent
-- Repo guard suite: `python .\tests\run_repo_guards.py`
+## Quick Start (Windows)
 
-## Key behavior constraints
+```powershell
+# 1. Clone
+git clone https://github.com/tcconnally/hyperwall.git
+cd hyperwall
 
-These are intentional and should not regress:
+# 2. Bootstrap (installs deps, downloads mpv-2.dll, builds exe)
+pwsh -ExecutionPolicy Bypass -File .\bootstrap.ps1
 
-- No global mute/unmute shortcut.
-- Audio is controlled per cell only.
-- Multiple cells may be unmuted simultaneously.
-- ESC must exit reliably, even if a native/mpv child has focus.
-- Previous/next, seeking, tagging, favorites, and delete-tag flow must remain reliable.
-- Performance under real wall load matters more than adding UI surface area.
+# 3. Configure
+Copy-Item config.example.ini config.ini
+notepad config.ini    # fill in server_url, username, password
 
-Current global shortcuts:
+# 4. Run
+.\launch.bat
+# or: python hyperwall.py
+# or: .\hyperwall_v8.exe  (recommended — enables G-Sync isolation)
+```
+
+## Requirements
+
+- Windows 10/11 with PowerShell 7+
+- Python 3.12+
+- NVIDIA GPU with driver 551+ (for nvdec hardware decode)
+- Emby server on local network
+- NVIDIA Profile Inspector (optional — for G-Sync isolation)
+
+## Keyboard Shortcuts
 
 | Key | Action |
 |---|---|
@@ -31,124 +54,72 @@ Current global shortcuts:
 | `Space` | Global pause/resume |
 | `F` | Favorites filter |
 | `A` | All-items filter |
-| `S` | mpv stats overlay on cell 0 |
-| `R` | Remix dialog |
+| `S` | mpv stats overlay |
 | `Esc` | Shutdown |
 
-## Web Remote
+## Web Remote API
 
-HyperWall starts a built-in web server on port 8585 (override with `HYPERWALL_WEB_PORT`).
-Open the URL printed at startup on any phone or tablet on the same network to control the wall:
+All endpoints under `/api/`:
 
-- **Play/pause** all cells globally
-- **Skip/previous** per cell
-- **Filter** favorites / all
-- **Hide/show** controls
-- **Shutdown** the wall safely
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/status` | GET | Full wall state |
+| `/api/pause` | POST | Toggle global pause |
+| `/api/next/<n>` | POST | Next video on cell n |
+| `/api/prev/<n>` | POST | Previous video on cell n |
+| `/api/loop/<n>` | POST | Toggle loop on cell n |
+| `/api/mute/<n>` | POST | Toggle mute on cell n |
+| `/api/filter` | POST | Set filter (all/favorites) |
+| `/api/controls` | POST | Toggle controls |
+| `/api/shutdown` | POST | Shut down wall |
 
-The page auto-refreshes every 3 seconds. No app install needed — just a browser.
+## Architecture
 
-API endpoints under `/api/`: `status`, `pause`, `next/<n>`, `prev/<n>`, `loop/<n>`,
-`mute/<n>`, `filter`, `controls`, `shutdown`. All POST except `status` (GET).
-
-## Quick start on Windows
-
-From PowerShell 7+:
-
-```powershell
-cd C:\Users\tccon\OneDrive\Documents\scripts\wall
-git pull
-python .\tests\run_repo_guards.py
+```
+hyperwall.py → hyperwall/app.py → WallController
+                                    ├── SetupWizard (monitor + library picker)
+                                    ├── Per-monitor QMainWindow (fullscreen)
+                                    │   └── Grid of VideoCell widgets
+                                    │       └── mpv.MPV embedded via wid=
+                                    ├── ContentLoader → Emby REST API
+                                    ├── web.py (Flask remote on :8585)
+                                    └── nvidia.py (G-Sync per-app disable)
 ```
 
-Expected:
+## Configuration
 
-```text
-7 repo guard test(s) passed.
+`config.ini` (copied from `config.example.ini`):
+
+```ini
+[Login]
+server_url = http://192.168.1.100:8096
+username = your_username
+password = your_password
+
+[Settings]
+cleanup_on_startup = false
 ```
 
-Create your private config if needed:
+Environment variables:
 
-```powershell
-Copy-Item .\config.example.ini .\config.ini
-notepad .\config.ini
-```
-
-Then bootstrap/build:
-
-```powershell
-pwsh -ExecutionPolicy Bypass -File .\bootstrap_v8.ps1
-```
-
-Or, if dependencies and `mpv-2.dll` are already present:
-
-```powershell
-.\build_v8.bat
-```
-
-Launch:
-
-```powershell
-.\launch.bat
-```
-
-After a successful rebuild, direct production launch is:
-
-```powershell
-.\hyperwall_v8.exe
-```
-
-`launch.bat` includes a stale-binary guard: if `hyperwall_v8.exe` is older than the checked-out Python source, it warns and runs `hyperwall_v8.py` instead.
-
-## Files worth knowing
-
-| Path | Purpose |
+| Variable | Effect |
 |---|---|
-| `hyperwall_v8.py` | v8 launcher shim; delegates to `hyperwall.main` |
-| `hyperwall/` | active v8.2 package |
-| `launch.bat` | safe launcher with stale-EXE detection |
-| `build_v8.bat` | PyInstaller build for `hyperwall_v8.exe` |
-| `bootstrap_v8.ps1` | installs deps/tools/DLL and builds |
-| `cleanup_wall_dir.ps1` | archives local junk without deleting it |
-| `config.example.ini` | safe template; real `config.ini` is ignored |
-| `hyperwall_v8.nip` | NVIDIA Profile Inspector profile targeting `hyperwall_v8.exe` |
-| `hyperwall/web.py` | built-in web remote server (Flask) |
-| `tests/run_repo_guards.py` | no-dependency guard suite |
-| `INSTRUCTIONS_v8.md` | detailed setup, tuning, and smoke-test notes |
+| `HYPERWALL_WEB_PORT` | Override web remote port (default 8585) |
+| `HYPERWALL_STATS=1` | Enable per-cell playback stats |
+| `HYPERWALL_HWDEC` | Override hardware decoder (nvdec, d3d11va, etc.) |
+| `HYPERWALL_VO` | Override video output (gpu-next, gpu) |
+| `HYPERWALL_NO_RELAUNCH=1` | Skip exe re-launch (script mode) |
+| `HYPERWALL_AUTO_TRANSCODE=0` | Disable auto-transcode heuristic |
 
-## NVIDIA / G-Sync isolation
+## Building
 
-The built exe gives NVIDIA a unique process basename: `hyperwall_v8.exe`. The included `.nip` profile disables VRR/G-Sync for HyperWall only, avoiding mixed-FPS wall jitter without touching generic `python.exe` behavior.
-
-On first exe launch, HyperWall may request UAC to import the NVIDIA Profile Inspector profile. After that, a local sentinel tracks the driver version and re-applies only when needed.
-
-## Manual smoke test checklist
-
-After build, verify at least:
-
-1. Wizard opens with previous selections.
-2. Wall opens on selected monitors and cells begin playback.
-3. `M` does nothing global.
-4. Per-cell speaker/volume controls affect only that cell.
-5. Multiple cells can stay unmuted at once.
-6. ESC exits.
-7. Previous/next and seeking work.
-8. Tag/favorite/delete controls update Emby as expected.
-9. Performance is acceptable under real wall load.
-
-## Development workflow
-
-Before building or pushing changes:
-
-```powershell
-python .\tests\run_repo_guards.py
+```cmd
+pip install pyinstaller
+build.bat
 ```
 
-On Linux/macOS clones, the same check is:
+Produces `hyperwall_v8.exe` — the basename the NVIDIA profile targets.
 
-```bash
-python3 tests/run_repo_guards.py
-python3 -m py_compile hyperwall/*.py hyperwall_v8.py tests/*.py
-```
+## License
 
-Do not commit local runtime artifacts: `config.ini`, logs, built exe, downloaded tools, DLLs, sentinels, pycache, and stress-test outputs are intentionally ignored.
+MIT

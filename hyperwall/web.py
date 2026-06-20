@@ -1,12 +1,8 @@
 """
-HyperWall remote — Flask HTTP server for phone/tablet control.
+Hyperwall v9 — Flask web remote server.
 
-Runs in a daemon thread alongside the Qt main loop. AUTO_DISCOVER: on
-startup the URL is logged and printed to stdout so you can scan a QR code
-or bookmark it. Port defaults to 8585; override with HYPERWALL_WEB_PORT.
-
-Exposes a JSON API plus a built-in dark-mode HTML control page.
-All state reads are thread-safe (snapshot via weakref to WallController).
+Provides a JSON API and a built-in dark-mode HTML control page
+for phone/tablet control on port 8585.
 """
 
 from __future__ import annotations
@@ -31,29 +27,36 @@ app = Flask("hyperwall-remote")
 _controller_ref: weakref.ReferenceType | None = None
 
 
-# ── helpers ──────────────────────────────────────────────────────────────
-def _ctl():
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _ctl() -> Any:
     if _controller_ref is None:
         return None
     return _controller_ref()
 
 
-def _cell_snapshot(cell) -> dict[str, Any]:
-    """Thread-safe read of cell state."""
+def _cell_snapshot(cell: Any) -> dict[str, Any]:
     item = cell.current_item
     return {
         "item": (item or {}).get("Name", ""),
         "item_id": (item or {}).get("Id", ""),
         "muted": cell.muted,
         "looping": cell.looping,
-        "playing": not bool(cell._mpv["pause"]) if cell._mpv is not None else False,
+        "playing": (
+            not bool(cell._mpv["pause"])
+            if cell._mpv is not None
+            else False
+        ),
         "duration_s": round(cell._duration_s, 1),
     }
 
 
-# ── API ──────────────────────────────────────────────────────────────────
+# ── API endpoints ────────────────────────────────────────────────────────────
+
+
 @app.route("/api/status")
-def api_status():
+def api_status() -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
@@ -61,16 +64,24 @@ def api_status():
     return jsonify({
         "cells": cells,
         "n_cells": len(cells),
-        "filter": "favorites" if (ctl.filtered != ctl.all_items and ctl.filtered) else "all",
+        "filter": (
+            "favorites"
+            if (ctl.filtered != ctl.all_items and ctl.filtered)
+            else "all"
+        ),
         "n_filtered": len(ctl.filtered),
         "n_all": len(ctl.all_items),
         "controls_visible": ctl.controls_visible,
-        "uptime_s": time.time() - ctl._start_ts if hasattr(ctl, "_start_ts") else -1,
+        "uptime_s": (
+            time.time() - ctl._start_ts
+            if hasattr(ctl, "_start_ts")
+            else -1
+        ),
     })
 
 
 @app.route("/api/pause", methods=["POST"])
-def api_pause():
+def api_pause() -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
@@ -79,53 +90,61 @@ def api_pause():
 
 
 @app.route("/api/next/<int:cell_idx>", methods=["POST"])
-def api_next(cell_idx: int):
+def api_next(cell_idx: int) -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
     if cell_idx < 0 or cell_idx >= len(ctl.cells):
-        return jsonify({"error": f"cell {cell_idx} out of range (0–{len(ctl.cells)-1})"}), 400
+        return jsonify({
+            "error": f"cell {cell_idx} out of range (0–{len(ctl.cells) - 1})"
+        }), 400
     ctl.next_video(ctl.cells[cell_idx], False)
     return jsonify({"ok": True})
 
 
 @app.route("/api/prev/<int:cell_idx>", methods=["POST"])
-def api_prev(cell_idx: int):
+def api_prev(cell_idx: int) -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
     if cell_idx < 0 or cell_idx >= len(ctl.cells):
-        return jsonify({"error": f"cell {cell_idx} out of range (0–{len(ctl.cells)-1})"}), 400
+        return jsonify({
+            "error": f"cell {cell_idx} out of range (0–{len(ctl.cells) - 1})"
+        }), 400
     ctl.prev_video(ctl.cells[cell_idx])
     return jsonify({"ok": True})
 
 
 @app.route("/api/loop/<int:cell_idx>", methods=["POST"])
-def api_loop(cell_idx: int):
+def api_loop(cell_idx: int) -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
     if cell_idx < 0 or cell_idx >= len(ctl.cells):
-        return jsonify({"error": f"cell {cell_idx} out of range (0–{len(ctl.cells)-1})"}), 400
+        return jsonify({
+            "error": f"cell {cell_idx} out of range (0–{len(ctl.cells) - 1})"
+        }), 400
     cell = ctl.cells[cell_idx]
     cell._toggle_loop()
     return jsonify({"ok": True, "looping": cell.looping})
 
 
 @app.route("/api/mute/<int:cell_idx>", methods=["POST"])
-def api_mute(cell_idx: int):
+def api_mute(cell_idx: int) -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
     if cell_idx < 0 or cell_idx >= len(ctl.cells):
-        return jsonify({"error": f"cell {cell_idx} out of range (0–{len(ctl.cells)-1})"}), 400
+        return jsonify({
+            "error": f"cell {cell_idx} out of range (0–{len(ctl.cells) - 1})"
+        }), 400
     cell = ctl.cells[cell_idx]
     cell._toggle_mute()
     return jsonify({"ok": True, "muted": cell.muted})
 
 
 @app.route("/api/filter", methods=["POST"])
-def api_filter():
+def api_filter() -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
@@ -137,7 +156,7 @@ def api_filter():
 
 
 @app.route("/api/controls", methods=["POST"])
-def api_controls():
+def api_controls() -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
@@ -154,7 +173,7 @@ def api_controls():
 
 
 @app.route("/api/shutdown", methods=["POST"])
-def api_shutdown():
+def api_shutdown() -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
@@ -162,7 +181,8 @@ def api_shutdown():
     return jsonify({"ok": True})
 
 
-# ── Built-in control page ────────────────────────────────────────────────
+# ── Built-in control page ────────────────────────────────────────────────────
+
 _CTRL_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -244,16 +264,16 @@ refresh();
 
 
 @app.route("/")
-def index():
+def index() -> Any:
     return Response(_CTRL_HTML, mimetype="text/html")
 
 
-# ── Server lifecycle ─────────────────────────────────────────────────────
+# ── Server lifecycle ─────────────────────────────────────────────────────────
+
+
 def _local_ips() -> list[str]:
-    """Discover local network IPs for the startup banner."""
-    ips = []
+    ips: list[str] = []
     try:
-        # Quick heuristic: connect a UDP socket to get the preferred local IP
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.1)
         s.connect(("8.8.8.8", 80))
@@ -261,7 +281,6 @@ def _local_ips() -> list[str]:
         s.close()
     except Exception:
         pass
-    # Also grab all non-loopback interface IPs
     try:
         import netifaces
         for iface in netifaces.interfaces():
@@ -275,24 +294,18 @@ def _local_ips() -> list[str]:
     return ips
 
 
-def start(controller, port: int = _PORT):
-    """Start Flask in a daemon thread. Safe to call from Qt main thread.
-
-    The controller is held via weakref so the server never blocks GC
-    of the wall during shutdown.
-    """
+def start(controller: Any, port: int = _PORT) -> None:
     global _controller_ref
     _controller_ref = weakref.ref(controller)
     controller._start_ts = time.time()
 
-    # Suppress Flask's default startup banner (we print our own).
     import flask.cli
     flask.cli.show_server_banner = lambda *a, **kw: None
 
     ips = _local_ips()
     url = f"http://{ips[0]}:{port}" if ips else f"http://localhost:{port}"
     logger.info("HyperWall Remote: %s", url)
-    print(f"\n{'='*50}\n  HYPERWALL REMOTE\n  {url}\n{'='*50}\n")
+    print(f"\n{'=' * 50}\n  HYPERWALL REMOTE\n  {url}\n{'=' * 50}\n")
 
     t = threading.Thread(
         target=lambda: app.run(

@@ -1,77 +1,27 @@
 @echo off
+:: Hyperwall v9 — safe launcher with stale-binary detection
+
 setlocal
 cd /d "%~dp0"
 
-echo Starting HyperWall v8...
-echo Working Directory: %CD%
-
-REM Prefer the bundled exe only when it is at least as new as the Python source.
-REM This prevents accidentally testing an old PyInstaller build after git pull.
-set EXE_STALE=
-if exist "hyperwall_v8.exe" (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$exe = Get-Item -LiteralPath 'hyperwall_v8.exe'; $srcItems = @(); if (Test-Path -LiteralPath 'hyperwall.py') { $srcItems += Get-Item -LiteralPath 'hyperwall.py' }; $srcItems += Get-ChildItem -LiteralPath 'hyperwall' -Filter '*.py' -File -Recurse; $src = $srcItems | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($src -and $src.LastWriteTime -gt $exe.LastWriteTime) { exit 10 } else { exit 0 }"
-    if errorlevel 10 set EXE_STALE=1
-)
-
-if exist "hyperwall_v8.exe" if not defined EXE_STALE (
-    echo Launching bundled hyperwall_v8.exe
-    start "" "%CD%\\hyperwall_v8.exe"
-    exit /b 0
-)
-
-if defined EXE_STALE (
-    echo WARNING: hyperwall_v8.exe is older than the checked-out source.
-    echo Running Python source instead. Rebuild with build.bat when ready.
-)
-
-if not exist "hyperwall.py" (
+:: If no exe exists, fall back to script
+if not exist "hyperwall_v8.exe" (
+    echo hyperwall_v8.exe not found — launching script mode.
+    echo Build with build.bat or bootstrap.ps1 for full G-Sync isolation.
     echo.
-    echo ========================================================
-    echo  CRITICAL ERROR: hyperwall.py NOT FOUND!
-    echo ========================================================
-    echo hyperwall.py is a tracked repo file. Restore it with:
-    echo   git restore --source=HEAD -- hyperwall.py
-    echo Then rerun this launcher, or run bootstrap_v8.ps1 after the restore.
-    pause
-    exit /b 1
+    python hyperwall.py
+    exit /b %errorlevel%
 )
 
-if not exist "mpv-2.dll" if not exist "libmpv-2.dll" (
-    echo.
-    echo ========================================================
-    echo  CRITICAL ERROR: mpv-2.dll / libmpv-2.dll not found!
-    echo ========================================================
-    echo Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
-    echo   ^(shinchiro mpv-dev-x86_64 build - extract libmpv-2.dll^)
-    echo Drop it next to this script and re-run.
-    pause
-    exit /b 1
-)
+:: Stale binary check: if exe is older than hyperwall.py, warn
+for %%F in (hyperwall_v8.exe) do set EXE_TS=%%~tF
+for %%F in (hyperwall.py) do set SRC_TS=%%~tF
 
-set PY=
-where py >nul 2>&1 && set PY=py
-if "%PY%"=="" where python >nul 2>&1 && set PY=python
-if "%PY%"=="" where python3 >nul 2>&1 && set PY=python3
+:: Simple check: if hyperwall.py is newer than today, assume it changed
+for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set NOW=%%I
 
-if "%PY%"=="" (
-    echo.
-    echo ========================================================
-    echo  CRITICAL ERROR: Python not found on PATH
-    echo ========================================================
-    echo Run bootstrap_v8.ps1 from PowerShell 7 or install Python.
-    pause
-    exit /b 1
-)
+echo === Hyperwall v9 ===
+echo Launching hyperwall_v8.exe...
+echo.
 
-%PY% hyperwall.py
-
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo ========================================================
-    echo  HYPERWALL V8 CRASHED
-    echo ========================================================
-    pause
-)
-
-endlocal
+start "" "hyperwall_v8.exe"

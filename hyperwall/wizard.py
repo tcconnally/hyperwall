@@ -1,13 +1,41 @@
+"""
+Hyperwall v9 — SetupWizard.
+
+Monitor + library + grid layout selection dialog.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
-    QListWidget, QListWidgetItem, QSpinBox, QPushButton
+    QDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
 )
 
+
 class SetupWizard(QDialog):
-    def __init__(self, config, screens, libraries: list[str]):
+    """Pre-launch configuration dialog: select monitors, libraries, grid."""
+
+    def __init__(
+        self,
+        screens: list[Any],
+        libraries: list[str],
+        last_screens: str = "",
+        last_libraries: str = "",
+        last_rows: int = 2,
+        last_cols: int = 2,
+    ):
         super().__init__()
-        self.setWindowTitle("HyperWall 8.2")
+        self.setWindowTitle("HyperWall 9.0")
         self.resize(720, 540)
         self.setStyleSheet("""
             QDialog { background: #0e0e0e; color: #eee; font-family: 'Segoe UI'; }
@@ -28,59 +56,90 @@ class SetupWizard(QDialog):
             QLabel { color: #888; font-size: 11px; }
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20); layout.setSpacing(14)
+        self._screen_map: dict[str, Any] = {}
 
-        title = QLabel("HYPERWALL  8.2")
-        title.setStyleSheet("font-size: 24px; font-weight: 900; color: white; letter-spacing: 3px;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        title = QLabel("HYPERWALL  9.0")
+        title.setStyleSheet(
+            "font-size: 24px; font-weight: 900; color: white; letter-spacing: 3px;"
+        )
         layout.addWidget(title)
 
-        panels = QHBoxLayout(); panels.setSpacing(14)
+        panels = QHBoxLayout()
+        panels.setSpacing(14)
 
+        # ── Displays ──
         grp_disp = QGroupBox("DISPLAYS")
-        l_disp = QVBoxLayout(grp_disp)
+        ld = QVBoxLayout(grp_disp)
         self.list_disp = QListWidget()
         self.list_disp.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-        self._screen_map: dict[str, object] = {}
-        last_screens = config.get("Settings", "last_screens", fallback="").split(",")
-        for idx, s in enumerate(screens, 1):
-            label = f"Monitor {idx} — {s.name()}  [{s.geometry().width()}×{s.geometry().height()}]"
-            item = QListWidgetItem(label); self.list_disp.addItem(item)
-            self._screen_map[label] = s
-            if s.name() in last_screens:
-                item.setSelected(True)
-        l_disp.addWidget(self.list_disp); panels.addWidget(grp_disp)
+        prev_screens = last_screens.split(",") if last_screens else []
 
+        for idx, s in enumerate(screens, 1):
+            label = (
+                f"Monitor {idx} — {s.name()}  "
+                f"[{s.geometry().width()}x{s.geometry().height()}]"
+            )
+            item = QListWidgetItem(label)
+            self.list_disp.addItem(item)
+            self._screen_map[label] = s
+            if s.name() in prev_screens:
+                item.setSelected(True)
+
+        ld.addWidget(self.list_disp)
+        panels.addWidget(grp_disp)
+
+        # ── Sources ──
         grp_lib = QGroupBox("SOURCES")
-        l_lib = QVBoxLayout(grp_lib)
+        ll = QVBoxLayout(grp_lib)
         self.list_lib = QListWidget()
         self.list_lib.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-        last_libs = config.get("Settings", "last_libraries", fallback="").split(",")
+        prev_libs = last_libraries.split(",") if last_libraries else []
+
         for lib in libraries:
-            item = QListWidgetItem(lib); self.list_lib.addItem(item)
-            if lib in last_libs:
+            item = QListWidgetItem(lib)
+            self.list_lib.addItem(item)
+            if lib in prev_libs:
                 item.setSelected(True)
-        l_lib.addWidget(self.list_lib); panels.addWidget(grp_lib)
+
+        ll.addWidget(self.list_lib)
+        panels.addWidget(grp_lib)
 
         layout.addLayout(panels)
 
+        # ── Grid ──
         grp_grid = QGroupBox("LAYOUT")
-        l_grid = QHBoxLayout(grp_grid)
-        self.rows = QSpinBox(); self.rows.setRange(1, 6)
-        self.rows.setValue(int(config.get("Settings", "last_grid_rows", fallback="2")))
-        self.cols = QSpinBox(); self.cols.setRange(1, 6)
-        self.cols.setValue(int(config.get("Settings", "last_grid_cols", fallback="2")))
-        l_grid.addWidget(QLabel("ROWS")); l_grid.addWidget(self.rows)
-        l_grid.addSpacing(20)
-        l_grid.addWidget(QLabel("COLS")); l_grid.addWidget(self.cols)
-        l_grid.addStretch()
-        btn = QPushButton("▶   INITIALIZE SYSTEM"); btn.clicked.connect(self.accept)
-        l_grid.addWidget(btn)
+        lg = QHBoxLayout(grp_grid)
+        self.rows = QSpinBox()
+        self.rows.setRange(1, 6)
+        self.rows.setValue(last_rows)
+        self.cols = QSpinBox()
+        self.cols.setRange(1, 6)
+        self.cols.setValue(last_cols)
+        lg.addWidget(QLabel("ROWS"))
+        lg.addWidget(self.rows)
+        lg.addSpacing(20)
+        lg.addWidget(QLabel("COLS"))
+        lg.addWidget(self.cols)
+        lg.addStretch()
+        btn = QPushButton("▶   INITIALIZE SYSTEM")
+        btn.clicked.connect(self.accept)
+        lg.addWidget(btn)
         layout.addWidget(grp_grid)
 
-    def get_settings(self) -> dict:
+    def get_settings(self) -> dict[str, Any]:
+        """Return the selected configuration."""
         return {
-            "screens":   [self._screen_map[i.text()] for i in self.list_disp.selectedItems()],
-            "libraries": [i.text() for i in self.list_lib.selectedItems()],
-            "grid":      (self.rows.value(), self.cols.value()),
+            "screens": [
+                self._screen_map[i.text()]
+                for i in self.list_disp.selectedItems()
+            ],
+            "libraries": [
+                i.text() for i in self.list_lib.selectedItems()
+            ],
+            "grid_rows": self.rows.value(),
+            "grid_cols": self.cols.value(),
         }
