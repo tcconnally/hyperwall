@@ -33,13 +33,23 @@ except ImportError:
 # If it's garbage-collected, the directory is removed from the search path.
 _mpv_dll_cookie = None
 if os.name == "nt":
-    _mpv_dll_dir = SCRIPT_DIR
-    if os.path.isdir(_mpv_dll_dir):
-        try:
-            _mpv_dll_cookie = os.add_dll_directory(_mpv_dll_dir)
-        except AttributeError:
-            # Python < 3.8 fallback
-            os.environ["PATH"] = _mpv_dll_dir + os.pathsep + os.environ.get("PATH", "")
+    # When frozen by PyInstaller (one-file), mpv-2.dll is extracted into
+    # sys._MEIPASS — not the exe's directory.  Add both so we work in
+    # script mode AND frozen mode.
+    _mpv_dll_dirs = [SCRIPT_DIR]
+    if getattr(sys, "frozen", False):
+        _mpv_dll_dirs.insert(0, sys._MEIPASS)
+    for _mpv_dll_dir in _mpv_dll_dirs:
+        if os.path.isdir(_mpv_dll_dir):
+            try:
+                _mpv_dll_cookie = os.add_dll_directory(_mpv_dll_dir)
+            except AttributeError:
+                # Python < 3.8 fallback
+                os.environ["PATH"] = _mpv_dll_dir + os.pathsep + os.environ.get("PATH", "")
+    # Also prepend to PATH — python-mpv's internal loader reads PATH
+    # directly and ignores AddDllDirectory cookies.
+    if getattr(sys, "frozen", False):
+        os.environ["PATH"] = sys._MEIPASS + os.pathsep + os.environ.get("PATH", "")
 
 mpv = None
 _MPV_IMPORT_ERR = None
