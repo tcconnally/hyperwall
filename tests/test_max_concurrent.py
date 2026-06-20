@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # Smoke test import (added by audit follow-up)
 try:
     from hyperwall.perf import MPV_OPTS
@@ -20,8 +22,6 @@ prove out.
 Usage:
     py test_max_concurrent.py [--cells N] [--stress-secs S] [--libraries lib1,...]
 """
-
-from __future__ import annotations
 
 import argparse
 import configparser

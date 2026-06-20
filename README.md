@@ -1,6 +1,6 @@
 # HyperWall
 
-HyperWall is a fullscreen multi-monitor video wall for a local Emby server. The active runtime is the v8.1 rewrite: a small launcher shim (`hyperwall_v8.py`) plus the structured `hyperwall/` package, using `python-mpv`/libmpv instead of Qt's media stack.
+HyperWall is a fullscreen multi-monitor video wall for a local Emby server. The active runtime is the v8.2 rewrite: a small launcher shim (`hyperwall_v8.py`) plus the structured `hyperwall/` package, using `python-mpv`/libmpv instead of Qt's media stack.
 
 The legacy v7.4 monolith is preserved only for archaeology at `legacy/hyperwall_v7_4.py`. Normal launch and build paths are v8-only.
 
@@ -34,6 +34,22 @@ Current global shortcuts:
 | `S` | mpv stats overlay on cell 0 |
 | `R` | Remix dialog |
 | `Esc` | Shutdown |
+
+## Web Remote
+
+HyperWall starts a built-in web server on port 8585 (override with `HYPERWALL_WEB_PORT`).
+Open the URL printed at startup on any phone or tablet on the same network to control the wall:
+
+- **Play/pause** all cells globally
+- **Skip/previous** per cell
+- **Filter** favorites / all
+- **Hide/show** controls
+- **Shutdown** the wall safely
+
+The page auto-refreshes every 3 seconds. No app install needed — just a browser.
+
+API endpoints under `/api/`: `status`, `pause`, `next/<n>`, `prev/<n>`, `loop/<n>`,
+`mute/<n>`, `filter`, `controls`, `shutdown`. All POST except `status` (GET).
 
 ## Quick start on Windows
 
@@ -89,13 +105,14 @@ After a successful rebuild, direct production launch is:
 | Path | Purpose |
 |---|---|
 | `hyperwall_v8.py` | v8 launcher shim; delegates to `hyperwall.main` |
-| `hyperwall/` | active v8.1 package |
+| `hyperwall/` | active v8.2 package |
 | `launch.bat` | safe launcher with stale-EXE detection |
 | `build_v8.bat` | PyInstaller build for `hyperwall_v8.exe` |
 | `bootstrap_v8.ps1` | installs deps/tools/DLL and builds |
 | `cleanup_wall_dir.ps1` | archives local junk without deleting it |
 | `config.example.ini` | safe template; real `config.ini` is ignored |
 | `hyperwall_v8.nip` | NVIDIA Profile Inspector profile targeting `hyperwall_v8.exe` |
+| `hyperwall/web.py` | built-in web remote server (Flask) |
 | `tests/run_repo_guards.py` | no-dependency guard suite |
 | `INSTRUCTIONS_v8.md` | detailed setup, tuning, and smoke-test notes |
 

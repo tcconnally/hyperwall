@@ -166,21 +166,26 @@ class ContentLoaderThread(QThread):
                     logger.warning("Library '%s' not found.", lib); continue
                 self.progress.emit(f"Loading '{lib}'…")
                 path_library_items = f"/Users/{self.api.user_id}/Items"
-                items = self.api.get(
-                    path_library_items,
-                    params={
-                        "ParentId": lid, "Recursive": "true",
-                        "IncludeItemTypes": "Video,MusicVideo,Movie,Episode",
-                        "Fields": "MediaSources,MediaStreams,UserData,Tags",
-                        "Limit": "10000",
-                    }, timeout=30,
-                ).json().get("Items", [])
-                logger.info("Library '%s': %d items", lib, len(items))
-                all_items.extend(items)
+                try:
+                    items = self.api.get(
+                        path_library_items,
+                        params={
+                            "ParentId": lid, "Recursive": "true",
+                            "IncludeItemTypes": "Video,MusicVideo,Movie,Episode",
+                            "Fields": "MediaSources,MediaStreams,UserData,Tags",
+                            "Limit": "10000",
+                        }, timeout=30,
+                    ).json().get("Items", [])
+                    logger.info("Library '%s': %d items", lib, len(items))
+                    all_items.extend(items)
+                except requests.exceptions.RequestException as e:
+                    # One library timing out shouldn't discard results from
+                    # libraries that already loaded successfully.
+                    logger.error("Content loader: library '%s' failed (%s) — "
+                                 "keeping %d items from earlier libraries.",
+                                 lib, e, len(all_items))
         except requests.exceptions.RequestException as e:
-            logger.error("Content loader error while fetching %s or library items: %s", path_views, e)
-            all_items.clear() # Ensure no partial data is returned on error
+            logger.error("Content loader error while fetching %s: %s", path_views, e)
         except Exception as e:
             logger.error("Content loader crash: %s", e)
-            all_items.clear()
         self.finished.emit(all_items)

@@ -19,6 +19,12 @@ from .wizard import SetupWizard
 from .controller import WallController, MouseIdleHider
 from .version import runtime_banner
 
+# Lazy: web server is optional — won't fail if flask isn't installed.
+try:
+    from . import web as _web
+except ImportError:
+    _web = None
+
 # Late import for mpv
 # On Windows, Python 3.8+ tightened DLL search — os.add_dll_directory()
 # is the correct API to make script-dir DLLs visible to ctypes.
@@ -211,6 +217,10 @@ def main():
         _eff.get("target_colorspace_hint"), "on" if STATS_ENABLED else "off",
     )
     wall = WallController(s, api)
+    if _web is not None:
+        _web.start(wall)
+    else:
+        logger.info("Web remote unavailable (flask not installed).")
     app.aboutToQuit.connect(wall._cleanup)
     sys.exit(app.exec())
 

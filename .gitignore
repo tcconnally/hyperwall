@@ -1,34 +1,36 @@
-# Build artifacts
-hyperwall_v8.exe
-*.bak
-*.bak.*
-mpv-*.dll
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-
-# Per-user settings
+# ── Runtime artifacts ──────────────────────────────────────────────────────
 config.ini
+hyperwall.log
+hyperwall.log.*
+*.pyc
+__pycache__/
 
-# Logs and stats (local only)
-hyperwall.log*
-hyperwall_stats_*.json
-launch_diag.log
+# ── Build outputs ──────────────────────────────────────────────────────────
+build/
+dist/
+*.spec
+hyperwall_v8.exe
+
+# ── NVIDIA sentinel (driver-version tracking) ──────────────────────────────
 .hyperwall_v8_nvprofile.sentinel
 
-# Downloaded tools/binaries
-tools/*.exe
-tools/Reference.xml
+# ── Downloaded tools / DLLs ────────────────────────────────────────────────
+tools/nvidiaProfileInspector.exe
+mpv-2.dll
+libmpv-2.dll
 
-# Stress test artifacts
-stress_*.log
+# ── Stats dumps ────────────────────────────────────────────────────────────
+hyperwall_stats_*.json
+test_codec_matrix_results.json
 
-# Test artifacts
-test_*_results.json
+# ── OS junk ────────────────────────────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+.DS_Store
 
-# Perseus generated output
-.hermes.md
-.perseus/cache/
+# ── IDE / editor ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

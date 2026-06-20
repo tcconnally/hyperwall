@@ -9,7 +9,7 @@ REM     (hyperwall_v8.exe) for the per-app G-Sync profile to match against.
 REM   - mpv-2.dll is bundled inside; no DLL deployment fuss.
 REM
 REM Requirements (one-time):
-REM   pip install pyinstaller python-mpv pyqt6 requests
+REM   pip install pyinstaller python-mpv pyqt6 requests flask
 REM   Place mpv-2.dll next to this script (download from mpv.io, shobon-mpv build).
 REM ============================================================================
 
@@ -64,7 +64,12 @@ echo [BUILD] Compiling hyperwall_v8.exe...
     --name hyperwall_v8 ^
     --add-binary "mpv-2.dll;." ^
     --hidden-import mpv ^
+    --hidden-import flask ^
+    --hidden-import flask.cli ^
+    --hidden-import werkzeug ^
+    --hidden-import werkzeug.serving ^
     --collect-submodules PyQt6 ^
+    --collect-submodules flask ^
     hyperwall.py
 
 if errorlevel 1 (

@@ -157,10 +157,19 @@ class VideoCell(QWidget):
             self._flush_stats()
         mpv_ref = self._mpv
         self._mpv = None
-        try:
-            mpv_ref.terminate()
-        except Exception as e:
-            logger.debug("mpv terminate raised: %s", e)
+        # Terminate with a bounded timeout so a hung mpv process never
+        # freezes the Qt main thread.  mpv.terminate() may block
+        # indefinitely on stuck I/O (e.g.  network stream that won't
+        # tear down gracefully).  Give it 1.5 s then abandon.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(mpv_ref.terminate)
+            try:
+                _fut.result(timeout=1.5)
+            except concurrent.futures.TimeoutError:
+                logger.warning("mpv terminate timed out — abandoning process.")
+            except Exception as e:
+                logger.debug("mpv terminate raised: %s", e)
 
     def _flush_stats(self):
         if self._mpv is not None:
@@ -241,7 +250,11 @@ class VideoCell(QWidget):
             if value is None or gen != self._mpv_gen:
                 return
             self._play_pos = value
-            if value > 0.05 and not self._played_anything:
+            if value > 0.02 and not self._played_anything:
+                self._played_anything = True
+            # Also treat known-very-short items as "played something"
+            # so the EOF handler doesn't misclassify them as errors.
+            if self._duration_s > 0 and self._duration_s < 0.5 and value > 0:
                 self._played_anything = True
 
         @m.property_observer("duration")

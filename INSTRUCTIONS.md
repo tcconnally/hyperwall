@@ -35,7 +35,7 @@ If you'd rather do it manually, the steps are:
 ### 1a. Dependencies (manual)
 
 ```cmd
-pip install python-mpv pyqt6 requests pyinstaller
+pip install python-mpv pyqt6 requests flask pyinstaller
 ```
 
 ### 2. libmpv DLL
