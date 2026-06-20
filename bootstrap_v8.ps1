@@ -27,6 +27,10 @@ Write-Host "[OK] Python deps installed" -ForegroundColor Green
 # ── 3. mpv-2.dll ─────────────────────────────────────────────────────
 if (-not (Test-Path "$ScriptDir\mpv-2.dll") -and -not (Test-Path "$ScriptDir\libmpv-2.dll")) {
     Write-Host "[*] Downloading mpv-2.dll from shinchiro builds..."
+    # Clean stale leftovers from a prior failed run
+    Remove-Item "$ScriptDir\mpv-temp.7z" -ErrorAction SilentlyContinue
+    Remove-Item "$ScriptDir\_extract_mpv.py" -ErrorAction SilentlyContinue
+    Get-ChildItem "$ScriptDir" -Directory | Where-Object Name -match '^mpv' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     $ghUrl = "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases"
     try {
         $release = Invoke-RestMethod -Uri $ghUrl -TimeoutSec 15 | Select-Object -First 1
@@ -34,9 +38,22 @@ if (-not (Test-Path "$ScriptDir\mpv-2.dll") -and -not (Test-Path "$ScriptDir\lib
         if (-not $asset) { throw "No 7z asset found" }
         Write-Host "  Found: $($asset.name) ($([math]::Round($asset.size/1MB,1)) MB)"
         Write-Host "  Downloading..."
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$ScriptDir\mpv-temp.7z" -TimeoutSec 120
+        $sevenZip = "$ScriptDir\mpv-temp.7z"
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $sevenZip -TimeoutSec 120
         Write-Host "  Extracting..."
-        py -c "import py7zr; a=py7zr.SevenZipFile('$ScriptDir\mpv-temp.7z'); a.extract(path='$ScriptDir'); a.close()"
+        # Write a temp Python script to avoid backslash-escaping hell
+        # with inline -c + Windows paths.
+        $extractScript = @"
+import py7zr, shutil, sys, os
+src = r'$sevenZip'
+dst = r'$ScriptDir'
+a = py7zr.SevenZipFile(src)
+a.extract(path=dst)
+a.close()
+"@
+        $extractScript | Out-File -Encoding utf8 "$ScriptDir\_extract_mpv.py"
+        py "$ScriptDir\_extract_mpv.py"
+        Remove-Item "$ScriptDir\_extract_mpv.py" -ErrorAction SilentlyContinue
         $dll = Get-ChildItem "$ScriptDir" -Filter "mpv-2.dll" -Recurse -File | Select-Object -First 1
         if ($dll) {
             Move-Item $dll.FullName "$ScriptDir\mpv-2.dll" -Force
@@ -71,8 +88,8 @@ if (-not (Test-Path $npiPath)) {
             $release = Invoke-RestMethod -Uri $npiUrl -TimeoutSec 15 | Select-Object -First 1
             $asset = $release.assets | Where-Object name -match '\.zip$' | Select-Object -First 1
             if (-not $asset) { throw "No zip asset found" }
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$ScriptDir\tools\npi-temp.zip" -TimeoutSec 60
             New-Item -ItemType Directory -Path "$ScriptDir\tools" -Force | Out-Null
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$ScriptDir\tools\npi-temp.zip" -TimeoutSec 60
             Expand-Archive "$ScriptDir\tools\npi-temp.zip" "$ScriptDir\tools" -Force
             Remove-Item "$ScriptDir\tools\npi-temp.zip" -ErrorAction SilentlyContinue
             $npiExe = Get-ChildItem "$ScriptDir\tools" -Filter "nvidiaProfileInspector.exe" -Recurse -File | Select-Object -First 1
