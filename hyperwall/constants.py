@@ -39,7 +39,7 @@ MOUSE_IDLE_MS = 3_000           # cursor auto-hide
 MPV_OPTS: dict[str, object] = dict(
     vo="gpu-next",
     gpu_api="d3d11",
-    hwdec="nvdec",
+    hwdec="nvdec-copy",
     profile="fast",
     video_sync="display-vdrop",
     video_sync_max_video_change=5,
@@ -59,7 +59,6 @@ MPV_OPTS: dict[str, object] = dict(
     input_vo_keyboard=False,
     ytdl=False,
     ao="wasapi",
-    audio_client_name="HyperWall",
     audio_buffer=1.0,
     msg_level="all=warn,cplayer=info,ao=error,ao/wasapi=fatal",
 )
