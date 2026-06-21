@@ -386,7 +386,6 @@ class VideoCell(QWidget):
         self.current_item = item
         self._duration_s = 0.0
         self._play_pos = 0.0
-        self._played_anything = False
 
         title = item.get("Name", "Unknown")
         self.lbl_title.setText(title)
@@ -412,6 +411,15 @@ class VideoCell(QWidget):
             except Exception:
                 logger.warning("mpv process dead — recreating.")
                 need_create = True
+
+        # Only reset _played_anything when creating a new mpv instance.
+        # When reusing an existing mpv (loadfile replaces the current track),
+        # mpv fires end-file for the old track before starting the new one.
+        # Keeping _played_anything=True across the switch prevents that stale
+        # end-file from being misclassified as a playback error. The time-pos
+        # observer will re-assert True once the new track produces frames.
+        if need_create:
+            self._played_anything = False
 
         if need_create:
             self._destroy_mpv()
