@@ -41,7 +41,7 @@ MPV_OPTS: dict[str, object] = dict(
     gpu_api="d3d11",
     hwdec="nvdec-copy",
     profile="fast",
-    video_sync="display-vdrop",
+    video_sync="audio",
     video_sync_max_video_change=5,
     interpolation="no",
     target_colorspace_hint="yes",
@@ -59,7 +59,7 @@ MPV_OPTS: dict[str, object] = dict(
     input_vo_keyboard=False,
     ytdl=False,
     ao="wasapi,null",
-    audio_buffer=1.0,
+    audio_buffer=2.0,
     msg_level="all=warn,cplayer=info,ao=error,ao/wasapi=fatal",
 )
 
