@@ -228,7 +228,7 @@ class WallController:
             tag = "TRANSCODE/retry" if force_transcode else "TRANSCODE/auto"
             logger.info("[%s] %s", tag, item.get("Name"))
         else:
-            url = f"{base}/Videos/{iid}/stream?api_key={key}"
+            url = f"{base}/Videos/{iid}/stream?api_key={key}&static=true"
             logger.info("[DIRECT] %s", item.get("Name"))
         return url, sid
 
