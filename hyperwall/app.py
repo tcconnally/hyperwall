@@ -45,7 +45,7 @@ logger = logging.getLogger("HyperWall")
 _WEB_AVAILABLE = False
 try:
     from . import web as _web
-    _WEB_AVAILABLE = True
+    _WEB_AVAILABLE = os.environ.get("HYPERWALL_WEB") == "1"
 except ImportError:
     pass
 

@@ -104,7 +104,7 @@ Environment variables:
 
 | Variable | Effect |
 |---|---|
-| `HYPERWALL_WEB_PORT` | Override web remote port (default 8585) |
+| `HYPERWALL_WEB=1` | Enable web remote on port 8585 (off by default) |
 | `HYPERWALL_STATS=1` | Enable per-cell playback stats |
 | `HYPERWALL_HWDEC` | Override hardware decoder (nvdec, d3d11va, etc.) |
 | `HYPERWALL_VO` | Override video output (gpu-next, gpu) |

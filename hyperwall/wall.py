@@ -281,7 +281,10 @@ class WallController:
         item: dict[str, Any],
         force_transcode: bool = False,
     ) -> None:
-        self.stop_emby_session(cell._emby_item_id, cell._emby_session_id)
+        # Don't stop old sessions mid-playback — the async API call races
+        # with the new stream creation, and Emby can kill both when it sees
+        # a session-stop from the same device. Sessions are cleaned up on
+        # wall shutdown via _cleanup().
         url, sid = self._build_url(item, force_transcode)
         cell._emby_session_id = sid
         cell._emby_item_id = item["Id"]
