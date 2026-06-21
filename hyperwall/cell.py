@@ -129,6 +129,7 @@ class VideoCell(QWidget):
         self._mouse_in_cell = False
         self._emby_session_id: str | None = None
         self._emby_item_id: str | None = None
+        self._switching = False  # set in play(), consumed in _handle_eof
 
         # Stats
         self._stats_current: dict[str, float] = {}
@@ -429,11 +430,16 @@ class VideoCell(QWidget):
             logger.error("mpv not initialized — cannot play.")
             return
 
+        # _switching flag suppresses the stale end-file that loadfile fires
+        # when replacing a playing track. Without it, that end-file requests
+        # next_video unnecessarily, colliding with the cell's new content.
+        self._switching = True
         try:
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
             self.btn_play.setText("⏸")
         except Exception as e:
+            self._switching = False
             logger.error("mpv loadfile failed: %s", e)
             self._sig_eof.emit(self._mpv_gen, "error")
             return
@@ -727,6 +733,12 @@ class VideoCell(QWidget):
             self._on_error()
             return
         if reason == "eof":
+            if self._switching:
+                # loadfile just replaced a playing track — this end-file
+                # is the old track ending, not the new one. Suppress the
+                # stale next_video request.
+                self._switching = False
+                return
             if not self._played_anything:
                 logger.warning("EOF before first frame — treating as error.")
                 self._on_error()
