@@ -58,7 +58,7 @@ MPV_OPTS: dict[str, object] = dict(
     input_default_bindings=False,
     input_vo_keyboard=False,
     ytdl=False,
-    ao="wasapi",
+    ao="wasapi,null",
     audio_buffer=1.0,
     msg_level="all=warn,cplayer=info,ao=error,ao/wasapi=fatal",
 )
