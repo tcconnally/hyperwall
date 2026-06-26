@@ -12,7 +12,7 @@ echo.
 python -c "import PyQt6; import requests; import flask" 2>nul
 if %errorlevel% neq 0 (
     echo Installing build dependencies...
-    python -m pip install pyqt6 requests flask pyinstaller
+    pip install pyqt6 requests flask pyinstaller
     if %errorlevel% neq 0 (
         echo ERROR: Failed to install dependencies.
         exit /b 1
@@ -39,7 +39,7 @@ if exist "mpv-2.dll" (
 )
 
 echo Building hyperwall_v8.exe...
-python -m PyInstaller ^
+pyinstaller ^
     --onefile ^
     --name hyperwall_v8 ^
     %DLL_FLAG% ^
