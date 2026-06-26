@@ -53,7 +53,15 @@ $pyinstallerArgs = @(
 )
 
 if ($dllFlag) {
-    $pyinstallerArgs = @("--onefile", "--name", "hyperwall_v8", $dllFlag, "--add-data", "hyperwall.nip;.", "--console", "--clean", "hyperwall.py")
+    $pyinstallerArgs = @(
+        "--onefile",
+        "--name", "hyperwall_v8",
+        "--add-data", "mpv-2.dll;.",
+        "--add-data", "hyperwall.nip;.",
+        "--console",
+        "--clean",
+        "hyperwall.py"
+    )
 }
 
 & pyinstaller @pyinstallerArgs
