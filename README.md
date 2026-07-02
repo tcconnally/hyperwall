@@ -130,6 +130,23 @@ Produces `hyperwall.exe` — a versionless basename. G-Sync isolation is gated
 on the `hyperwall*.exe` prefix (or `HYPERWALL_ISOLATED=1`), so the exe name is
 stable across version bumps and the NVIDIA profile keeps matching.
 
+## Testing
+
+The test suites are pure-logic and dependency-light — no PyQt/mpv/Emby, no
+pytest. They run headless in CI (`.github/workflows/repo-guards.yml`) and
+locally:
+
+```bash
+python tests/run_all.py
+```
+
+| Suite | Covers |
+|---|---|
+| `run_repo_guards` | Package structure + version-drift guard (no `hyperwall_v<N>` / hardcoded version literals) |
+| `test_reliability` | Stall watchdog, crash-loop guard, cache-budget scaling, retry→transcode→skip escalation |
+| `test_urls` | Emby URL construction (incl. load-bearing `static=true`) + transcode heuristic boundaries |
+| `test_config` | `config.ini` save/load round-trip, typed fields, frozen dataclass |
+
 ## License
 
 MIT

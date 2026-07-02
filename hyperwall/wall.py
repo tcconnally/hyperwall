@@ -46,6 +46,7 @@ from .constants import (
     SCRIPT_DIR,
 )
 from .emby import EmbyClient, ContentLoader, needs_transcode
+from .urls import build_stream_url
 
 logger = logging.getLogger("HyperWall")
 
@@ -231,18 +232,15 @@ class WallController:
         sid = uuid.uuid4().hex
 
         auto_transcode = needs_transcode(item)
-        if force_transcode or auto_transcode:
-            url = (
-                f"{base}/Videos/{iid}/master.m3u8?api_key={key}"
-                f"&VideoCodec=h264&AudioCodec=aac&MaxAudioChannels=2"
-                f"&MaxHeight=1080&MaxWidth=1920"
-                f"&MaxFramerate=30&VideoBitrate=12000000"
-                f"&PlaySessionId={sid}"
-            )
+        transcode = bool(force_transcode or auto_transcode)
+        url = build_stream_url(
+            base=base, item_id=iid, api_key=key,
+            session_id=sid, transcode=transcode,
+        )
+        if transcode:
             tag = "TRANSCODE/retry" if force_transcode else "TRANSCODE/auto"
             logger.info("[%s] %s", tag, item.get("Name"))
         else:
-            url = f"{base}/Videos/{iid}/stream?api_key={key}&static=true"
             logger.info("[DIRECT] %s", item.get("Name"))
         return url, sid
 

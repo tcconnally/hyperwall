@@ -15,6 +15,7 @@ sys.path.insert(0, REPO_ROOT)
 
 from hyperwall.reliability import (  # noqa: E402
     count_recent,
+    escalation_plan,
     is_stalled,
     scale_demuxer_mb,
     should_park,
@@ -99,6 +100,45 @@ def test_floor_respected():
 def test_zero_cells_is_safe():
     # Defensive: n<1 must not divide-by-zero.
     assert scale_demuxer_mb(0, per_cell_mb=512, total_budget_mb=3072) == 512
+
+
+# ── escalation_plan (retry → transcode → skip) ────────────────────────────────
+
+def test_attempt1_retries_direct():
+    p = escalation_plan(1, max_retries=3)
+    assert p["action"] == "retry"
+    assert p["transcode"] is False   # first attempt stays DIRECT
+    assert p["delay_s"] == 2         # 2**1
+
+
+def test_attempt2_escalates_to_transcode():
+    p = escalation_plan(2, max_retries=3)
+    assert p["action"] == "retry"
+    assert p["transcode"] is True    # escalate at attempt >= 2
+    assert p["delay_s"] == 4         # 2**2
+
+
+def test_attempt3_still_retries_transcode():
+    p = escalation_plan(3, max_retries=3)
+    assert p["action"] == "retry"
+    assert p["transcode"] is True
+    assert p["delay_s"] == 8         # 2**3
+
+
+def test_attempt_over_max_skips():
+    p = escalation_plan(4, max_retries=3)
+    assert p["action"] == "skip"
+    assert p["transcode"] is False
+    assert p["delay_s"] == 0
+
+
+def test_full_escalation_sequence():
+    # The exact retry→transcode→skip ladder a dead stream walks.
+    seq = [escalation_plan(a, 3) for a in range(1, 5)]
+    actions = [p["action"] for p in seq]
+    transcodes = [p["transcode"] for p in seq]
+    assert actions == ["retry", "retry", "retry", "skip"]
+    assert transcodes == [False, True, True, False]
 
 
 # ── constants env clamping (integration of _int_env) ──────────────────────────

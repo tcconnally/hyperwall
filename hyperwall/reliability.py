@@ -71,3 +71,26 @@ def scale_demuxer_mb(
     n = max(1, int(n_cells))
     per = min(per_cell_mb, total_budget_mb / n)
     return int(max(floor_mb, per))
+
+
+def escalation_plan(attempt: int, max_retries: int) -> dict:
+    """Decide what to do after a playback failure at 1-based `attempt`.
+
+    Returns a small plan dict describing the retry/escalation policy, so the
+    behavior is testable without QTimer/mpv:
+
+      - action: "retry" (try again) or "skip" (give up, advance playlist)
+      - transcode: True once attempt >= 2 (escalate to server transcode)
+      - delay_s: backoff before the next attempt (2**attempt for retries, 0
+                 for a skip)
+
+    attempt 1 → retry direct (2s), attempt 2 → retry transcode (4s),
+    attempt 3 → retry transcode (8s), attempt 4 (> max_retries=3) → skip.
+    """
+    if attempt <= max_retries:
+        return {
+            "action": "retry",
+            "transcode": attempt >= 2,
+            "delay_s": 2 ** attempt,
+        }
+    return {"action": "skip", "transcode": False, "delay_s": 0}
