@@ -51,17 +51,23 @@ from .constants import (
     AUTOHIDE_MS,
     CONTROLS_HEIGHT,
     CONTROLS_OPACITY,
+    CRASH_LOOP_COOLDOWN_S,
+    CRASH_LOOP_THRESHOLD,
+    CRASH_LOOP_WINDOW_S,
     MAX_RETRIES,
     MOUSE_IDLE_MS,
     MPV_LOG_NOISE,
     MPV_OPTS,
     OVERLAY_SHOW_MS,
+    STALL_TIMEOUT_S,
     STATS_COUNTER_PROPS,
     STATS_ENABLED,
     STATS_INFO_PROPS,
     UI_SCALE,
+    WATCHDOG_INTERVAL_MS,
     apply_env_overrides,
 )
+from .reliability import is_stalled, should_park
 
 logger = logging.getLogger("HyperWall")
 
@@ -139,6 +145,15 @@ class VideoCell(QWidget):
         self._emby_item_id: str | None = None
         self._switching = False  # set in play(), consumed in _handle_eof
 
+        # Reliability / self-healing (Epic 2)
+        self._last_progress_ts = 0.0   # monotonic ts of last time-pos advance
+        self._last_seen_pos = -1.0     # last observed time-pos value
+        self._failure_ts: deque[float] = deque(maxlen=64)  # recent failure times
+        self._parked = False           # crash-loop parked → stop retrying
+        # Budgeted mpv opts, set by the controller once the grid size is known
+        # (memory-aware demuxer cache). None → fall back to unbudgeted defaults.
+        self._mpv_opts: dict[str, Any] | None = None
+
         # Stats
         self._stats_current: dict[str, float] = {}
         self._stats_total: dict[str, float] = {}
@@ -202,6 +217,14 @@ class VideoCell(QWidget):
         self.setMouseTracking(True)
         self._sig_eof.connect(self._handle_eof, Qt.ConnectionType.QueuedConnection)
 
+        # Stall watchdog: polls for silent freezes (frozen frame / wedged
+        # decoder / network hang that survives reconnect) which never emit an
+        # end-file or error event, so the retry chain would otherwise never fire.
+        self._watchdog_timer = QTimer(self)
+        self._watchdog_timer.setInterval(WATCHDOG_INTERVAL_MS)
+        self._watchdog_timer.timeout.connect(self._check_stall)
+        self._watchdog_timer.start()
+
     # ── mpv lifecycle ─────────────────────────────────────────────────────
 
     def _ensure_mpv(self) -> None:
@@ -229,10 +252,11 @@ class VideoCell(QWidget):
         _devnull = open(os.devnull, "w")
         try:
             sys.stdout = sys.stderr = _devnull
+            _opts = self._mpv_opts or apply_env_overrides(MPV_OPTS)
             m = _mpv.MPV(
                 wid=str(wid),
                 log_handler=self._mpv_log,
-                **apply_env_overrides(MPV_OPTS),
+                **_opts,
             )
         finally:
             sys.stdout, sys.stderr = _std_saved
@@ -265,6 +289,12 @@ class VideoCell(QWidget):
         def _on_time(_name: str, value: float | None) -> None:
             if value is None or gen != self._mpv_gen:
                 return
+            # Record forward progress for the stall watchdog. mpv can emit the
+            # same time-pos repeatedly on a frozen stream; only a real advance
+            # counts as "alive".
+            if value > self._last_seen_pos:
+                self._last_seen_pos = value
+                self._last_progress_ts = _time.monotonic()
             self._play_pos = value
             if value > 0.02 and not self._played_anything:
                 self._played_anything = True
@@ -399,6 +429,10 @@ class VideoCell(QWidget):
         self.current_item = item
         self._duration_s = 0.0
         self._play_pos = 0.0
+        # Reset stall tracking so the freshly-loaded track gets a full grace
+        # window before the watchdog can flag it.
+        self._last_seen_pos = -1.0
+        self._last_progress_ts = _time.monotonic()
 
         title = item.get("Name", "Unknown")
         self.lbl_title.setText(title)
@@ -459,6 +493,10 @@ class VideoCell(QWidget):
 
     def release(self) -> None:
         """Clean up and release all resources."""
+        try:
+            self._watchdog_timer.stop()
+        except Exception:
+            pass
         self._destroy_mpv()
 
     # ── controls UI ───────────────────────────────────────────────────────
@@ -746,6 +784,11 @@ class VideoCell(QWidget):
         if gen != self._mpv_gen:
             return
         if reason == "error":
+            # Clear the switching guard here too: it's set in play() and was
+            # previously only cleared on the first "eof". On the error path it
+            # would leak True, letting a later genuine EOF be swallowed as if it
+            # were a stale loadfile end-file.
+            self._switching = False
             self._on_error()
             return
         if reason == "eof":
@@ -782,7 +825,76 @@ class VideoCell(QWidget):
         self._last_next_request_ts = now
         self.request_next.emit(self, is_retry)
 
+    def _check_stall(self) -> None:
+        """Watchdog: flag a silently frozen stream as an error.
+
+        Runs every WATCHDOG_INTERVAL_MS. A cell that is playing (mpv alive, not
+        paused, not being seeked) but whose time-pos hasn't advanced for
+        STALL_TIMEOUT_S is treated as a playback error, reusing the existing
+        retry/escalation chain — no new failure semantics.
+        """
+        if self._mpv is None or self._parked or self._switching:
+            return
+        if not self._played_anything:
+            # Startup / EOF-before-first-frame is handled by the normal path.
+            return
+        idle_s = _time.monotonic() - self._last_progress_ts
+        if is_stalled(
+            idle_s,
+            paused=self._paused,
+            dragging=self._dragging,
+            threshold_s=STALL_TIMEOUT_S,
+        ):
+            logger.warning(
+                "Stall detected — no progress for %.0fs (threshold %ds). "
+                "Treating as error.", idle_s, STALL_TIMEOUT_S,
+            )
+            # Force a fresh grace window so we don't re-fire before the retry
+            # has a chance to load new frames.
+            self._last_progress_ts = _time.monotonic()
+            self._on_error()
+
+    def _record_failure_and_maybe_park(self) -> bool:
+        """Record a failure timestamp; park the cell on a crash-loop.
+
+        Returns True if the cell is now parked (caller should stop retrying).
+        """
+        now = _time.monotonic()
+        self._failure_ts.append(now)
+        if should_park(
+            self._failure_ts, now,
+            window_s=CRASH_LOOP_WINDOW_S,
+            threshold=CRASH_LOOP_THRESHOLD,
+        ):
+            self._parked = True
+            logger.error(
+                "Crash-loop guard: %d failures within %ds — parking cell. "
+                "Retrying in %ds.",
+                CRASH_LOOP_THRESHOLD, CRASH_LOOP_WINDOW_S, CRASH_LOOP_COOLDOWN_S,
+            )
+            self._show_title_overlay("Media unavailable — retrying soon…")
+            QTimer.singleShot(CRASH_LOOP_COOLDOWN_S * 1000, self._unpark)
+            return True
+        return False
+
+    def _unpark(self) -> None:
+        """Leave the parked state after the cooldown and try to resume."""
+        if not self._parked:
+            return
+        self._parked = False
+        self._failure_ts.clear()
+        self._retry_count = 0
+        self._force_transcode = False
+        logger.info("Crash-loop cooldown elapsed — resuming cell.")
+        self._request_next_throttled(False)
+
     def _on_error(self) -> None:
+        if self._parked:
+            return
+        # Crash-loop guard: if failures pile up in a short window, stop
+        # hammering Emby and park the cell instead.
+        if self._record_failure_and_maybe_park():
+            return
         self._retry_count += 1
         logger.warning(
             "Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES

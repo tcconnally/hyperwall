@@ -49,6 +49,34 @@ AUTOHIDE_MS = 5_000             # one-shot startup auto-hide
 OVERLAY_SHOW_MS = 3_000         # title overlay before fade
 MOUSE_IDLE_MS = 3_000           # cursor auto-hide
 
+# ── Reliability / self-healing (Epic 2) ──────────────────────────────────────
+# Stall watchdog: if time-pos hasn't advanced for STALL_TIMEOUT_S while a cell
+# is actively playing (not paused/seeking), treat it as a silent freeze and run
+# the normal error/escalation chain. WATCHDOG_INTERVAL_MS is the poll cadence.
+
+
+def _int_env(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(hi, int(os.environ.get(name, default))))
+    except (TypeError, ValueError):
+        return default
+
+
+STALL_TIMEOUT_S = _int_env("HYPERWALL_STALL_TIMEOUT_S", 20, 3, 600)
+WATCHDOG_INTERVAL_MS = _int_env("HYPERWALL_WATCHDOG_MS", 5_000, 1_000, 60_000)
+
+# Crash-loop guard: if a cell records CRASH_LOOP_THRESHOLD failures within
+# CRASH_LOOP_WINDOW_S, park it on a "media unavailable" card instead of
+# hammering Emby. It re-attempts after CRASH_LOOP_COOLDOWN_S.
+CRASH_LOOP_THRESHOLD = _int_env("HYPERWALL_CRASHLOOP_THRESHOLD", 5, 2, 100)
+CRASH_LOOP_WINDOW_S = _int_env("HYPERWALL_CRASHLOOP_WINDOW_S", 60, 10, 3_600)
+CRASH_LOOP_COOLDOWN_S = _int_env("HYPERWALL_CRASHLOOP_COOLDOWN_S", 120, 10, 7_200)
+
+# Memory-aware demuxer cache budget. Each cell wants PER_CELL demuxer bytes, but
+# the grid total is capped at CACHE_BUDGET_MB so large grids don't blow up RAM.
+DEMUXER_PER_CELL_MB = _int_env("HYPERWALL_DEMUXER_PER_CELL_MB", 512, 32, 2_048)
+CACHE_BUDGET_MB = _int_env("HYPERWALL_CACHE_BUDGET_MB", 3_072, 128, 65_536)
+
 # ── MPV Options ──────────────────────────────────────────────────────────────
 MPV_OPTS: dict[str, object] = dict(
     vo="gpu-next",
@@ -124,4 +152,22 @@ def apply_env_overrides(opts: dict) -> dict:
             out["audio_buffer"] = float(v)
         except ValueError:
             pass
+    return out
+
+
+def apply_cache_budget(opts: dict, n_cells: int) -> dict:
+    """Return a copy of opts with demuxer_max_bytes scaled to the cell count.
+
+    Keeps the aggregate grid demuxer buffer within CACHE_BUDGET_MB so large
+    grids (e.g. 6x6) don't exhaust RAM. Pure w.r.t. the reliability helper.
+    """
+    from .reliability import scale_demuxer_mb
+
+    out = dict(opts)
+    mb = scale_demuxer_mb(
+        n_cells,
+        per_cell_mb=DEMUXER_PER_CELL_MB,
+        total_budget_mb=CACHE_BUDGET_MB,
+    )
+    out["demuxer_max_bytes"] = f"{mb}MiB"
     return out

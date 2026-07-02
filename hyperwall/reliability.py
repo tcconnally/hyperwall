@@ -1,0 +1,73 @@
+"""
+Hyperwall — pure reliability helpers (no PyQt / mpv / Emby imports).
+
+The 24/7-wall self-healing logic lives here as small, side-effect-free
+functions so it can be unit-tested without a display server, an mpv build, or
+a live Emby instance. `cell.py` imports these; the wiring (QTimers, mpv calls,
+overlays) stays in the widget while the *decisions* are verifiable in isolation.
+
+Three concerns (Epic 2 / #7):
+  - stall detection      → is_stalled()
+  - crash-loop parking   → count_recent() / should_park()
+  - cache-budget scaling → scale_demuxer_mb()
+"""
+
+from __future__ import annotations
+
+from typing import Iterable
+
+
+def is_stalled(
+    idle_s: float,
+    *,
+    paused: bool,
+    dragging: bool,
+    threshold_s: float,
+) -> bool:
+    """Decide whether a cell has silently stalled (frozen mid-stream).
+
+    A stall is "no forward time-pos progress for longer than threshold_s while
+    the cell is actively trying to play." Paused/seeking cells never count —
+    their lack of progress is intentional, not a fault.
+    """
+    if paused or dragging:
+        return False
+    return idle_s > threshold_s
+
+
+def count_recent(times: Iterable[float], now: float, window_s: float) -> int:
+    """Count timestamps within the trailing window ending at `now`."""
+    return sum(1 for t in times if 0 <= now - t <= window_s)
+
+
+def should_park(
+    times: Iterable[float],
+    now: float,
+    *,
+    window_s: float,
+    threshold: int,
+) -> bool:
+    """True when failures within the rolling window reach the park threshold.
+
+    Distinguishes a single bad item (skip and move on) from a systemic outage
+    (e.g. Emby down) where a cell would otherwise hammer the server forever.
+    """
+    return count_recent(times, now, window_s) >= threshold
+
+
+def scale_demuxer_mb(
+    n_cells: int,
+    *,
+    per_cell_mb: int,
+    total_budget_mb: int,
+    floor_mb: int = 32,
+) -> int:
+    """Per-cell demuxer budget (MiB), scaled so the grid total stays bounded.
+
+    Each cell wants `per_cell_mb`, but N cells must not exceed
+    `total_budget_mb` in aggregate (a 6x6 grid at 512 MiB/cell would reach
+    ~18 GB). Returns min(per_cell_mb, budget/N) clamped to `floor_mb`.
+    """
+    n = max(1, int(n_cells))
+    per = min(per_cell_mb, total_budget_mb / n)
+    return int(max(floor_mb, per))
