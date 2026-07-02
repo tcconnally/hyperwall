@@ -11,10 +11,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import random
 import time as _time
 import uuid
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -47,6 +45,7 @@ from .constants import (
 )
 from .emby import EmbyClient, ContentLoader, needs_transcode
 from .urls import build_stream_url
+from .playlist import PlaylistManager, DEFAULT_GROUP
 
 logger = logging.getLogger("HyperWall")
 
@@ -118,7 +117,11 @@ class WallController:
         self.all_items: list[dict[str, Any]] = []
         self.filtered: list[dict[str, Any]] = []
         self.filter_mode = "all"  # explicit mode; avoids O(n) list compares
-        self.playlist: deque[dict[str, Any]] = deque()
+        # Per-source-group playout. Default: a single "all" group shared by
+        # every cell → identical to the prior single global shuffled deque
+        # (global de-dup until the pool is exhausted). Per-monitor sourcing
+        # (Epic 4) assigns cells to different groups.
+        self.playlists = PlaylistManager()
         self.controls_visible = True
 
         # Thread management
@@ -202,6 +205,7 @@ class WallController:
     def _on_items_loaded(self, items: list[dict[str, Any]]) -> None:
         self.all_items = items
         self.filtered = items[:]
+        self.playlists.set_source(self.filtered, DEFAULT_GROUP)
         logger.info("Metadata Index: %d items loaded.", len(items))
         if not items:
             logger.warning("No items returned — check config.ini libraries.")
@@ -302,23 +306,20 @@ class WallController:
         cell._emby_item_id = item["Id"]
         cell.play(item, url)
 
+    def _cell_group(self, cell: VideoCell) -> str:
+        """Source group a cell draws from. Defaults to the shared 'all' group;
+        per-monitor sourcing sets cell._source_group to a distinct key."""
+        return getattr(cell, "_source_group", DEFAULT_GROUP) or DEFAULT_GROUP
+
     def next_video(self, cell: VideoCell, is_retry: bool = False) -> None:
-        if not self.filtered:
-            return
         if is_retry and cell.current_item:
             self._hand_off(cell, cell.current_item, cell._force_transcode)
             return
+        item = self.playlists.next(self._cell_group(cell))
+        if item is None:
+            return
         if cell.current_item:
             cell.history.append(cell.current_item)
-        if not self.playlist:
-            # Intentional: one shared shuffled deque across all cells gives
-            # global de-dup — no two cells replay the same item until the
-            # whole filtered set is exhausted. Copy+shuffle cost is fine
-            # even at 10k items (runs once per full playlist cycle).
-            shuffled = self.filtered[:]
-            random.shuffle(shuffled)
-            self.playlist = deque(shuffled)
-        item = self.playlist.pop()
         self._hand_off(cell, item)
 
     def prev_video(self, cell: VideoCell) -> None:
@@ -368,7 +369,7 @@ class WallController:
         else:
             self.filtered = self.all_items[:]
         self.filter_mode = mode
-        self.playlist.clear()
+        self.playlists.set_source(self.filtered, DEFAULT_GROUP)
         logger.info("Filter: %s (%d items)", mode.upper(), len(self.filtered))
         for i, c in enumerate(self.cells):
             QTimer.singleShot(

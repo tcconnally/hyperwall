@@ -31,6 +31,11 @@ class HyperwallConfig:
     last_grid_cols: int = 2
     cleanup_on_startup: bool = False
 
+    # ── Scenes ──
+    # Named wall presets persisted in a [Scenes] section as name=JSON. Stored
+    # as a tuple of (name, json_str) pairs to keep the dataclass hashable/frozen.
+    scenes: tuple[tuple[str, str], ...] = ()
+
     @classmethod
     def load(cls, path: str | None = None) -> HyperwallConfig:
         """Load and validate config from disk. Creates template if missing."""
@@ -44,7 +49,14 @@ class HyperwallConfig:
             raise ConfigMissingError(msg)
 
         cfg = configparser.ConfigParser()
+        cfg.optionxform = str  # preserve case of scene names in [Scenes]
         cfg.read(path)
+
+        scenes = ()
+        if cfg.has_section("Scenes"):
+            scenes = tuple(
+                (name, cfg.get("Scenes", name)) for name in cfg.options("Scenes")
+            )
 
         return cls(
             server_url=cfg.get("Login", "server_url", fallback=""),
@@ -58,6 +70,7 @@ class HyperwallConfig:
             cleanup_on_startup=cfg.getboolean(
                 "Settings", "cleanup_on_startup", fallback=False
             ),
+            scenes=scenes,
         )
 
     @classmethod
@@ -85,6 +98,7 @@ class HyperwallConfig:
         """Write current config back to disk."""
         path = path or CONFIG_FILE
         cfg = configparser.ConfigParser()
+        cfg.optionxform = str  # preserve case of scene names in [Scenes]
         cfg["Login"] = {
             "server_url": self.server_url,
             "username": self.username,
@@ -98,6 +112,8 @@ class HyperwallConfig:
             "last_grid_cols": str(self.last_grid_cols),
             "cleanup_on_startup": str(self.cleanup_on_startup),
         }
+        if self.scenes:
+            cfg["Scenes"] = {name: val for name, val in self.scenes}
         with open(path, "w") as f:
             cfg.write(f)
 
