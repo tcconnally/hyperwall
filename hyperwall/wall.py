@@ -40,6 +40,7 @@ from .constants import (
     STATS_ENABLED,
     STATS_COUNTER_PROPS,
     STATS_INFO_PROPS,
+    apply_cache_budget,
     apply_env_overrides,
     MPV_OPTS,
     SCRIPT_DIR,
@@ -132,6 +133,18 @@ class WallController:
         QApplication.instance().installEventFilter(self._escape_filter)
 
         self._build_displays()
+
+        # Memory-aware demuxer budget: now that every cell exists, scale the
+        # per-cell demuxer cache so the grid total stays under CACHE_BUDGET_MB.
+        n_cells = len(self.cells)
+        budgeted = apply_cache_budget(apply_env_overrides(MPV_OPTS), n_cells)
+        for cell in self.cells:
+            cell._mpv_opts = budgeted
+        logger.info(
+            "MPV cache budget: %d cells → demuxer_max_bytes=%s each",
+            n_cells, budgeted.get("demuxer_max_bytes"),
+        )
+
         for win in self.windows:
             win.showFullScreen()
             logger.info("Display active: %s", win.windowTitle())

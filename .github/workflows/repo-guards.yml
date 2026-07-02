@@ -20,3 +20,5 @@ jobs:
           python-version: "3.12"
       - name: Run repo guards
         run: python tests/run_repo_guards.py
+      - name: Run reliability unit tests
+        run: python tests/test_reliability.py

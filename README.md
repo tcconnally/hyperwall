@@ -111,6 +111,13 @@ Environment variables:
 | `HYPERWALL_NO_RELAUNCH=1` | Skip exe re-launch (script mode) |
 | `HYPERWALL_ISOLATED=1` | Force G-Sync isolation on (bypass exe-name check) |
 | `HYPERWALL_AUTO_TRANSCODE=0` | Disable auto-transcode heuristic |
+| `HYPERWALL_STALL_TIMEOUT_S` | Stall watchdog: flag a frozen stream after N s of no progress (default 20) |
+| `HYPERWALL_WATCHDOG_MS` | Stall watchdog poll interval in ms (default 5000) |
+| `HYPERWALL_CRASHLOOP_THRESHOLD` | Failures within the window before a cell is parked (default 5) |
+| `HYPERWALL_CRASHLOOP_WINDOW_S` | Rolling window for the crash-loop guard (default 60) |
+| `HYPERWALL_CRASHLOOP_COOLDOWN_S` | How long a parked cell waits before resuming (default 120) |
+| `HYPERWALL_CACHE_BUDGET_MB` | Aggregate demuxer cache ceiling across all cells (default 3072) |
+| `HYPERWALL_DEMUXER_PER_CELL_MB` | Desired per-cell demuxer cache before budget scaling (default 512) |
 
 ## Building
 
