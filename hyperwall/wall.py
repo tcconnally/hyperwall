@@ -115,6 +115,7 @@ class WallController:
         self._shortcuts: list[QShortcut] = []
         self.all_items: list[dict[str, Any]] = []
         self.filtered: list[dict[str, Any]] = []
+        self.filter_mode = "all"  # explicit mode; avoids O(n) list compares
         self.playlist: deque[dict[str, Any]] = deque()
         self.controls_visible = True
 
@@ -299,6 +300,10 @@ class WallController:
         if cell.current_item:
             cell.history.append(cell.current_item)
         if not self.playlist:
+            # Intentional: one shared shuffled deque across all cells gives
+            # global de-dup — no two cells replay the same item until the
+            # whole filtered set is exhausted. Copy+shuffle cost is fine
+            # even at 10k items (runs once per full playlist cycle).
             shuffled = self.filtered[:]
             random.shuffle(shuffled)
             self.playlist = deque(shuffled)
@@ -334,6 +339,7 @@ class WallController:
         for c in active_mpvs:
             try:
                 c._mpv["pause"] = any_playing
+                c._paused = any_playing
                 c.btn_play.setText("▶" if any_playing else "⏸")
             except Exception as e:
                 logger.debug("Pause toggle failed on cell: %s", e)
@@ -350,6 +356,7 @@ class WallController:
             self.filtered = subset
         else:
             self.filtered = self.all_items[:]
+        self.filter_mode = mode
         self.playlist.clear()
         logger.info("Filter: %s (%d items)", mode.upper(), len(self.filtered))
         for i, c in enumerate(self.cells):

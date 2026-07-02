@@ -59,30 +59,37 @@ from .constants import (
     STATS_COUNTER_PROPS,
     STATS_ENABLED,
     STATS_INFO_PROPS,
+    UI_SCALE,
     apply_env_overrides,
 )
 
 logger = logging.getLogger("HyperWall")
 
-CTRL_STYLE = """
-    QFrame#controls {
+
+def _s(px: int) -> int:
+    """Scale a pixel metric by the configured UI scale."""
+    return max(1, int(px * UI_SCALE))
+
+
+CTRL_STYLE = f"""
+    QFrame#controls {{
         background: rgba(22, 22, 22, 210);
         border-top: 1px solid rgba(255, 255, 255, 22);
         border-radius: 4px 4px 0 0;
-    }
-    QLabel { color: #ccc; font-family: 'Segoe UI'; font-size: 9px; background: transparent; }
-    QPushButton {
+    }}
+    QLabel {{ color: #ccc; font-family: 'Segoe UI', system-ui, sans-serif; font-size: {_s(9)}px; background: transparent; }}
+    QPushButton {{
         background: rgba(80, 80, 80, 180); border: 1px solid rgba(255,255,255,20);
-        border-radius: 2px; color: #eee; font-size: 11px; padding: 1px;
-        min-width: 22px; min-height: 22px; max-width: 22px; max-height: 22px;
-    }
-    QPushButton:hover   { background: #2563a8; border-color: #3b8edb; color: white; }
-    QPushButton:checked { background: #1e4f78; border-color: #3b8edb; color: white; }
-    QSlider::groove:horizontal { background: rgba(100,100,100,180); height: 3px; border-radius: 1px; }
-    QSlider::sub-page:horizontal { background: rgba(59,142,219,200); border-radius: 1px; }
-    QSlider::handle:horizontal {
-        background: rgba(220,220,220,220); width: 8px; margin: -2px 0; border-radius: 4px;
-    }
+        border-radius: 2px; color: #eee; font-size: {_s(11)}px; padding: 1px;
+        min-width: {_s(22)}px; min-height: {_s(22)}px; max-width: {_s(22)}px; max-height: {_s(22)}px;
+    }}
+    QPushButton:hover   {{ background: #2563a8; border-color: #3b8edb; color: white; }}
+    QPushButton:checked {{ background: #1e4f78; border-color: #3b8edb; color: white; }}
+    QSlider::groove:horizontal {{ background: rgba(100,100,100,180); height: {_s(3)}px; border-radius: 1px; }}
+    QSlider::sub-page:horizontal {{ background: rgba(59,142,219,200); border-radius: 1px; }}
+    QSlider::handle:horizontal {{
+        background: rgba(220,220,220,220); width: {_s(8)}px; margin: -2px 0; border-radius: {_s(4)}px;
+    }}
 """
 
 
@@ -125,6 +132,7 @@ class VideoCell(QWidget):
         self._retry_count = 0
         self._force_transcode = False
         self._played_anything = False
+        self._paused = False  # main-thread cache; safe to read cross-thread
         self._last_next_request_ts = 0.0
         self._mouse_in_cell = False
         self._emby_session_id: str | None = None
@@ -173,9 +181,10 @@ class VideoCell(QWidget):
         self._title_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_overlay.setWordWrap(False)
         self._title_overlay.setStyleSheet(
-            "color: white; background: rgba(0,0,0,180);"
-            " font-family: 'Segoe UI'; font-size: 13px; font-weight: 600;"
-            " padding: 5px 14px; border-radius: 4px;"
+            f"color: white; background: rgba(0,0,0,180);"
+            f" font-family: 'Segoe UI', system-ui, sans-serif;"
+            f" font-size: {_s(13)}px; font-weight: 600;"
+            f" padding: {_s(5)}px {_s(14)}px; border-radius: 4px;"
         )
         self._title_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._title_overlay.hide()
@@ -346,6 +355,9 @@ class VideoCell(QWidget):
     def showEvent(self, event: Any) -> None:
         super().showEvent(event)
         self.video_frame.winId()  # force native window creation
+        if not self._played_anything and self.current_item is None:
+            # Visual feedback while staggered startup loads content.
+            self._show_title_overlay("Loading…")
 
     def resizeEvent(self, event: Any) -> None:
         super().resizeEvent(event)
@@ -437,6 +449,7 @@ class VideoCell(QWidget):
         try:
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
+            self._paused = False
             self.btn_play.setText("⏸")
         except Exception as e:
             self._switching = False
@@ -470,7 +483,7 @@ class VideoCell(QWidget):
 
         self.seek_slider = ClickSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setRange(0, 1000)
-        self.seek_slider.setFixedHeight(10)
+        self.seek_slider.setFixedHeight(_s(10))
         self.seek_slider.sliderPressed.connect(self._seek_press)
         self.seek_slider.sliderReleased.connect(self._seek_release)
         outer.addWidget(self.seek_slider)
@@ -496,19 +509,19 @@ class VideoCell(QWidget):
         self.vol_slider = QSlider(Qt.Orientation.Horizontal)
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(0)
-        self.vol_slider.setFixedWidth(45)
-        self.vol_slider.setFixedHeight(10)
+        self.vol_slider.setFixedWidth(_s(45))
+        self.vol_slider.setFixedHeight(_s(10))
 
         self.lbl_time = QLabel("0:00 / 0:00")
-        self.lbl_time.setFixedWidth(75)
+        self.lbl_time.setFixedWidth(_s(75))
         self.lbl_time.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
         self.lbl_title = QLabel("Initializing…")
         self.lbl_title.setStyleSheet(
-            "color: white; font-family: 'Segoe UI'; font-size: 12px;"
-            " font-weight: 700; background: transparent;"
+            f"color: white; font-family: 'Segoe UI', system-ui, sans-serif;"
+            f" font-size: {_s(12)}px; font-weight: 700; background: transparent;"
         )
 
         for w in (
@@ -630,6 +643,7 @@ class VideoCell(QWidget):
         if self._mpv is not None:
             try:
                 self._mpv["pause"] = True
+                self._paused = True
             except Exception:
                 pass
 
@@ -640,6 +654,7 @@ class VideoCell(QWidget):
                 target = frac * self._duration_s
                 self._mpv.seek(target, "absolute")
                 self._mpv["pause"] = False
+                self._paused = False
                 self.btn_play.setText("⏸")
             except Exception as e:
                 logger.warning("seek failed: %s", e)
@@ -651,6 +666,7 @@ class VideoCell(QWidget):
         try:
             new_pause = not bool(self._mpv["pause"])
             self._mpv["pause"] = new_pause
+            self._paused = new_pause
             self.btn_play.setText("▶" if new_pause else "⏸")
         except Exception as e:
             logger.debug("toggle_play failed: %s", e)
@@ -747,6 +763,7 @@ class VideoCell(QWidget):
                 try:
                     self._mpv.seek(0, "absolute")
                     self._mpv["pause"] = False
+                    self._paused = False
                 except Exception as e:
                     logger.warning("Loop seek failed: %s", e)
                     self._request_next_throttled(False)

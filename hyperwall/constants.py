@@ -26,10 +26,24 @@ NPI_DIR = os.path.join(SCRIPT_DIR, "tools")
 NPI_EXE = os.path.join(NPI_DIR, "nvidiaProfileInspector.exe")
 NV_SENTINEL = os.path.join(SCRIPT_DIR, ".hyperwall_v8_nvprofile.sentinel")
 
+# ── UI scale ─────────────────────────────────────────────────────────────────
+# Controls are authored at 1.0 = 1080p-ish density. On 4K panels set
+# HYPERWALL_UI_SCALE=1.5 (or 2.0) for legible controls.
+
+
+def _ui_scale() -> float:
+    try:
+        return max(0.5, min(3.0, float(os.environ.get("HYPERWALL_UI_SCALE", "1.0"))))
+    except ValueError:
+        return 1.0
+
+
+UI_SCALE = _ui_scale()
+
 # ── Timing ───────────────────────────────────────────────────────────────────
 STREAM_START_STAGGER_MS = 300   # ms between cell starts
 MAX_RETRIES = 3                 # then skip the dead stream
-CONTROLS_HEIGHT = 44            # px
+CONTROLS_HEIGHT = int(44 * UI_SCALE)  # px
 CONTROLS_OPACITY = 0.82
 AUTOHIDE_MS = 5_000             # one-shot startup auto-hide
 OVERLAY_SHOW_MS = 3_000         # title overlay before fade

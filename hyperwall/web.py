@@ -21,6 +21,10 @@ from flask import Flask, Response, jsonify, request
 logger = logging.getLogger("HyperWall")
 
 _PORT = int(os.environ.get("HYPERWALL_WEB_PORT", "8585"))
+# Optional shared secret for destructive endpoints (shutdown). If set, the
+# client must send X-Hyperwall-Token or ?token=. Read-only/control endpoints
+# stay open for LAN convenience.
+_TOKEN = os.environ.get("HYPERWALL_WEB_TOKEN", "")
 
 app = Flask("hyperwall-remote")
 
@@ -36,6 +40,13 @@ def _ctl() -> Any:
     return _controller_ref()
 
 
+def _authorized(req: Any) -> bool:
+    if not _TOKEN:
+        return True
+    supplied = req.headers.get("X-Hyperwall-Token") or req.args.get("token", "")
+    return supplied == _TOKEN
+
+
 def _cell_snapshot(cell: Any) -> dict[str, Any]:
     item = cell.current_item
     return {
@@ -43,11 +54,9 @@ def _cell_snapshot(cell: Any) -> dict[str, Any]:
         "item_id": (item or {}).get("Id", ""),
         "muted": cell.muted,
         "looping": cell.looping,
-        "playing": (
-            not bool(cell._mpv["pause"])
-            if cell._mpv is not None
-            else False
-        ),
+        # Read the main-thread-maintained cache instead of a synchronous
+        # cross-thread mpv property IPC — this runs on the Flask thread.
+        "playing": cell._mpv is not None and not cell._paused,
         "duration_s": round(cell._duration_s, 1),
     }
 
@@ -64,11 +73,7 @@ def api_status() -> Any:
     return jsonify({
         "cells": cells,
         "n_cells": len(cells),
-        "filter": (
-            "favorites"
-            if (ctl.filtered != ctl.all_items and ctl.filtered)
-            else "all"
-        ),
+        "filter": getattr(ctl, "filter_mode", "all"),
         "n_filtered": len(ctl.filtered),
         "n_all": len(ctl.all_items),
         "controls_visible": ctl.controls_visible,
@@ -177,6 +182,8 @@ def api_shutdown() -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
+    if not _authorized(request):
+        return jsonify({"error": "unauthorized"}), 403
     ctl._shutdown()
     return jsonify({"ok": True})
 
@@ -236,22 +243,34 @@ function refresh(){
   fetch(BASE+'/status').then(r=>r.json()).then(d=>{
     document.getElementById('status').textContent=d.n_cells+' cells · '+d.filter+' ('+d.n_filtered+'/'+d.n_all+' items)';
     filter=d.filter;
-    let h='';
+    const root=document.getElementById('cells');
+    // Rebuild only when the cell count changes; otherwise update in place
+    // so buttons keep focus/touch state and the grid doesn't flicker.
+    if(root.children.length!==d.cells.length){
+      let h='';
+      d.cells.forEach((c,i)=>{
+        h+=`<div class="cell" id="cell-${i}">
+          <div class="cell-idx"></div>
+          <div class="cell-title"></div>
+          <div class="cell-info"></div>
+          <div class="cell-btns">
+            <button onclick="api('next/${i}')">⏭</button>
+            <button onclick="api('prev/${i}')">⏮</button>
+            <button onclick="api('loop/${i}')">🔁</button>
+            <button class="mute-btn" onclick="api('mute/${i}')">🔊</button>
+          </div></div>`
+      });
+      root.innerHTML=h;
+    }
     d.cells.forEach((c,i)=>{
-      let icon=c.muted?'🔇':'🔊';
-      let dur=c.duration_s>0?c.duration_s+'s':'';
-      h+=`<div class="cell">
-        <div class="cell-idx">CELL ${i} `+(c.playing?'▶':'⏸')+` ${icon} `+(c.looping?'🔁':'')+`</div>
-        <div class="cell-title">${esc(c.item||'—')}</div>
-        <div class="cell-info">${dur}</div>
-        <div class="cell-btns">
-          <button onclick="api('next/${i}')">⏭</button>
-          <button onclick="api('prev/${i}')">⏮</button>
-          <button onclick="api('loop/${i}')">🔁</button>
-          <button onclick="api('mute/${i}')">${icon}</button>
-        </div></div>`
+      const el=document.getElementById('cell-'+i);
+      if(!el)return;
+      const icon=c.muted?'🔇':'🔊';
+      el.querySelector('.cell-idx').textContent=`CELL ${i} `+(c.playing?'▶':'⏸')+` ${icon} `+(c.looping?'🔁':'');
+      el.querySelector('.cell-title').textContent=c.item||'—';
+      el.querySelector('.cell-info').textContent=c.duration_s>0?c.duration_s+'s':'';
+      el.querySelector('.mute-btn').textContent=icon;
     });
-    document.getElementById('cells').innerHTML=h;
   }).catch(e=>{document.getElementById('status').textContent='disconnected'})
 }
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}

@@ -53,10 +53,10 @@ class HyperwallConfig:
             verify_ssl=cfg.getboolean("Login", "verify_ssl", fallback=True),
             last_screens=cfg.get("Settings", "last_screens", fallback=""),
             last_libraries=cfg.get("Settings", "last_libraries", fallback=""),
-            last_grid_rows=cfg.getint("Settings", "last_grid_rows", fallback="2"),
-            last_grid_cols=cfg.getint("Settings", "last_grid_cols", fallback="2"),
+            last_grid_rows=cfg.getint("Settings", "last_grid_rows", fallback=2),
+            last_grid_cols=cfg.getint("Settings", "last_grid_cols", fallback=2),
             cleanup_on_startup=cfg.getboolean(
-                "Settings", "cleanup_on_startup", fallback="false"
+                "Settings", "cleanup_on_startup", fallback=False
             ),
         )
 
@@ -68,6 +68,7 @@ class HyperwallConfig:
             "server_url": "http://localhost:8096",
             "username": "",
             "password": "",
+            "verify_ssl": "true",
         }
         cfg["Settings"] = {
             "last_screens": "",
