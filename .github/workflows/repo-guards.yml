@@ -1,11 +1,10 @@
 name: repo-guards
 
-# Runs all Hyperwall test suites (tests/run_all.py) on every push and PR:
-#   - repo guards (structure + version-drift guard, Epic 1)
-#   - reliability unit tests (Epic 2)
-#   - url / transcode unit tests incl. load-bearing static=true (Epic 3)
-#   - config round-trip (Epic 3)
-# No pytest / PyQt / mpv needed — pure-logic suites run headless.
+# CI for Hyperwall:
+#   - tests (ubuntu): all pure-logic suites via tests/run_all.py — no PyQt/mpv.
+#   - windows-build: real PyInstaller build on windows-latest, asserts a
+#     versionless `hyperwall.exe` is produced (partial validation for #19 —
+#     the exe rename from Epic 1). Live G-Sync isolation still needs skyhawk.
 
 on:
   push:
@@ -22,3 +21,34 @@ jobs:
           python-version: "3.12"
       - name: Run all test suites
         run: python tests/run_all.py
+
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build deps
+        run: python -m pip install pyqt6 requests flask pyinstaller
+      - name: Run test suites on Windows
+        run: python tests/run_all.py
+      - name: Build hyperwall.exe (no mpv DLL needed for a build-only smoke test)
+        shell: pwsh
+        run: |
+          python -m PyInstaller --onefile --name hyperwall `
+            --add-data "hyperwall.nip;." --console --clean hyperwall.py
+      - name: Assert versionless exe was produced
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/hyperwall.exe")) {
+            Write-Error "dist/hyperwall.exe not produced — build regression"
+            exit 1
+          }
+          Write-Host "OK: dist/hyperwall.exe built ($(([Math]::Round((Get-Item dist/hyperwall.exe).Length/1MB,1))) MB)"
+      - name: Upload exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyperwall-exe
+          path: dist/hyperwall.exe
+          if-no-files-found: error
