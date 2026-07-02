@@ -98,6 +98,16 @@ def test_direct_url_has_static_true():
     assert "master.m3u8" not in url
 
 
+def test_direct_url_static_false_omits_param():
+    # A backend that must not use static=true can opt out; default stays True.
+    url = build_stream_url(
+        base="http://h", item_id="I", api_key="K",
+        session_id="S", transcode=False, static=False,
+    )
+    assert "static=true" not in url
+    assert "/Videos/I/stream?" in url
+
+
 def test_transcode_url_is_hls_master():
     url = build_stream_url(
         base="http://emby:8096", item_id="ID1", api_key="KEY",

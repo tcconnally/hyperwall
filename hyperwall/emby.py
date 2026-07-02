@@ -17,6 +17,12 @@ import urllib3
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 from . import VERSION_SHORT
+from .backends import (
+    EMBY,
+    BackendSpec,
+    auth_request_headers,
+    token_headers,
+)
 
 logger = logging.getLogger("HyperWall")
 
@@ -45,6 +51,7 @@ class EmbyClient:
         username: str,
         password: str,
         verify_ssl: bool = True,
+        backend: "BackendSpec | None" = None,
     ):
         self.server_url = server_url.rstrip("/")
         self.username = username
@@ -54,6 +61,7 @@ class EmbyClient:
         self.user_id: str | None = None
         self._auth_lock = threading.Lock()
         self._device_id = f"hyperwall-{os.urandom(4).hex()}"
+        self.backend = backend or EMBY
 
         self._session = requests.Session()
         self._session.headers.update({
@@ -82,13 +90,9 @@ class EmbyClient:
             try:
                 r = self._session.post(
                     f"{self.server_url}/Users/AuthenticateByName",
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-Emby-Authorization": (
-                            f'MediaBrowser Client="HyperWall", Device="PC", '
-                            f'DeviceId="{self._device_id}", Version="{VERSION_SHORT}"'
-                        ),
-                    },
+                    headers=auth_request_headers(
+                        self.backend, self._device_id, VERSION_SHORT,
+                    ),
                     json={"Username": self.username, "Pw": self._password},
                     timeout=10,
                     verify=self.verify_ssl,
@@ -109,7 +113,7 @@ class EmbyClient:
     # ── HTTP helpers ──────────────────────────────────────────────────────
 
     def _headers(self) -> dict[str, str]:
-        return {"X-Emby-Token": self.access_token or ""}
+        return token_headers(self.backend, self.access_token)
 
     def get(self, path: str, **kw: Any) -> requests.Response:
         return self._session.get(

@@ -48,12 +48,15 @@ def build_stream_url(
     api_key: str,
     session_id: str,
     transcode: bool,
+    static: bool = True,
 ) -> str:
-    """Build the Emby stream URL for an item.
+    """Build the media stream URL for an item.
 
     transcode=True  → HLS master playlist (server-side transcode to 1080p h264).
-    transcode=False → DIRECT raw file via static=true (load-bearing — see
-                      module docstring).
+    transcode=False → DIRECT raw file. When `static` is True (the Emby default,
+                      load-bearing — see module docstring) the url carries
+                      static=true; a backend that must not use it can pass
+                      static=False.
     """
     if transcode:
         return (
@@ -63,4 +66,7 @@ def build_stream_url(
             f"&MaxFramerate=30&VideoBitrate=12000000"
             f"&PlaySessionId={session_id}"
         )
-    return f"{base}/Videos/{item_id}/stream?api_key={api_key}&static=true"
+    direct = f"{base}/Videos/{item_id}/stream?api_key={api_key}"
+    if static:
+        direct += "&static=true"
+    return direct

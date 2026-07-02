@@ -12,7 +12,7 @@ hardware-accelerated video cells powered by libmpv.
   (NVIDIA Blackwell), 240 Hz G-Sync compatible, HDR hinting
 - **Emby integration** — streams directly from your Emby server with
   auto-transcode for 4K sources, favorites filtering, and per-cell
-  tag/favorite controls
+  tag/favorite controls (Jellyfin support is experimental — see Configuration)
 - **Web remote** — built-in dark-mode control page on port 8585
   (phone/tablet — no app install needed)
 - **G-Sync isolation** — per-app NVIDIA Profile Inspector profile
@@ -148,6 +148,7 @@ python tests/run_all.py
 | `test_config` | `config.ini` save/load round-trip, typed fields, frozen dataclass, scene presets |
 | `test_playlist` | Multi-source playout: per-group de-dup, refill/reshuffle, group independence |
 | `test_scenes` | Scene-preset serialization round-trip + malformed-input safety |
+| `test_backends` | Emby/Jellyfin backend specs: Emby parity, Jellyfin auth-header + verified-live gate |
 
 ## License
 

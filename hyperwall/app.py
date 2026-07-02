@@ -36,6 +36,7 @@ from .constants import (
     apply_env_overrides,
 )
 from .emby import EmbyClient, CleanupWorker
+from .backends import resolve_backend
 from .nvidia import ensure_nvidia_profile, maybe_relaunch_in_isolation
 from .wizard import SetupWizard
 from .wall import WallController, MouseIdleHider
@@ -225,6 +226,7 @@ def main() -> None:
     # 7. Emby client
     client = EmbyClient(
         cfg.server_url, cfg.username, cfg.password, verify_ssl=cfg.verify_ssl,
+        backend=resolve_backend(cfg.backend),
     )
     if not cfg.verify_ssl:
         import urllib3
@@ -283,6 +285,7 @@ def main() -> None:
         username=cfg.username,
         password=cfg.password,
         verify_ssl=cfg.verify_ssl,
+        backend=cfg.backend,
         last_screens=",".join(s.name() for s in settings["screens"]),
         last_libraries=",".join(settings["libraries"]),
         last_grid_rows=settings["grid_rows"],

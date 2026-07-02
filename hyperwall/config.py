@@ -23,6 +23,7 @@ class HyperwallConfig:
     username: str
     password: str
     verify_ssl: bool = True
+    backend: str = "emby"  # media backend: "emby" | "jellyfin"
 
     # ── Settings ──
     last_screens: str = ""
@@ -63,6 +64,7 @@ class HyperwallConfig:
             username=cfg.get("Login", "username", fallback=""),
             password=cfg.get("Login", "password", fallback=""),
             verify_ssl=cfg.getboolean("Login", "verify_ssl", fallback=True),
+            backend=cfg.get("Login", "backend", fallback="emby"),
             last_screens=cfg.get("Settings", "last_screens", fallback=""),
             last_libraries=cfg.get("Settings", "last_libraries", fallback=""),
             last_grid_rows=cfg.getint("Settings", "last_grid_rows", fallback=2),
@@ -82,6 +84,7 @@ class HyperwallConfig:
             "username": "",
             "password": "",
             "verify_ssl": "true",
+            "backend": "emby",
         }
         cfg["Settings"] = {
             "last_screens": "",
@@ -104,6 +107,7 @@ class HyperwallConfig:
             "username": self.username,
             "password": self.password,
             "verify_ssl": str(self.verify_ssl),
+            "backend": self.backend,
         }
         cfg["Settings"] = {
             "last_screens": self.last_screens,
