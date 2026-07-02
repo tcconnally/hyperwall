@@ -1,8 +1,10 @@
 """
-Hyperwall v9 — NVIDIA Profile Inspector integration.
+Hyperwall — NVIDIA Profile Inspector integration.
 
 Manages per-app G-Sync disable via NVIDIA Profile Inspector.
-Targets the hyperwall_v8.exe basename so generic python.exe is untouched.
+Isolation is enabled when the process runs as a bundled `hyperwall*.exe`
+(any version suffix) or when HYPERWALL_ISOLATED=1 is set, so the exe can be
+renamed across releases without silently disabling G-Sync isolation.
 """
 
 from __future__ import annotations
@@ -27,6 +29,20 @@ from .constants import (
 logger = logging.getLogger("HyperWall")
 
 _IS_WINDOWS = platform.system() == "Windows"
+
+
+def _is_isolated_launch() -> bool:
+    """True when we're running as the bundled, G-Sync-isolated executable.
+
+    Decoupled from any specific version-suffixed name: a frozen exe whose
+    basename starts with 'hyperwall' and ends in '.exe' (e.g. hyperwall.exe)
+    qualifies, as does an explicit HYPERWALL_ISOLATED=1 override. This is what
+    lets us rename the exe across releases without silently losing isolation.
+    """
+    if os.environ.get("HYPERWALL_ISOLATED") == "1":
+        return True
+    name = LAUNCH_BASENAME
+    return name.startswith("hyperwall") and name.endswith(".exe")
 
 _NPI_SEARCH_DIRS = [
     os.environ.get("NPI_PATH", ""),
@@ -82,10 +98,11 @@ def ensure_nvidia_profile() -> bool:
     if not _IS_WINDOWS:
         return True
 
-    if LAUNCH_BASENAME != "hyperwall_v8.exe":
+    if not _is_isolated_launch():
         logger.warning(
-            "G-Sync isolation disabled — running as '%s', not hyperwall_v8.exe. "
-            "Build via build.bat for full isolation.", LAUNCH_BASENAME,
+            "G-Sync isolation disabled — running as '%s', not a bundled "
+            "hyperwall*.exe. Build via build.bat (or set HYPERWALL_ISOLATED=1) "
+            "for full isolation.", LAUNCH_BASENAME,
         )
         return False
 
@@ -146,10 +163,10 @@ def ensure_nvidia_profile() -> bool:
 def maybe_relaunch_in_isolation() -> None:
     """Re-exec into the bundled .exe for NVIDIA process isolation.
 
-    When running as 'python hyperwall.py', relaunch via hyperwall_v8.exe
+    When running as 'python hyperwall.py', relaunch via the bundled exe
     so the NVIDIA driver matches the per-app G-Sync profile.
     """
-    if LAUNCH_BASENAME == "hyperwall_v8.exe":
+    if _is_isolated_launch():
         return
     if not os.path.exists(LAUNCHER_EXE):
         return

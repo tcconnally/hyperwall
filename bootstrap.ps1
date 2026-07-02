@@ -1,5 +1,5 @@
-# HyperWall 8.2 — one-shot bootstrap
-# Run from pwsh (PowerShell 7+):  pwsh -ExecutionPolicy Bypass -File .\bootstrap_v8.ps1
+# HyperWall — one-shot bootstrap
+# Run from pwsh (PowerShell 7+):  pwsh -ExecutionPolicy Bypass -File .\bootstrap.ps1
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
@@ -157,7 +157,7 @@ if (-not (Test-Path $npiPath)) {
 
 # ── 5. Build ──────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "[*] Building hyperwall_v8.exe..."
+Write-Host "[*] Building hyperwall.exe..."
 cmd /c "$ScriptDir\build.bat"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[FAIL] Build failed" -ForegroundColor Red
@@ -173,7 +173,7 @@ Write-Host "  Python: $(py --version 2>&1)"
 Write-Host "  mpv DLL: $dll"
 Write-Host "  NPI: $(if(Test-Path $npiPath){'present'}else{'missing'})"
 Write-Host "  Flask: $(py -c 'import flask; print(flask.__version__)' 2>&1)"
-Write-Host "  Exe: $(if(Test-Path "$ScriptDir\hyperwall_v8.exe"){'hyperwall_v8.exe built'}else{'NOT BUILT'})"
+Write-Host "  Exe: $(if(Test-Path "$ScriptDir\hyperwall.exe"){'hyperwall.exe built'}else{'NOT BUILT'})"
 Write-Host ""
-Write-Host "  Launch: .\hyperwall_v8.exe" -ForegroundColor Green
+Write-Host "  Launch: .\hyperwall.exe" -ForegroundColor Green
 Write-Host ""

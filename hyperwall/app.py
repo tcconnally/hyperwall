@@ -1,5 +1,5 @@
 """
-Hyperwall v9 — application bootstrap and main().
+Hyperwall — application bootstrap and main().
 
 Orchestrates startup: DLL registration, NVIDIA profile, config loading,
 Emby authentication, wizard, wall launch, and web remote.

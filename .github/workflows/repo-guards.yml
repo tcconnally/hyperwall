@@ -1,0 +1,22 @@
+name: repo-guards
+
+# Runs the no-dependency repo guards (tests/run_repo_guards.py) on every push
+# and PR. Guard #8 (test_08_no_versioned_exe_literals) fails the build if the
+# hyperwall_v8 / hardcoded-version drift ever creeps back — the permanent gate
+# for Epic 1 (Identity Unification). Full unit tests arrive in Epic 3 (#8).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run repo guards
+        run: python tests/run_repo_guards.py

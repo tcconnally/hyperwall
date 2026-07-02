@@ -1,11 +1,11 @@
 @echo off
-:: Hyperwall v9 — PyInstaller one-file build
-:: Produces hyperwall_v8.exe with embedded mpv-2.dll (if present)
+:: Hyperwall — PyInstaller one-file build
+:: Produces hyperwall.exe with embedded mpv-2.dll (if present)
 
 setlocal
 cd /d "%~dp0"
 
-echo === Hyperwall v9 Build ===
+echo === Hyperwall Build ===
 echo.
 
 :: Resolve a Python interpreter. Prefer the 'py' launcher, then fall back to
@@ -58,10 +58,10 @@ if exist "mpv-2.dll" (
     echo.
 )
 
-echo Building hyperwall_v8.exe...
+echo Building hyperwall.exe...
 %PY% -m PyInstaller ^
     --onefile ^
-    --name hyperwall_v8 ^
+    --name hyperwall ^
     %DLL_FLAG% ^
     --add-data "hyperwall.nip;." ^
     --console ^
@@ -71,12 +71,12 @@ echo Building hyperwall_v8.exe...
 if %errorlevel% equ 0 (
     echo.
     echo === Build Complete ===
-    echo Output: dist\hyperwall_v8.exe
-    copy /y "dist\hyperwall_v8.exe" "hyperwall_v8.exe"
+    echo Output: dist\hyperwall.exe
+    copy /y "dist\hyperwall.exe" "hyperwall.exe"
     if errorlevel 1 (
         echo WARNING: Could not copy exe to repo root.
     ) else (
-        echo Copied to hyperwall_v8.exe in repo root.
+        echo Copied to hyperwall.exe in repo root.
     )
 ) else (
     echo.

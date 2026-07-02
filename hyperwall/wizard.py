@@ -1,5 +1,5 @@
 """
-Hyperwall v9 — SetupWizard.
+Hyperwall — SetupWizard.
 
 Monitor + library + grid layout selection dialog.
 """
@@ -21,6 +21,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from . import VERSION_SHORT
+
 
 class SetupWizard(QDialog):
     """Pre-launch configuration dialog: select monitors, libraries, grid."""
@@ -35,7 +37,7 @@ class SetupWizard(QDialog):
         last_cols: int = 2,
     ):
         super().__init__()
-        self.setWindowTitle("HyperWall 9.0")
+        self.setWindowTitle(f"HyperWall {VERSION_SHORT}")
         self.resize(720, 540)
         self.setStyleSheet("""
             QDialog { background: #0e0e0e; color: #eee; font-family: 'Segoe UI'; }
@@ -62,7 +64,7 @@ class SetupWizard(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
 
-        title = QLabel("HYPERWALL  9.0")
+        title = QLabel(f"HYPERWALL  {VERSION_SHORT}")
         title.setStyleSheet(
             "font-size: 24px; font-weight: 900; color: white; letter-spacing: 3px;"
         )

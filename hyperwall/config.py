@@ -1,5 +1,5 @@
 """
-Hyperwall v9 — typed configuration management.
+Hyperwall — typed configuration management.
 
 Config is loaded once from config.ini, validated, and frozen into a dataclass.
 No raw ConfigParser access anywhere else in the codebase.
