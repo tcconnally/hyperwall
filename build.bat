@@ -8,13 +8,16 @@ cd /d "%~dp0"
 echo === Hyperwall v9 Build ===
 echo.
 
-:: Resolve a Python interpreter. Prefer the 'py' launcher (installed by
-:: python.org into a guaranteed-on-PATH location), then fall back to
-:: 'python' / 'python3'. Failing loudly here beats a silent fall-through.
+:: Resolve a Python interpreter. Prefer the 'py' launcher, then fall back to
+:: 'python' / 'python3'. IMPORTANT: probe with `where` (a real exe, safe to
+:: redirect) instead of running the interpreter under `>nul`. The Microsoft
+:: Store App Execution Aliases for py/python (used by the 3.14 Install
+:: Manager) return a nonzero exit code when their stdout is redirected to
+:: nul inside a batch, which would make a working interpreter look absent.
 set "PY="
-py -3 --version >nul 2>nul && set "PY=py -3"
-if not defined PY (python --version >nul 2>nul && set "PY=python")
-if not defined PY (python3 --version >nul 2>nul && set "PY=python3")
+where py >nul 2>nul && set "PY=py -3"
+if not defined PY (where python >nul 2>nul && set "PY=python")
+if not defined PY (where python3 >nul 2>nul && set "PY=python3")
 if not defined PY (
     echo ERROR: No Python interpreter found on PATH.
     echo.

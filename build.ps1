@@ -5,8 +5,11 @@ $ErrorActionPreference = "Stop"
 Write-Host "=== Hyperwall v9 Build ===" -ForegroundColor Cyan
 Write-Host ""
 
-# Resolve a Python interpreter. Prefer the 'py' launcher (guaranteed on PATH
-# from a python.org install), then fall back to 'python' / 'python3'. Each
+# Resolve a Python interpreter. Prefer the 'py' launcher, then fall back to
+# 'python' / 'python3'. Detect via Get-Command (resolves the name without
+# executing it) rather than running the interpreter under redirected streams:
+# the Store App Execution Aliases for py/python can misreport their exit code
+# when stdout is redirected, making a working interpreter look absent. Each
 # candidate is an exe plus a (possibly empty) fixed prefix of arguments.
 $pyExe  = $null
 $pyArgs = @()
@@ -15,12 +18,9 @@ foreach ($cand in @(
         @{ exe = "python";  pre = @()     },
         @{ exe = "python3"; pre = @()     })) {
     if (Get-Command $cand.exe -ErrorAction SilentlyContinue) {
-        & $cand.exe @($cand.pre + "--version") *> $null
-        if ($LASTEXITCODE -eq 0) {
-            $pyExe  = $cand.exe
-            $pyArgs = $cand.pre
-            break
-        }
+        $pyExe  = $cand.exe
+        $pyArgs = $cand.pre
+        break
     }
 }
 if (-not $pyExe) {
