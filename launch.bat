@@ -13,14 +13,20 @@ if not exist "hyperwall.exe" (
     exit /b %errorlevel%
 )
 
-:: Stale binary check: if exe is older than hyperwall.py, warn
-for %%F in (hyperwall.exe) do set EXE_TS=%%~tF
-for %%F in (hyperwall.py) do set SRC_TS=%%~tF
-
-:: Simple check: if hyperwall.py is newer than today, assume it changed
-for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set NOW=%%I
-
 echo === Hyperwall ===
+
+:: Stale-binary check: warn (don't block) if hyperwall.py is newer than the exe.
+:: Delegated to scripts\check_stale.ps1 (exit 2 = stale) so the comparison is
+:: real and unit-tested in CI, rather than computing timestamps and ignoring them.
+if exist "scripts\check_stale.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\check_stale.ps1" ^
+        -Source "hyperwall.py" -Exe "hyperwall.exe"
+    if errorlevel 2 (
+        echo Continuing with the existing exe. Press Ctrl+C to abort and rebuild.
+        timeout /t 3 >nul
+    )
+)
+
 echo Launching hyperwall.exe...
 echo.
 
