@@ -1,5 +1,5 @@
 """
-Hyperwall v9 — Emby REST API client.
+Hyperwall — Emby REST API client.
 
 Handles authentication, content loading, tag/favorite mutations,
 and cleanup of tagged items.
@@ -15,6 +15,8 @@ from typing import Any
 import requests
 import urllib3
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+
+from . import VERSION_SHORT
 
 logger = logging.getLogger("HyperWall")
 
@@ -56,7 +58,7 @@ class EmbyClient:
 
         self._session = requests.Session()
         self._session.headers.update({
-            "User-Agent": "HyperWall/9.0",
+            "User-Agent": f"HyperWall/{VERSION_SHORT}",
             "Accept": "application/json",
             "Accept-Encoding": "gzip, deflate",
         })
@@ -85,7 +87,7 @@ class EmbyClient:
                         "Content-Type": "application/json",
                         "X-Emby-Authorization": (
                             f'MediaBrowser Client="HyperWall", Device="PC", '
-                            f'DeviceId="{self._device_id}", Version="9.0"'
+                            f'DeviceId="{self._device_id}", Version="{VERSION_SHORT}"'
                         ),
                     },
                     json={"Username": self.username, "Pw": self._password},

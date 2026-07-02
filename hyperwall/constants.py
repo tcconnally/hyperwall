@@ -1,5 +1,5 @@
 """
-Hyperwall v9 — all tunable constants in one place.
+Hyperwall — all tunable constants in one place.
 
 MPV hardware tuning targets: NVIDIA Blackwell (nvdec/d3d11) + 240 Hz UltraGear.
 Values chosen for low-latency multi-cell playback with HDR hinting.
@@ -20,11 +20,11 @@ else:
 
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.ini")
 LOG_FILE = os.path.join(SCRIPT_DIR, "hyperwall.log")
-LAUNCHER_EXE = os.path.join(SCRIPT_DIR, "hyperwall_v8.exe")
+LAUNCHER_EXE = os.path.join(SCRIPT_DIR, "hyperwall.exe")
 NIP_FILE = os.path.join(SCRIPT_DIR, "hyperwall.nip")
 NPI_DIR = os.path.join(SCRIPT_DIR, "tools")
 NPI_EXE = os.path.join(NPI_DIR, "nvidiaProfileInspector.exe")
-NV_SENTINEL = os.path.join(SCRIPT_DIR, ".hyperwall_v8_nvprofile.sentinel")
+NV_SENTINEL = os.path.join(SCRIPT_DIR, ".hyperwall_nvprofile.sentinel")
 
 # ── UI scale ─────────────────────────────────────────────────────────────────
 # Controls are authored at 1.0 = 1080p-ish density. On 4K panels set

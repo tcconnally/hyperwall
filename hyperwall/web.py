@@ -1,5 +1,5 @@
 """
-Hyperwall v9 — Flask web remote server.
+Hyperwall — Flask web remote server.
 
 Provides a JSON API and a built-in dark-mode HTML control page
 for phone/tablet control on port 8585.

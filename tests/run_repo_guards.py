@@ -40,10 +40,10 @@ def test_01_entry_point_imports():
 def test_02_package_identity():
     """Package has version and banner."""
     from hyperwall import __version__, runtime_banner
-    assert __version__ == "9.0.0"
+    assert __version__ == "10.0.0"
     banner = runtime_banner()
     assert "Hyperwall" in banner
-    assert "9.0.0" in banner
+    assert "10.0.0" in banner
 
 
 def test_03_config_loads():
@@ -92,6 +92,49 @@ def test_07_empty_init_clean():
     assert __version__
 
 
+def test_08_no_versioned_exe_literals():
+    """No 'hyperwall_v<N>' or hardcoded old-version literals survive.
+
+    Epic 1 (Identity Unification): the exe is versionless ('hyperwall.exe')
+    and every version string derives from hyperwall.__init__.__version__.
+    A stray 'hyperwall_v8' / 'hyperwall_v9' literal or a hardcoded
+    'HyperWall/9.0'-style string means the drift is creeping back and G-Sync
+    isolation (gated on the exe basename) can silently break on the next bump.
+
+    __init__.py is exempt (it defines the single source of truth). This test
+    scans tracked Python + build scripts.
+    """
+    import re
+
+    # Files that carry exe names / version strings. Skip __init__.py (source
+    # of truth) and this test file (which references the forbidden patterns).
+    targets = [
+        "hyperwall/app.py", "hyperwall/cell.py", "hyperwall/config.py",
+        "hyperwall/constants.py", "hyperwall/emby.py", "hyperwall/nvidia.py",
+        "hyperwall/wall.py", "hyperwall/web.py", "hyperwall/wizard.py",
+        "build.bat", "build.ps1", "bootstrap.ps1", "launch.bat",
+    ]
+    # Forbidden: versioned exe basename, or a hardcoded HyperWall/<major>.<minor>
+    # / Version="<major>.<minor>" string (these must derive from VERSION_SHORT).
+    versioned_exe = re.compile(r"hyperwall_v\d")
+    hardcoded_ver = re.compile(r'(HyperWall/|Version=")\d+\.\d+')
+
+    offenders = []
+    for rel in targets:
+        path = os.path.join(REPO_ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            for lineno, line in enumerate(f, 1):
+                if versioned_exe.search(line) or hardcoded_ver.search(line):
+                    offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "Version drift detected — derive from hyperwall.__version__ / "
+        "VERSION_SHORT and use versionless 'hyperwall.exe':\n  "
+        + "\n  ".join(offenders)
+    )
+
+
 def run_all() -> int:
     """Run all repo guards. Returns number of failures."""
     tests = [
@@ -102,6 +145,7 @@ def run_all() -> int:
         test_05_config_template_exists,
         test_06_nip_file_exists,
         test_07_empty_init_clean,
+        test_08_no_versioned_exe_literals,
     ]
     passed = 0
     failed = 0

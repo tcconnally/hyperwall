@@ -4,7 +4,7 @@
     <ProfileName>HyperWall</ProfileName>
     <Executables>
       <ExecutableByName>
-        <Name>hyperwall_v8.exe</Name>
+        <Name>hyperwall.exe</Name>
       </ExecutableByName>
     </Executables>
     <Settings>

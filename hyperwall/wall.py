@@ -1,5 +1,5 @@
 """
-Hyperwall v9 — WallController.
+Hyperwall — WallController.
 
 Manages the multi-monitor video wall: creates fullscreen windows per monitor,
 populates them with VideoCell grids, handles keyboard shortcuts, filtering,

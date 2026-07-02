@@ -9,9 +9,11 @@ __pycache__/
 build/
 dist/
 *.spec
+hyperwall.exe
 hyperwall_v8.exe
 
 # ── NVIDIA sentinel (driver-version tracking) ──────────────────────────────
+.hyperwall_nvprofile.sentinel
 .hyperwall_v8_nvprofile.sentinel
 
 # ── Downloaded tools / DLLs ────────────────────────────────────────────────

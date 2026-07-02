@@ -1,4 +1,4 @@
-# Hyperwall v9
+# Hyperwall v10
 
 Fullscreen multi-monitor video wall for Emby media servers. Select displays
 and libraries in a wizard, and Hyperwall fills each monitor with a grid of
@@ -35,7 +35,7 @@ notepad config.ini    # fill in server_url, username, password
 # 4. Run
 .\launch.bat
 # or: python hyperwall.py
-# or: .\hyperwall_v8.exe  (recommended — enables G-Sync isolation)
+# or: .\hyperwall.exe  (recommended — enables G-Sync isolation)
 ```
 
 ## Requirements
@@ -109,6 +109,7 @@ Environment variables:
 | `HYPERWALL_HWDEC` | Override hardware decoder (nvdec, d3d11va, etc.) |
 | `HYPERWALL_VO` | Override video output (gpu-next, gpu) |
 | `HYPERWALL_NO_RELAUNCH=1` | Skip exe re-launch (script mode) |
+| `HYPERWALL_ISOLATED=1` | Force G-Sync isolation on (bypass exe-name check) |
 | `HYPERWALL_AUTO_TRANSCODE=0` | Disable auto-transcode heuristic |
 
 ## Building
@@ -118,7 +119,9 @@ pip install pyinstaller
 build.bat
 ```
 
-Produces `hyperwall_v8.exe` — the basename the NVIDIA profile targets.
+Produces `hyperwall.exe` — a versionless basename. G-Sync isolation is gated
+on the `hyperwall*.exe` prefix (or `HYPERWALL_ISOLATED=1`), so the exe name is
+stable across version bumps and the NVIDIA profile keeps matching.
 
 ## License
 

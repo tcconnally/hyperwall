@@ -1,5 +1,5 @@
 """
-Hyperwall v9 — VideoCell widget.
+Hyperwall — VideoCell widget.
 
 Embeds a libmpv player in a QFrame with overlaid controls.
 One VideoCell = one video in the wall grid.

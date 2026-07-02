@@ -1,5 +1,5 @@
 """
-Hyperwall v9 — version and package identity.
+Hyperwall — version and package identity.
 
 This module is intentionally dependency-free: it is imported before any
 heavy libs to print the runtime banner.
@@ -7,7 +7,10 @@ heavy libs to print the runtime banner.
 
 from __future__ import annotations
 
-__version__ = "9.0.0"
+__version__ = "10.0.0"
+# Short "major.minor" form, derived — used for User-Agent / Emby auth Version /
+# window titles so a version bump touches exactly ONE line (this file).
+VERSION_SHORT = ".".join(__version__.split(".")[:2])
 APP_NAME = "Hyperwall"
 PACKAGE_LABEL = "d3d11-native-embed"
 

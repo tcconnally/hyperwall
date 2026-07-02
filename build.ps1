@@ -1,8 +1,8 @@
-<# Hyperwall v9 — PyInstaller one-file build (PowerShell) #>
+<# Hyperwall — PyInstaller one-file build (PowerShell) #>
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "=== Hyperwall v9 Build ===" -ForegroundColor Cyan
+Write-Host "=== Hyperwall Build ===" -ForegroundColor Cyan
 Write-Host ""
 
 # Resolve a Python interpreter. Prefer the 'py' launcher, then fall back to
@@ -65,11 +65,11 @@ if (Test-Path "mpv-2.dll") {
 }
 
 # Build
-Write-Host "Building hyperwall_v8.exe..." -ForegroundColor Cyan
+Write-Host "Building hyperwall.exe..." -ForegroundColor Cyan
 
 $pyinstallerArgs = @(
     "--onefile",
-    "--name", "hyperwall_v8",
+    "--name", "hyperwall",
     "--add-data", "hyperwall.nip;.",
     "--console",
     "--clean",
@@ -79,7 +79,7 @@ $pyinstallerArgs = @(
 if ($dllFlag) {
     $pyinstallerArgs = @(
         "--onefile",
-        "--name", "hyperwall_v8",
+        "--name", "hyperwall",
         "--add-data", "mpv-2.dll;.",
         "--add-data", "hyperwall.nip;.",
         "--console",
@@ -93,10 +93,10 @@ if ($dllFlag) {
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "=== Build Complete ===" -ForegroundColor Green
-    Write-Host "Output: dist\hyperwall_v8.exe"
-    Copy-Item "dist\hyperwall_v8.exe" "hyperwall_v8.exe" -Force
+    Write-Host "Output: dist\hyperwall.exe"
+    Copy-Item "dist\hyperwall.exe" "hyperwall.exe" -Force
     if ($?) {
-        Write-Host "Copied to hyperwall_v8.exe in repo root."
+        Write-Host "Copied to hyperwall.exe in repo root."
     } else {
         Write-Host "WARNING: Could not copy exe to repo root." -ForegroundColor Yellow
     }
