@@ -25,6 +25,7 @@ SUITES = [
     "test_config",
     "test_playlist",
     "test_scenes",
+    "test_backends",
 ]
 
 

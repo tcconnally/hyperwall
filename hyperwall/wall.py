@@ -240,6 +240,7 @@ class WallController:
         url = build_stream_url(
             base=base, item_id=iid, api_key=key,
             session_id=sid, transcode=transcode,
+            static=self.client.backend.requires_static_true,
         )
         if transcode:
             tag = "TRANSCODE/retry" if force_transcode else "TRANSCODE/auto"
