@@ -8,11 +8,28 @@ cd /d "%~dp0"
 echo === Hyperwall v9 Build ===
 echo.
 
+:: Resolve a Python interpreter. Prefer the 'py' launcher (installed by
+:: python.org into a guaranteed-on-PATH location), then fall back to
+:: 'python' / 'python3'. Failing loudly here beats a silent fall-through.
+set "PY="
+py -3 --version >nul 2>nul && set "PY=py -3"
+if not defined PY (python --version >nul 2>nul && set "PY=python")
+if not defined PY (python3 --version >nul 2>nul && set "PY=python3")
+if not defined PY (
+    echo ERROR: No Python interpreter found on PATH.
+    echo.
+    echo Install Python 3 from https://www.python.org/downloads/ and make sure
+    echo "Add python.exe to PATH" is checked during setup, then open a NEW
+    echo terminal and re-run build.bat.
+    exit /b 1
+)
+echo Using interpreter: %PY%
+
 :: Verify dependencies
-python -c "import PyQt6; import requests; import flask" 2>nul
+%PY% -c "import PyQt6, requests, flask, PyInstaller" 2>nul
 if %errorlevel% neq 0 (
     echo Installing build dependencies...
-    python -m pip install pyqt6 requests flask pyinstaller
+    %PY% -m pip install pyqt6 requests flask pyinstaller
     if %errorlevel% neq 0 (
         echo ERROR: Failed to install dependencies.
         exit /b 1
@@ -39,7 +56,7 @@ if exist "mpv-2.dll" (
 )
 
 echo Building hyperwall_v8.exe...
-python -m PyInstaller ^
+%PY% -m PyInstaller ^
     --onefile ^
     --name hyperwall_v8 ^
     %DLL_FLAG% ^

@@ -5,13 +5,41 @@ $ErrorActionPreference = "Stop"
 Write-Host "=== Hyperwall v9 Build ===" -ForegroundColor Cyan
 Write-Host ""
 
+# Resolve a Python interpreter. Prefer the 'py' launcher (guaranteed on PATH
+# from a python.org install), then fall back to 'python' / 'python3'. Each
+# candidate is an exe plus a (possibly empty) fixed prefix of arguments.
+$pyExe  = $null
+$pyArgs = @()
+foreach ($cand in @(
+        @{ exe = "py";      pre = @("-3") },
+        @{ exe = "python";  pre = @()     },
+        @{ exe = "python3"; pre = @()     })) {
+    if (Get-Command $cand.exe -ErrorAction SilentlyContinue) {
+        & $cand.exe @($cand.pre + "--version") *> $null
+        if ($LASTEXITCODE -eq 0) {
+            $pyExe  = $cand.exe
+            $pyArgs = $cand.pre
+            break
+        }
+    }
+}
+if (-not $pyExe) {
+    Write-Host "ERROR: No Python interpreter found on PATH." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Install Python 3 from https://www.python.org/downloads/ and make sure"
+    Write-Host '"Add python.exe to PATH" is checked during setup, then open a NEW'
+    Write-Host "terminal and re-run build.ps1."
+    exit 1
+}
+Write-Host "Using interpreter: $pyExe $($pyArgs -join ' ')"
+
 # Verify dependencies
-python -c "import PyQt6; import requests; import flask" 2>$null
+& $pyExe @($pyArgs + @("-c", "import PyQt6, requests, flask, PyInstaller")) 2>$null
 $depsOk = ($LASTEXITCODE -eq 0)
 
 if (-not $depsOk) {
     Write-Host "Installing build dependencies..." -ForegroundColor Yellow
-    python -m pip install pyqt6 requests flask pyinstaller
+    & $pyExe @($pyArgs + @("-m", "pip", "install", "pyqt6", "requests", "flask", "pyinstaller"))
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Failed to install dependencies." -ForegroundColor Red
         exit 1
@@ -60,7 +88,7 @@ if ($dllFlag) {
     )
 }
 
-& python -m PyInstaller @pyinstallerArgs
+& $pyExe @($pyArgs + @("-m", "PyInstaller") + $pyinstallerArgs)
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
