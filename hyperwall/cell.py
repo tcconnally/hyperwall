@@ -67,7 +67,7 @@ from .constants import (
     WATCHDOG_INTERVAL_MS,
     apply_env_overrides,
 )
-from .reliability import is_stalled, should_park
+from .reliability import escalation_plan, is_stalled, should_park
 
 logger = logging.getLogger("HyperWall")
 
@@ -899,12 +899,13 @@ class VideoCell(QWidget):
         logger.warning(
             "Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES
         )
-        if self._retry_count <= MAX_RETRIES:
-            if self._retry_count >= 2 and not self._force_transcode:
+        plan = escalation_plan(self._retry_count, MAX_RETRIES)
+        if plan["action"] == "retry":
+            if plan["transcode"] and not self._force_transcode:
                 self._force_transcode = True
                 logger.info("Escalating to server transcode.")
             QTimer.singleShot(
-                (2 ** self._retry_count) * 1000,
+                plan["delay_s"] * 1000,
                 lambda: self._request_next_throttled(True),
             )
         else:

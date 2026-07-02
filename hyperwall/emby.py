@@ -26,15 +26,14 @@ _AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1"
 
 
 def needs_transcode(item: dict[str, Any]) -> bool:
-    """Heuristic: return True if the source exceeds 1080p."""
-    if not _AUTO_TRANSCODE:
-        return False
-    src = (item.get("MediaSources") or [{}])[0]
-    streams = src.get("MediaStreams") or item.get("MediaStreams") or []
-    v = next((s for s in streams if s.get("Type") == "Video"), {}) or {}
-    w = v.get("Width") or 0
-    h = v.get("Height") or 0
-    return w > 1920 or h > 1080
+    """Heuristic: return True if the source exceeds 1080p.
+
+    Thin wrapper over the pure helper in urls.py, binding the resolved
+    HYPERWALL_AUTO_TRANSCODE flag. Kept here for backward-compatible imports.
+    """
+    from .urls import needs_transcode as _needs_transcode
+
+    return _needs_transcode(item, auto_transcode=_AUTO_TRANSCODE)
 
 
 class EmbyClient:
