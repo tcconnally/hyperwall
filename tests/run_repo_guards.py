@@ -23,16 +23,22 @@ sys.path.insert(0, REPO_ROOT)
 
 def test_01_entry_point_imports():
     """hyperwall.app.main is importable."""
+    # This is a smoke test. It can only run when the heavy third-party deps
+    # (PyQt6, requests, flask, mpv) are installed. In a bare CI/dev env any one
+    # of them may be the first to be missing — skip gracefully on any of them
+    # rather than only PyQt6 (which was environment-dependent and flaky).
+    _OPTIONAL_DEPS = ("PyQt6", "requests", "flask", "mpv")
     try:
         from hyperwall.app import main
         assert callable(main)
     except ImportError as e:
-        if "PyQt6" in str(e):
+        missing = getattr(e, "name", "") or str(e)
+        if any(dep in str(e) or dep == missing for dep in _OPTIONAL_DEPS):
             # Clean up partially-loaded modules so they don't break later tests
             for mod in list(sys.modules):
                 if mod.startswith("hyperwall"):
                     del sys.modules[mod]
-            print("  SKIP  test_01_entry_point_imports (PyQt6 not installed)")
+            print(f"  SKIP  test_01_entry_point_imports ({missing} not installed)")
             return
         raise
 
