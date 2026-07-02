@@ -6,16 +6,12 @@ Write-Host "=== Hyperwall v9 Build ===" -ForegroundColor Cyan
 Write-Host ""
 
 # Verify dependencies
-$depsOk = $true
-try {
-    python -c "import PyQt6; import requests; import flask" 2>$null
-} catch {
-    $depsOk = $false
-}
+python -c "import PyQt6; import requests; import flask" 2>$null
+$depsOk = ($LASTEXITCODE -eq 0)
 
 if (-not $depsOk) {
     Write-Host "Installing build dependencies..." -ForegroundColor Yellow
-    pip install pyqt6 requests flask pyinstaller
+    python -m pip install pyqt6 requests flask pyinstaller
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Failed to install dependencies." -ForegroundColor Red
         exit 1
@@ -64,7 +60,7 @@ if ($dllFlag) {
     )
 }
 
-& pyinstaller @pyinstallerArgs
+& python -m PyInstaller @pyinstallerArgs
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
