@@ -287,6 +287,8 @@ def main() -> None:
         last_libraries=",".join(settings["libraries"]),
         last_grid_rows=settings["grid_rows"],
         last_grid_cols=settings["grid_cols"],
+        cleanup_on_startup=cfg.cleanup_on_startup,
+        scenes=cfg.scenes,  # preserve saved scene presets across the rewrite
     )
     cfg.save()
 

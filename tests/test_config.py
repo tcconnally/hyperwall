@@ -95,6 +95,29 @@ def test_defaults_applied_for_absent_settings():
         assert loaded.last_grid_rows == 2   # fallback default
         assert loaded.last_grid_cols == 2
         assert loaded.cleanup_on_startup is False
+        assert loaded.scenes == ()          # no [Scenes] section → empty
+
+
+def test_scenes_round_trip():
+    from hyperwall.scenes import scene_to_str, normalize_scene, scenes_from_mapping
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "config.ini")
+        cinema = normalize_scene("Cinema", {
+            "grid_rows": 3, "grid_cols": 4,
+            "libraries": ["Movies"], "filter": "favorites",
+        })
+        HyperwallConfig(
+            server_url="http://h", username="u", password="p",
+            scenes=(("Cinema", scene_to_str(cinema)),),
+        ).save(path)
+        loaded = HyperwallConfig.load(path)
+        assert len(loaded.scenes) == 1
+        name, blob = loaded.scenes[0]
+        assert name == "Cinema"
+        back = scenes_from_mapping(dict(loaded.scenes))[0]
+        assert back["grid_rows"] == 3
+        assert back["libraries"] == ["Movies"]
+        assert back["filter"] == "favorites"
 
 
 def run_all() -> int:

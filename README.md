@@ -145,7 +145,9 @@ python tests/run_all.py
 | `run_repo_guards` | Package structure + version-drift guard (no `hyperwall_v<N>` / hardcoded version literals) |
 | `test_reliability` | Stall watchdog, crash-loop guard, cache-budget scaling, retry→transcode→skip escalation |
 | `test_urls` | Emby URL construction (incl. load-bearing `static=true`) + transcode heuristic boundaries |
-| `test_config` | `config.ini` save/load round-trip, typed fields, frozen dataclass |
+| `test_config` | `config.ini` save/load round-trip, typed fields, frozen dataclass, scene presets |
+| `test_playlist` | Multi-source playout: per-group de-dup, refill/reshuffle, group independence |
+| `test_scenes` | Scene-preset serialization round-trip + malformed-input safety |
 
 ## License
 
