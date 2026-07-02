@@ -273,7 +273,6 @@ function refresh(){
     });
   }).catch(e=>{document.getElementById('status').textContent='disconnected'})
 }
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 setInterval(refresh,3000);
 refresh();
 </script>
