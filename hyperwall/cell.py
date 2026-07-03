@@ -68,6 +68,7 @@ from .constants import (
     apply_env_overrides,
 )
 from .reliability import escalation_plan, is_stalled, should_park
+from . import theme
 
 logger = logging.getLogger("HyperWall")
 
@@ -77,26 +78,45 @@ def _s(px: int) -> int:
     return max(1, int(px * UI_SCALE))
 
 
+# Glassy translucent control bar, on-brand accent, rounded top. Buttons are
+# borderless and quiet at rest, lifting to the accent on hover/active so the
+# bar reads as one slab instead of a row of grey chips.
 CTRL_STYLE = f"""
     QFrame#controls {{
-        background: rgba(22, 22, 22, 210);
-        border-top: 1px solid rgba(255, 255, 255, 22);
-        border-radius: 4px 4px 0 0;
+        background: {theme.rgba(theme.SURFACE_0, 0.86)};
+        border-top: 1px solid {theme.rgba(theme.ACCENT_BRIGHT, 0.22)};
+        border-radius: {_s(8)}px {_s(8)}px 0 0;
     }}
-    QLabel {{ color: #ccc; font-family: 'Segoe UI', system-ui, sans-serif; font-size: {_s(9)}px; background: transparent; }}
+    QLabel {{ color: {theme.TEXT_DIM}; font-family: {theme.FONT}; font-size: {_s(9)}px; background: transparent; }}
     QPushButton {{
-        background: rgba(80, 80, 80, 180); border: 1px solid rgba(255,255,255,20);
-        border-radius: 2px; color: #eee; font-size: {_s(11)}px; padding: 1px;
-        min-width: {_s(22)}px; min-height: {_s(22)}px; max-width: {_s(22)}px; max-height: {_s(22)}px;
+        background: {theme.rgba('#ffffff', 0.06)}; border: none;
+        border-radius: {_s(5)}px; color: {theme.TEXT}; font-size: {_s(11)}px; padding: 1px;
+        min-width: {_s(24)}px; min-height: {_s(24)}px; max-width: {_s(24)}px; max-height: {_s(24)}px;
     }}
-    QPushButton:hover   {{ background: #2563a8; border-color: #3b8edb; color: white; }}
-    QPushButton:checked {{ background: #1e4f78; border-color: #3b8edb; color: white; }}
-    QSlider::groove:horizontal {{ background: rgba(100,100,100,180); height: {_s(3)}px; border-radius: 1px; }}
-    QSlider::sub-page:horizontal {{ background: rgba(59,142,219,200); border-radius: 1px; }}
+    QPushButton:hover   {{ background: {theme.ACCENT}; color: white; }}
+    QPushButton:pressed {{ background: {theme.ACCENT_DEEP}; }}
+    QPushButton:checked {{ background: {theme.ACCENT_DIM}; color: white; }}
+    QSlider::groove:horizontal {{ background: {theme.rgba('#ffffff', 0.16)}; height: {_s(3)}px; border-radius: {_s(2)}px; }}
+    QSlider::sub-page:horizontal {{ background: {theme.ACCENT}; border-radius: {_s(2)}px; }}
     QSlider::handle:horizontal {{
-        background: rgba(220,220,220,220); width: {_s(8)}px; margin: -2px 0; border-radius: {_s(4)}px;
+        background: #ffffff; width: {_s(9)}px; height: {_s(9)}px; margin: {_s(-3)}px 0; border-radius: {_s(5)}px;
     }}
+    QSlider::handle:horizontal:hover {{ background: {theme.ACCENT_BRIGHT}; }}
 """
+
+# Title card = translucent pill with a left accent spine. Loading card reuses
+# the pill but in accent, tracked with a gentle opacity pulse (see cell init).
+_TITLE_STYLE = (
+    f"color: {theme.TEXT}; background: {theme.rgba(theme.SURFACE_0, 0.82)};"
+    f" border-left: {_s(3)}px solid {theme.ACCENT};"
+    f" font-family: {theme.FONT}; font-size: {_s(13)}px; font-weight: 700;"
+    f" padding: {_s(5)}px {_s(14)}px; border-radius: {_s(4)}px;"
+)
+_LOADING_STYLE = (
+    f"color: {theme.ACCENT_BRIGHT}; background: {theme.rgba(theme.SURFACE_0, 0.82)};"
+    f" font-family: {theme.FONT}; font-size: {_s(12)}px; font-weight: 800;"
+    f" letter-spacing: {_s(3)}px; padding: {_s(5)}px {_s(16)}px; border-radius: {_s(4)}px;"
+)
 
 
 class ClickSlider(QSlider):
@@ -144,6 +164,7 @@ class VideoCell(QWidget):
         self._emby_session_id: str | None = None
         self._emby_item_id: str | None = None
         self._switching = False  # set in play(), consumed in _handle_eof
+        self._audio_started = False  # True once an audio track has been selected
 
         # Reliability / self-healing (Epic 2)
         self._last_progress_ts = 0.0   # monotonic ts of last time-pos advance
@@ -195,12 +216,7 @@ class VideoCell(QWidget):
         self._title_overlay = QLabel("", self)
         self._title_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_overlay.setWordWrap(False)
-        self._title_overlay.setStyleSheet(
-            f"color: white; background: rgba(0,0,0,180);"
-            f" font-family: 'Segoe UI', system-ui, sans-serif;"
-            f" font-size: {_s(13)}px; font-weight: 600;"
-            f" padding: {_s(5)}px {_s(14)}px; border-radius: 4px;"
-        )
+        self._title_overlay.setStyleSheet(_TITLE_STYLE)
         self._title_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._title_overlay.hide()
 
@@ -213,6 +229,17 @@ class VideoCell(QWidget):
         self._overlay_show_timer = QTimer(self)
         self._overlay_show_timer.setSingleShot(True)
         self._overlay_show_timer.timeout.connect(self._fade_overlay_out)
+
+        # Looping opacity pulse for the "LOADING" card. Runs only between the
+        # cell becoming visible and its first frame — stopped by
+        # _show_title_overlay — so it never animates during steady playback.
+        self._loading_pulse = QPropertyAnimation(self._overlay_effect, b"opacity", self)
+        self._loading_pulse.setDuration(1100)
+        self._loading_pulse.setStartValue(1.0)
+        self._loading_pulse.setKeyValueAt(0.5, 0.4)
+        self._loading_pulse.setEndValue(1.0)
+        self._loading_pulse.setLoopCount(-1)
+        self._loading_pulse.setEasingCurve(QEasingCurve.Type.InOutSine)
 
         self.setMouseTracking(True)
         self._sig_eof.connect(self._handle_eof, Qt.ConnectionType.QueuedConnection)
@@ -267,6 +294,15 @@ class VideoCell(QWidget):
             m["mute"] = self.muted
         except Exception as e:
             logger.debug("mpv: failed to set initial mute: %s", e)
+        # Don't decode an audio track for a muted cell (the wall's default):
+        # aid=no skips audio demux+decode for that cell, which adds up across
+        # the grid. The track is (re)selected lazily on first unmute via
+        # _enable_audio_track(), so no reload is needed to hear a cell.
+        self._audio_started = not self.muted
+        try:
+            m["aid"] = "auto" if self._audio_started else "no"
+        except Exception as e:
+            logger.debug("mpv: failed to set initial aid: %s", e)
         if self.looping:
             try:
                 m["loop-file"] = "inf"
@@ -387,7 +423,7 @@ class VideoCell(QWidget):
         self.video_frame.winId()  # force native window creation
         if not self._played_anything and self.current_item is None:
             # Visual feedback while staggered startup loads content.
-            self._show_title_overlay("Loading…")
+            self._show_loading()
 
     def resizeEvent(self, event: Any) -> None:
         super().resizeEvent(event)
@@ -632,6 +668,8 @@ class VideoCell(QWidget):
     def _show_title_overlay(self, title: str) -> None:
         self._overlay_show_timer.stop()
         self._overlay_anim.stop()
+        self._loading_pulse.stop()
+        self._title_overlay.setStyleSheet(_TITLE_STYLE)
         self._title_overlay.setText(title)
         self._overlay_effect.setOpacity(1.0)
         self._title_overlay.adjustSize()
@@ -639,6 +677,25 @@ class VideoCell(QWidget):
         self._title_overlay.show()
         self._title_overlay.raise_()
         self._overlay_show_timer.start(OVERLAY_SHOW_MS)
+
+    def _show_loading(self) -> None:
+        """Show a pulsing 'LOADING' card until the first frame arrives.
+
+        Unlike the title card this does not auto-fade — it stays (pulsing)
+        until play() swaps in the real title, so a slow-loading cell still
+        reads as busy rather than blank.
+        """
+        self._overlay_show_timer.stop()
+        self._overlay_anim.stop()
+        self._title_overlay.setStyleSheet(_LOADING_STYLE)
+        self._title_overlay.setText("LOADING")
+        self._title_overlay.adjustSize()
+        self._reposition_overlay()
+        self._title_overlay.show()
+        self._title_overlay.raise_()
+        self._overlay_effect.setOpacity(1.0)
+        self._loading_pulse.stop()
+        self._loading_pulse.start()
 
     def _reposition_overlay(self) -> None:
         vw = self.video_frame
@@ -717,9 +774,26 @@ class VideoCell(QWidget):
             except Exception as e:
                 logger.debug("toggle_loop failed: %s", e)
 
+    def _enable_audio_track(self) -> None:
+        """Lazily (re)select an audio track the first time a cell is unmuted.
+
+        Muted cells load with aid=no (see _ensure_mpv) so the grid doesn't
+        decode audio it never plays; this restores the track on demand without
+        a full reload. No-op once a track is already selected.
+        """
+        if self._audio_started or self._mpv is None:
+            return
+        try:
+            self._mpv["aid"] = "auto"
+            self._audio_started = True
+        except Exception as e:
+            logger.debug("enable audio track failed: %s", e)
+
     def _toggle_mute(self) -> None:
         muted = self.btn_mute.isChecked()
         self.muted = muted
+        if not muted:
+            self._enable_audio_track()
         if self._mpv is not None:
             try:
                 self._mpv["mute"] = muted
@@ -737,6 +811,7 @@ class VideoCell(QWidget):
                 logger.debug("vol_changed failed: %s", e)
         if val > 0 and self.muted:
             self.muted = False
+            self._enable_audio_track()
             if self._mpv is not None:
                 try:
                     self._mpv["mute"] = False

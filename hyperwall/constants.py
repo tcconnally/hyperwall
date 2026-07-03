@@ -81,7 +81,13 @@ CACHE_BUDGET_MB = _int_env("HYPERWALL_CACHE_BUDGET_MB", 3_072, 128, 65_536)
 MPV_OPTS: dict[str, object] = dict(
     vo="gpu-next",
     gpu_api="d3d11",
-    hwdec="nvdec-copy",
+    # d3d11va decodes straight into D3D11 textures that the gpu-next/d3d11
+    # renderer consumes directly — no decode-surface copy back to system RAM
+    # like nvdec-copy, and no CUDA↔D3D11 interop cost like non-copy nvdec.
+    # Benchmarked on skyhawk (RTX 5070 Ti, 8-cell wall): ~30% lower VRAM
+    # (~3.2 GB → ~2.2 GB) at equal CPU/power and zero frame drops. If a
+    # driver/GPU regresses, override with HYPERWALL_HWDEC=nvdec-copy.
+    hwdec="d3d11va",
     profile="fast",
     video_sync="audio",
     video_sync_max_video_change=5,
