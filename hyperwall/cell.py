@@ -96,6 +96,8 @@ CTRL_STYLE = f"""
     QPushButton:hover   {{ background: {theme.ACCENT}; color: white; }}
     QPushButton:pressed {{ background: {theme.ACCENT_DEEP}; }}
     QPushButton:checked {{ background: {theme.ACCENT_DIM}; color: white; }}
+    /* Favorite / trash: active state is the colored glyph, not an accent block. */
+    QPushButton#favBtn:checked, QPushButton#tagBtn:checked {{ background: {theme.rgba('#ffffff', 0.06)}; color: {theme.TEXT}; }}
     QSlider::groove:horizontal {{ background: {theme.rgba('#ffffff', 0.16)}; height: {_s(3)}px; border-radius: {_s(2)}px; }}
     QSlider::sub-page:horizontal {{ background: {theme.ACCENT}; border-radius: {_s(2)}px; }}
     QSlider::handle:horizontal {{
@@ -117,6 +119,22 @@ _LOADING_STYLE = (
     f" font-family: {theme.FONT}; font-size: {_s(12)}px; font-weight: 800;"
     f" letter-spacing: {_s(3)}px; padding: {_s(5)}px {_s(16)}px; border-radius: {_s(4)}px;"
 )
+
+# Icon glyphs. A trailing VS15 (U+FE0E) forces the monochrome text glyph, which
+# the control-bar QSS `color` then tints to match the bar; VS16 (U+FE0F) restores
+# the native color glyph. The bar reads monochrome — only an *active* favorite
+# (gold star) or trash flag (red bin) lights up, so those states pop at a glance.
+_MONO = "︎"   # VS15 - force monochrome text glyph
+_COLOR = "️"  # VS16 - force color emoji glyph
+_G_PREV = "⏮" + _MONO
+_G_PAUSE = "⏸" + _MONO   # shown while playing (click → pause)
+_G_PLAY = "▶" + _MONO    # shown while paused  (click → play)
+_G_NEXT = "⏭" + _MONO
+_G_LOOP = "🔁" + _MONO
+_G_MUTE = "🔇" + _MONO
+_G_UNMUTE = "🔊" + _MONO
+_G_TRASH = "🗑"           # presentation selector added by _refresh_tag_glyph()
+_G_FAV = "⭐"            # presentation selector added by _refresh_fav_glyph()
 
 
 class ClickSlider(QSlider):
@@ -485,6 +503,8 @@ class VideoCell(QWidget):
         self.btn_fav.setChecked(
             item.get("UserData", {}).get("IsFavorite", False)
         )
+        self._refresh_tag_glyph()
+        self._refresh_fav_glyph()
 
         # Determine if we need to recreate mpv
         need_create = self._mpv is None or self._force_transcode
@@ -520,7 +540,7 @@ class VideoCell(QWidget):
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
             self._paused = False
-            self.btn_play.setText("⏸")
+            self.btn_play.setText(_G_PAUSE)
         except Exception as e:
             self._switching = False
             logger.error("mpv loadfile failed: %s", e)
@@ -571,14 +591,18 @@ class VideoCell(QWidget):
             b.setCheckable(checkable)
             return b
 
-        self.btn_prev = _btn("⏮")
-        self.btn_play = _btn("⏸")
-        self.btn_next = _btn("⏭")
-        self.btn_loop = _btn("🔁", checkable=True)
-        self.btn_tag = _btn("🗑", checkable=True)
-        self.btn_fav = _btn("⭐", checkable=True)
-        self.btn_mute = _btn("🔇", checkable=True)
+        self.btn_prev = _btn(_G_PREV)
+        self.btn_play = _btn(_G_PAUSE)
+        self.btn_next = _btn(_G_NEXT)
+        self.btn_loop = _btn(_G_LOOP, checkable=True)
+        self.btn_tag = _btn(_G_TRASH + _MONO, checkable=True)
+        self.btn_fav = _btn(_G_FAV + _MONO, checkable=True)
+        self.btn_mute = _btn(_G_MUTE, checkable=True)
         self.btn_mute.setChecked(True)
+        # Named so their active (checked) state keeps a neutral bar-tone fill —
+        # the colored glyph, not an accent block, signals fav/flag (see CTRL_STYLE).
+        self.btn_fav.setObjectName("favBtn")
+        self.btn_tag.setObjectName("tagBtn")
 
         self.vol_slider = QSlider(Qt.Orientation.Horizontal)
         self.vol_slider.setRange(0, 100)
@@ -750,7 +774,7 @@ class VideoCell(QWidget):
                 self._mpv.seek(target, "absolute")
                 self._mpv["pause"] = False
                 self._paused = False
-                self.btn_play.setText("⏸")
+                self.btn_play.setText(_G_PAUSE)
             except Exception as e:
                 logger.warning("seek failed: %s", e)
         self._dragging = False
@@ -762,7 +786,7 @@ class VideoCell(QWidget):
             new_pause = not bool(self._mpv["pause"])
             self._mpv["pause"] = new_pause
             self._paused = new_pause
-            self.btn_play.setText("▶" if new_pause else "⏸")
+            self.btn_play.setText(_G_PLAY if new_pause else _G_PAUSE)
         except Exception as e:
             logger.debug("toggle_play failed: %s", e)
 
@@ -799,7 +823,7 @@ class VideoCell(QWidget):
                 self._mpv["mute"] = muted
             except Exception as e:
                 logger.debug("toggle_mute failed: %s", e)
-        self.btn_mute.setText("🔇" if muted else "🔊")
+        self.btn_mute.setText(_G_MUTE if muted else _G_UNMUTE)
         if not muted and self.vol_slider.value() == 0:
             self.vol_slider.setValue(70)
 
@@ -818,7 +842,7 @@ class VideoCell(QWidget):
                 except Exception as e:
                     logger.debug("vol_changed mute-clear failed: %s", e)
             self.btn_mute.setChecked(False)
-            self.btn_mute.setText("🔊")
+            self.btn_mute.setText(_G_UNMUTE)
         elif val == 0 and not self.muted:
             self.muted = True
             if self._mpv is not None:
@@ -827,7 +851,7 @@ class VideoCell(QWidget):
                 except Exception as e:
                     logger.debug("vol_changed mute-set failed: %s", e)
             self.btn_mute.setChecked(True)
-            self.btn_mute.setText("🔇")
+            self.btn_mute.setText(_G_MUTE)
 
     def _toggle_tag(self) -> None:
         if not self.current_item:
@@ -844,14 +868,28 @@ class VideoCell(QWidget):
             tags.append("ToDelete")
         self.current_item["Tags"] = tags
         self.btn_tag.setChecked("ToDelete" in tags)
+        self._refresh_tag_glyph()
         self.controller.update_tags(self.current_item)
 
     def _toggle_fav(self) -> None:
         if not self.current_item:
             return
         new = self.btn_fav.isChecked()
+        self._refresh_fav_glyph()
         self.current_item.setdefault("UserData", {})["IsFavorite"] = new
         self.controller.update_favorite(self.current_item["Id"], new)
+
+    def _refresh_fav_glyph(self) -> None:
+        """Gold star when favorited, monochrome otherwise."""
+        self.btn_fav.setText(
+            _G_FAV + (_COLOR if self.btn_fav.isChecked() else _MONO)
+        )
+
+    def _refresh_tag_glyph(self) -> None:
+        """Red bin when flagged for deletion, monochrome otherwise."""
+        self.btn_tag.setText(
+            _G_TRASH + (_COLOR if self.btn_tag.isChecked() else _MONO)
+        )
 
     # ── EOF / error handling ──────────────────────────────────────────────
 
