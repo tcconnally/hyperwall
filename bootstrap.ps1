@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
-Write-Host "==================== HYPERWALL 8.2 BOOTSTRAP ====================" -ForegroundColor Cyan
+Write-Host "==================== HYPERWALL v10 BOOTSTRAP ====================" -ForegroundColor Cyan
 Write-Host ""
 
 # ── 1. Python check ──────────────────────────────────────────────────
@@ -158,6 +158,9 @@ if (-not (Test-Path $npiPath)) {
 # ── 5. Build ──────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "[*] Building hyperwall.exe..."
+# Hand build.bat the interpreter we already validated above so it doesn't
+# re-detect Python from scratch in cmd (that probe misses some PATH setups).
+$env:HYPERWALL_PY = "py"
 cmd /c "$ScriptDir\build.bat"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[FAIL] Build failed" -ForegroundColor Red

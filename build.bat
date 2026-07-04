@@ -15,7 +15,12 @@ echo.
 :: Manager) return a nonzero exit code when their stdout is redirected to
 :: nul inside a batch, which would make a working interpreter look absent.
 set "PY="
-where py >nul 2>nul && set "PY=py -3"
+:: Honor an interpreter handed in by bootstrap.ps1 (it already validated one),
+:: so the build doesn't hinge on a second PATH probe from cmd that can miss
+:: Python installs the PowerShell session resolves fine (e.g. the 3.14 Install
+:: Manager / app-execution aliases).
+if defined HYPERWALL_PY set "PY=%HYPERWALL_PY%"
+if not defined PY (where py >nul 2>nul && set "PY=py -3")
 if not defined PY (where python >nul 2>nul && set "PY=python")
 if not defined PY (where python3 >nul 2>nul && set "PY=python3")
 if not defined PY (
