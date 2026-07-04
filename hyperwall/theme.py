@@ -36,6 +36,8 @@ ACCENT_DEEP   = "#163a5c"
 DANGER     = "#d43535"
 DANGER_DIM = "#8b1a1a"
 
+FAVORITE   = "#f5c518"  # gold — active-favorite glyph tint
+
 FONT = "'Segoe UI', system-ui, sans-serif"
 
 RADIUS    = 6
