@@ -17,7 +17,7 @@ hyperwall_v8.exe
 .hyperwall_v8_nvprofile.sentinel
 
 # ── Downloaded tools / DLLs ────────────────────────────────────────────────
-tools/nvidiaProfileInspector.exe
+tools/
 mpv-2.dll
 libmpv-2.dll
 7zr.exe

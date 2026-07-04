@@ -38,6 +38,7 @@ from .constants import (
 from .emby import EmbyClient, CleanupWorker
 from .backends import resolve_backend
 from .nvidia import ensure_nvidia_profile, maybe_relaunch_in_isolation
+from . import theme
 from .wizard import SetupWizard
 from .wall import WallController, MouseIdleHider
 
@@ -200,7 +201,7 @@ def main() -> None:
             pass
 
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+    theme.apply(app)
 
     # 5. NVIDIA profile
     ensure_nvidia_profile()

@@ -68,6 +68,7 @@ from .constants import (
     apply_env_overrides,
 )
 from .reliability import escalation_plan, is_stalled, should_park
+from . import theme
 
 logger = logging.getLogger("HyperWall")
 
@@ -77,26 +78,63 @@ def _s(px: int) -> int:
     return max(1, int(px * UI_SCALE))
 
 
+# Glassy translucent control bar, on-brand accent, rounded top. Buttons are
+# borderless and quiet at rest, lifting to the accent on hover/active so the
+# bar reads as one slab instead of a row of grey chips.
 CTRL_STYLE = f"""
     QFrame#controls {{
-        background: rgba(22, 22, 22, 210);
-        border-top: 1px solid rgba(255, 255, 255, 22);
-        border-radius: 4px 4px 0 0;
+        background: {theme.rgba(theme.SURFACE_0, 0.86)};
+        border-top: 1px solid {theme.rgba(theme.ACCENT_BRIGHT, 0.22)};
+        border-radius: {_s(8)}px {_s(8)}px 0 0;
     }}
-    QLabel {{ color: #ccc; font-family: 'Segoe UI', system-ui, sans-serif; font-size: {_s(9)}px; background: transparent; }}
+    QLabel {{ color: {theme.TEXT_DIM}; font-family: {theme.FONT}; font-size: {_s(9)}px; background: transparent; }}
     QPushButton {{
-        background: rgba(80, 80, 80, 180); border: 1px solid rgba(255,255,255,20);
-        border-radius: 2px; color: #eee; font-size: {_s(11)}px; padding: 1px;
-        min-width: {_s(22)}px; min-height: {_s(22)}px; max-width: {_s(22)}px; max-height: {_s(22)}px;
+        background: {theme.rgba('#ffffff', 0.06)}; border: none;
+        border-radius: {_s(5)}px; color: {theme.TEXT}; font-size: {_s(11)}px; padding: 1px;
+        min-width: {_s(24)}px; min-height: {_s(24)}px; max-width: {_s(24)}px; max-height: {_s(24)}px;
     }}
-    QPushButton:hover   {{ background: #2563a8; border-color: #3b8edb; color: white; }}
-    QPushButton:checked {{ background: #1e4f78; border-color: #3b8edb; color: white; }}
-    QSlider::groove:horizontal {{ background: rgba(100,100,100,180); height: {_s(3)}px; border-radius: 1px; }}
-    QSlider::sub-page:horizontal {{ background: rgba(59,142,219,200); border-radius: 1px; }}
+    QPushButton:hover   {{ background: {theme.ACCENT}; color: white; }}
+    QPushButton:pressed {{ background: {theme.ACCENT_DEEP}; }}
+    QPushButton:checked {{ background: {theme.ACCENT_DIM}; color: white; }}
+    /* Favorite / trash: active state is the colored glyph, not an accent block. */
+    QPushButton#favBtn:checked, QPushButton#tagBtn:checked {{ background: {theme.rgba('#ffffff', 0.06)}; color: {theme.TEXT}; }}
+    QSlider::groove:horizontal {{ background: {theme.rgba('#ffffff', 0.16)}; height: {_s(3)}px; border-radius: {_s(2)}px; }}
+    QSlider::sub-page:horizontal {{ background: {theme.ACCENT}; border-radius: {_s(2)}px; }}
     QSlider::handle:horizontal {{
-        background: rgba(220,220,220,220); width: {_s(8)}px; margin: -2px 0; border-radius: {_s(4)}px;
+        background: #ffffff; width: {_s(9)}px; height: {_s(9)}px; margin: {_s(-3)}px 0; border-radius: {_s(5)}px;
     }}
+    QSlider::handle:horizontal:hover {{ background: {theme.ACCENT_BRIGHT}; }}
 """
+
+# Title card = translucent pill with a left accent spine. Loading card reuses
+# the pill but in accent, tracked with a gentle opacity pulse (see cell init).
+_TITLE_STYLE = (
+    f"color: {theme.TEXT}; background: {theme.rgba(theme.SURFACE_0, 0.82)};"
+    f" border-left: {_s(3)}px solid {theme.ACCENT};"
+    f" font-family: {theme.FONT}; font-size: {_s(13)}px; font-weight: 700;"
+    f" padding: {_s(5)}px {_s(14)}px; border-radius: {_s(4)}px;"
+)
+_LOADING_STYLE = (
+    f"color: {theme.ACCENT_BRIGHT}; background: {theme.rgba(theme.SURFACE_0, 0.82)};"
+    f" font-family: {theme.FONT}; font-size: {_s(12)}px; font-weight: 800;"
+    f" letter-spacing: {_s(3)}px; padding: {_s(5)}px {_s(16)}px; border-radius: {_s(4)}px;"
+)
+
+# Icon glyphs. A trailing VS15 (U+FE0E) forces the monochrome text glyph, which
+# the control-bar QSS `color` then tints to match the bar; VS16 (U+FE0F) restores
+# the native color glyph. The bar reads monochrome — only an *active* favorite
+# (gold star) or trash flag (red bin) lights up, so those states pop at a glance.
+_MONO = "︎"   # VS15 - force monochrome text glyph
+_COLOR = "️"  # VS16 - force color emoji glyph
+_G_PREV = "⏮" + _MONO
+_G_PAUSE = "⏸" + _MONO   # shown while playing (click → pause)
+_G_PLAY = "▶" + _MONO    # shown while paused  (click → play)
+_G_NEXT = "⏭" + _MONO
+_G_LOOP = "🔁" + _MONO
+_G_MUTE = "🔇" + _MONO
+_G_UNMUTE = "🔊" + _MONO
+_G_TRASH = "🗑"           # presentation selector added by _refresh_tag_glyph()
+_G_FAV = "⭐"            # presentation selector added by _refresh_fav_glyph()
 
 
 class ClickSlider(QSlider):
@@ -144,6 +182,7 @@ class VideoCell(QWidget):
         self._emby_session_id: str | None = None
         self._emby_item_id: str | None = None
         self._switching = False  # set in play(), consumed in _handle_eof
+        self._audio_started = False  # True once an audio track has been selected
 
         # Reliability / self-healing (Epic 2)
         self._last_progress_ts = 0.0   # monotonic ts of last time-pos advance
@@ -195,12 +234,7 @@ class VideoCell(QWidget):
         self._title_overlay = QLabel("", self)
         self._title_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_overlay.setWordWrap(False)
-        self._title_overlay.setStyleSheet(
-            f"color: white; background: rgba(0,0,0,180);"
-            f" font-family: 'Segoe UI', system-ui, sans-serif;"
-            f" font-size: {_s(13)}px; font-weight: 600;"
-            f" padding: {_s(5)}px {_s(14)}px; border-radius: 4px;"
-        )
+        self._title_overlay.setStyleSheet(_TITLE_STYLE)
         self._title_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._title_overlay.hide()
 
@@ -213,6 +247,17 @@ class VideoCell(QWidget):
         self._overlay_show_timer = QTimer(self)
         self._overlay_show_timer.setSingleShot(True)
         self._overlay_show_timer.timeout.connect(self._fade_overlay_out)
+
+        # Looping opacity pulse for the "LOADING" card. Runs only between the
+        # cell becoming visible and its first frame — stopped by
+        # _show_title_overlay — so it never animates during steady playback.
+        self._loading_pulse = QPropertyAnimation(self._overlay_effect, b"opacity", self)
+        self._loading_pulse.setDuration(1100)
+        self._loading_pulse.setStartValue(1.0)
+        self._loading_pulse.setKeyValueAt(0.5, 0.4)
+        self._loading_pulse.setEndValue(1.0)
+        self._loading_pulse.setLoopCount(-1)
+        self._loading_pulse.setEasingCurve(QEasingCurve.Type.InOutSine)
 
         self.setMouseTracking(True)
         self._sig_eof.connect(self._handle_eof, Qt.ConnectionType.QueuedConnection)
@@ -267,6 +312,15 @@ class VideoCell(QWidget):
             m["mute"] = self.muted
         except Exception as e:
             logger.debug("mpv: failed to set initial mute: %s", e)
+        # Don't decode an audio track for a muted cell (the wall's default):
+        # aid=no skips audio demux+decode for that cell, which adds up across
+        # the grid. The track is (re)selected lazily on first unmute via
+        # _enable_audio_track(), so no reload is needed to hear a cell.
+        self._audio_started = not self.muted
+        try:
+            m["aid"] = "auto" if self._audio_started else "no"
+        except Exception as e:
+            logger.debug("mpv: failed to set initial aid: %s", e)
         if self.looping:
             try:
                 m["loop-file"] = "inf"
@@ -387,7 +441,7 @@ class VideoCell(QWidget):
         self.video_frame.winId()  # force native window creation
         if not self._played_anything and self.current_item is None:
             # Visual feedback while staggered startup loads content.
-            self._show_title_overlay("Loading…")
+            self._show_loading()
 
     def resizeEvent(self, event: Any) -> None:
         super().resizeEvent(event)
@@ -449,6 +503,8 @@ class VideoCell(QWidget):
         self.btn_fav.setChecked(
             item.get("UserData", {}).get("IsFavorite", False)
         )
+        self._refresh_tag_glyph()
+        self._refresh_fav_glyph()
 
         # Determine if we need to recreate mpv
         need_create = self._mpv is None or self._force_transcode
@@ -484,7 +540,7 @@ class VideoCell(QWidget):
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
             self._paused = False
-            self.btn_play.setText("⏸")
+            self.btn_play.setText(_G_PAUSE)
         except Exception as e:
             self._switching = False
             logger.error("mpv loadfile failed: %s", e)
@@ -535,14 +591,18 @@ class VideoCell(QWidget):
             b.setCheckable(checkable)
             return b
 
-        self.btn_prev = _btn("⏮")
-        self.btn_play = _btn("⏸")
-        self.btn_next = _btn("⏭")
-        self.btn_loop = _btn("🔁", checkable=True)
-        self.btn_tag = _btn("🗑", checkable=True)
-        self.btn_fav = _btn("⭐", checkable=True)
-        self.btn_mute = _btn("🔇", checkable=True)
+        self.btn_prev = _btn(_G_PREV)
+        self.btn_play = _btn(_G_PAUSE)
+        self.btn_next = _btn(_G_NEXT)
+        self.btn_loop = _btn(_G_LOOP, checkable=True)
+        self.btn_tag = _btn(_G_TRASH + _MONO, checkable=True)
+        self.btn_fav = _btn(_G_FAV + _MONO, checkable=True)
+        self.btn_mute = _btn(_G_MUTE, checkable=True)
         self.btn_mute.setChecked(True)
+        # Named so their active (checked) state keeps a neutral bar-tone fill —
+        # the colored glyph, not an accent block, signals fav/flag (see CTRL_STYLE).
+        self.btn_fav.setObjectName("favBtn")
+        self.btn_tag.setObjectName("tagBtn")
 
         self.vol_slider = QSlider(Qt.Orientation.Horizontal)
         self.vol_slider.setRange(0, 100)
@@ -632,6 +692,8 @@ class VideoCell(QWidget):
     def _show_title_overlay(self, title: str) -> None:
         self._overlay_show_timer.stop()
         self._overlay_anim.stop()
+        self._loading_pulse.stop()
+        self._title_overlay.setStyleSheet(_TITLE_STYLE)
         self._title_overlay.setText(title)
         self._overlay_effect.setOpacity(1.0)
         self._title_overlay.adjustSize()
@@ -639,6 +701,25 @@ class VideoCell(QWidget):
         self._title_overlay.show()
         self._title_overlay.raise_()
         self._overlay_show_timer.start(OVERLAY_SHOW_MS)
+
+    def _show_loading(self) -> None:
+        """Show a pulsing 'LOADING' card until the first frame arrives.
+
+        Unlike the title card this does not auto-fade — it stays (pulsing)
+        until play() swaps in the real title, so a slow-loading cell still
+        reads as busy rather than blank.
+        """
+        self._overlay_show_timer.stop()
+        self._overlay_anim.stop()
+        self._title_overlay.setStyleSheet(_LOADING_STYLE)
+        self._title_overlay.setText("LOADING")
+        self._title_overlay.adjustSize()
+        self._reposition_overlay()
+        self._title_overlay.show()
+        self._title_overlay.raise_()
+        self._overlay_effect.setOpacity(1.0)
+        self._loading_pulse.stop()
+        self._loading_pulse.start()
 
     def _reposition_overlay(self) -> None:
         vw = self.video_frame
@@ -693,7 +774,7 @@ class VideoCell(QWidget):
                 self._mpv.seek(target, "absolute")
                 self._mpv["pause"] = False
                 self._paused = False
-                self.btn_play.setText("⏸")
+                self.btn_play.setText(_G_PAUSE)
             except Exception as e:
                 logger.warning("seek failed: %s", e)
         self._dragging = False
@@ -705,7 +786,7 @@ class VideoCell(QWidget):
             new_pause = not bool(self._mpv["pause"])
             self._mpv["pause"] = new_pause
             self._paused = new_pause
-            self.btn_play.setText("▶" if new_pause else "⏸")
+            self.btn_play.setText(_G_PLAY if new_pause else _G_PAUSE)
         except Exception as e:
             logger.debug("toggle_play failed: %s", e)
 
@@ -717,15 +798,32 @@ class VideoCell(QWidget):
             except Exception as e:
                 logger.debug("toggle_loop failed: %s", e)
 
+    def _enable_audio_track(self) -> None:
+        """Lazily (re)select an audio track the first time a cell is unmuted.
+
+        Muted cells load with aid=no (see _ensure_mpv) so the grid doesn't
+        decode audio it never plays; this restores the track on demand without
+        a full reload. No-op once a track is already selected.
+        """
+        if self._audio_started or self._mpv is None:
+            return
+        try:
+            self._mpv["aid"] = "auto"
+            self._audio_started = True
+        except Exception as e:
+            logger.debug("enable audio track failed: %s", e)
+
     def _toggle_mute(self) -> None:
         muted = self.btn_mute.isChecked()
         self.muted = muted
+        if not muted:
+            self._enable_audio_track()
         if self._mpv is not None:
             try:
                 self._mpv["mute"] = muted
             except Exception as e:
                 logger.debug("toggle_mute failed: %s", e)
-        self.btn_mute.setText("🔇" if muted else "🔊")
+        self.btn_mute.setText(_G_MUTE if muted else _G_UNMUTE)
         if not muted and self.vol_slider.value() == 0:
             self.vol_slider.setValue(70)
 
@@ -737,13 +835,14 @@ class VideoCell(QWidget):
                 logger.debug("vol_changed failed: %s", e)
         if val > 0 and self.muted:
             self.muted = False
+            self._enable_audio_track()
             if self._mpv is not None:
                 try:
                     self._mpv["mute"] = False
                 except Exception as e:
                     logger.debug("vol_changed mute-clear failed: %s", e)
             self.btn_mute.setChecked(False)
-            self.btn_mute.setText("🔊")
+            self.btn_mute.setText(_G_UNMUTE)
         elif val == 0 and not self.muted:
             self.muted = True
             if self._mpv is not None:
@@ -752,7 +851,7 @@ class VideoCell(QWidget):
                 except Exception as e:
                     logger.debug("vol_changed mute-set failed: %s", e)
             self.btn_mute.setChecked(True)
-            self.btn_mute.setText("🔇")
+            self.btn_mute.setText(_G_MUTE)
 
     def _toggle_tag(self) -> None:
         if not self.current_item:
@@ -769,14 +868,28 @@ class VideoCell(QWidget):
             tags.append("ToDelete")
         self.current_item["Tags"] = tags
         self.btn_tag.setChecked("ToDelete" in tags)
+        self._refresh_tag_glyph()
         self.controller.update_tags(self.current_item)
 
     def _toggle_fav(self) -> None:
         if not self.current_item:
             return
         new = self.btn_fav.isChecked()
+        self._refresh_fav_glyph()
         self.current_item.setdefault("UserData", {})["IsFavorite"] = new
         self.controller.update_favorite(self.current_item["Id"], new)
+
+    def _refresh_fav_glyph(self) -> None:
+        """Gold star when favorited, monochrome otherwise."""
+        self.btn_fav.setText(
+            _G_FAV + (_COLOR if self.btn_fav.isChecked() else _MONO)
+        )
+
+    def _refresh_tag_glyph(self) -> None:
+        """Red bin when flagged for deletion, monochrome otherwise."""
+        self.btn_tag.setText(
+            _G_TRASH + (_COLOR if self.btn_tag.isChecked() else _MONO)
+        )
 
     # ── EOF / error handling ──────────────────────────────────────────────
 
