@@ -25,11 +25,7 @@ from PyQt6.QtWidgets import (
 
 from . import VERSION_SHORT
 from . import theme
-from .constants import UI_SCALE
-
-
-def _s(px: int) -> int:
-    return max(1, int(px * UI_SCALE))
+from .constants import _s
 
 
 class _GridPreview(QWidget):

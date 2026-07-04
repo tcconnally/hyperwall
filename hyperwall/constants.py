@@ -40,6 +40,12 @@ def _ui_scale() -> float:
 
 UI_SCALE = _ui_scale()
 
+
+def _s(px: int) -> int:
+    """Scale a pixel metric by the configured UI scale (min 1px)."""
+    return max(1, int(px * UI_SCALE))
+
+
 # ── Timing ───────────────────────────────────────────────────────────────────
 STREAM_START_STAGGER_MS = 300   # ms between cell starts
 MAX_RETRIES = 3                 # then skip the dead stream

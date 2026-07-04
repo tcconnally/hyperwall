@@ -63,19 +63,14 @@ from .constants import (
     STATS_COUNTER_PROPS,
     STATS_ENABLED,
     STATS_INFO_PROPS,
-    UI_SCALE,
     WATCHDOG_INTERVAL_MS,
+    _s,
     apply_env_overrides,
 )
 from .reliability import escalation_plan, is_stalled, should_park
 from . import theme
 
 logger = logging.getLogger("HyperWall")
-
-
-def _s(px: int) -> int:
-    """Scale a pixel metric by the configured UI scale."""
-    return max(1, int(px * UI_SCALE))
 
 
 # Glassy translucent control bar, on-brand accent, rounded top. Buttons are
@@ -96,8 +91,11 @@ CTRL_STYLE = f"""
     QPushButton:hover   {{ background: {theme.ACCENT}; color: white; }}
     QPushButton:pressed {{ background: {theme.ACCENT_DEEP}; }}
     QPushButton:checked {{ background: {theme.ACCENT_DIM}; color: white; }}
-    /* Favorite / trash: active state is the colored glyph, not an accent block. */
-    QPushButton#favBtn:checked, QPushButton#tagBtn:checked {{ background: {theme.rgba('#ffffff', 0.06)}; color: {theme.TEXT}; }}
+    /* Favorite / trash: active state keeps the neutral bar fill and tints the
+       monochrome glyph itself (gold / red) via QSS — reliable regardless of
+       whether the platform font honours a VS16 colour-emoji selector. */
+    QPushButton#favBtn:checked {{ background: {theme.rgba('#ffffff', 0.06)}; color: {theme.FAVORITE}; }}
+    QPushButton#tagBtn:checked {{ background: {theme.rgba('#ffffff', 0.06)}; color: {theme.DANGER}; }}
     QSlider::groove:horizontal {{ background: {theme.rgba('#ffffff', 0.16)}; height: {_s(3)}px; border-radius: {_s(2)}px; }}
     QSlider::sub-page:horizontal {{ background: {theme.ACCENT}; border-radius: {_s(2)}px; }}
     QSlider::handle:horizontal {{
@@ -120,12 +118,12 @@ _LOADING_STYLE = (
     f" letter-spacing: {_s(3)}px; padding: {_s(5)}px {_s(16)}px; border-radius: {_s(4)}px;"
 )
 
-# Icon glyphs. A trailing VS15 (U+FE0E) forces the monochrome text glyph, which
-# the control-bar QSS `color` then tints to match the bar; VS16 (U+FE0F) restores
-# the native color glyph. The bar reads monochrome — only an *active* favorite
-# (gold star) or trash flag (red bin) lights up, so those states pop at a glance.
+# Icon glyphs. A trailing VS15 (U+FE0E) forces the monochrome text glyph so the
+# control-bar QSS `color` can tint every icon uniformly. The bar reads
+# monochrome; an *active* favorite (gold) or trash flag (red) is tinted by the
+# `#favBtn:checked` / `#tagBtn:checked` rules above — no VS16 colour-emoji glyph
+# is used, so the active state can't silently regress on fonts that ignore VS16.
 _MONO = "︎"   # VS15 - force monochrome text glyph
-_COLOR = "️"  # VS16 - force color emoji glyph
 _G_PREV = "⏮" + _MONO
 _G_PAUSE = "⏸" + _MONO   # shown while playing (click → pause)
 _G_PLAY = "▶" + _MONO    # shown while paused  (click → play)
@@ -133,8 +131,8 @@ _G_NEXT = "⏭" + _MONO
 _G_LOOP = "🔁" + _MONO
 _G_MUTE = "🔇" + _MONO
 _G_UNMUTE = "🔊" + _MONO
-_G_TRASH = "🗑"           # presentation selector added by _refresh_tag_glyph()
-_G_FAV = "⭐"            # presentation selector added by _refresh_fav_glyph()
+_G_TRASH = "🗑" + _MONO
+_G_FAV = "⭐" + _MONO
 
 
 class ClickSlider(QSlider):
@@ -443,6 +441,13 @@ class VideoCell(QWidget):
             # Visual feedback while staggered startup loads content.
             self._show_loading()
 
+    def hideEvent(self, event: Any) -> None:
+        # Stop the looping LOADING pulse so a cell that never reached play()
+        # (failed query, app closing mid-stagger) doesn't keep driving opacity
+        # repaints forever. showEvent re-arms it if we're still content-less.
+        self._loading_pulse.stop()
+        super().hideEvent(event)
+
     def resizeEvent(self, event: Any) -> None:
         super().resizeEvent(event)
         self._reposition_controls()
@@ -503,8 +508,6 @@ class VideoCell(QWidget):
         self.btn_fav.setChecked(
             item.get("UserData", {}).get("IsFavorite", False)
         )
-        self._refresh_tag_glyph()
-        self._refresh_fav_glyph()
 
         # Determine if we need to recreate mpv
         need_create = self._mpv is None or self._force_transcode
@@ -595,12 +598,13 @@ class VideoCell(QWidget):
         self.btn_play = _btn(_G_PAUSE)
         self.btn_next = _btn(_G_NEXT)
         self.btn_loop = _btn(_G_LOOP, checkable=True)
-        self.btn_tag = _btn(_G_TRASH + _MONO, checkable=True)
-        self.btn_fav = _btn(_G_FAV + _MONO, checkable=True)
+        self.btn_tag = _btn(_G_TRASH, checkable=True)
+        self.btn_fav = _btn(_G_FAV, checkable=True)
         self.btn_mute = _btn(_G_MUTE, checkable=True)
         self.btn_mute.setChecked(True)
-        # Named so their active (checked) state keeps a neutral bar-tone fill —
-        # the colored glyph, not an accent block, signals fav/flag (see CTRL_STYLE).
+        # Named so their active (checked) state keeps a neutral bar-tone fill and
+        # tints the glyph (gold / red) instead of filling with accent — see the
+        # #favBtn:checked / #tagBtn:checked rules in CTRL_STYLE.
         self.btn_fav.setObjectName("favBtn")
         self.btn_tag.setObjectName("tagBtn")
 
@@ -718,8 +722,7 @@ class VideoCell(QWidget):
         self._title_overlay.show()
         self._title_overlay.raise_()
         self._overlay_effect.setOpacity(1.0)
-        self._loading_pulse.stop()
-        self._loading_pulse.start()
+        self._loading_pulse.start()  # start() implicitly stops any prior run
 
     def _reposition_overlay(self) -> None:
         vw = self.video_frame
@@ -804,12 +807,22 @@ class VideoCell(QWidget):
         Muted cells load with aid=no (see _ensure_mpv) so the grid doesn't
         decode audio it never plays; this restores the track on demand without
         a full reload. No-op once a track is already selected.
+
+        Selecting a track mid-stream starts its decoder cold with an empty
+        buffer, and because video_sync=audio the master clock immediately
+        follows this half-filled track — playback stutters until audio_buffer
+        fills. Re-seeking to the current position flushes and refills both
+        decoders from a common point so the clock re-locks cleanly (one brief
+        blip on unmute instead of sustained choppiness).
         """
         if self._audio_started or self._mpv is None:
             return
         try:
             self._mpv["aid"] = "auto"
             self._audio_started = True
+            pos = self._mpv["time-pos"]
+            if pos is not None:
+                self._mpv.seek(pos, "absolute")
         except Exception as e:
             logger.debug("enable audio track failed: %s", e)
 
@@ -867,29 +880,15 @@ class VideoCell(QWidget):
         else:
             tags.append("ToDelete")
         self.current_item["Tags"] = tags
-        self.btn_tag.setChecked("ToDelete" in tags)
-        self._refresh_tag_glyph()
+        self.btn_tag.setChecked("ToDelete" in tags)  # :checked tints the glyph red
         self.controller.update_tags(self.current_item)
 
     def _toggle_fav(self) -> None:
         if not self.current_item:
             return
-        new = self.btn_fav.isChecked()
-        self._refresh_fav_glyph()
+        new = self.btn_fav.isChecked()  # :checked tints the glyph gold
         self.current_item.setdefault("UserData", {})["IsFavorite"] = new
         self.controller.update_favorite(self.current_item["Id"], new)
-
-    def _refresh_fav_glyph(self) -> None:
-        """Gold star when favorited, monochrome otherwise."""
-        self.btn_fav.setText(
-            _G_FAV + (_COLOR if self.btn_fav.isChecked() else _MONO)
-        )
-
-    def _refresh_tag_glyph(self) -> None:
-        """Red bin when flagged for deletion, monochrome otherwise."""
-        self.btn_tag.setText(
-            _G_TRASH + (_COLOR if self.btn_tag.isChecked() else _MONO)
-        )
 
     # ── EOF / error handling ──────────────────────────────────────────────
 
