@@ -78,6 +78,21 @@ CRASH_LOOP_THRESHOLD = _int_env("HYPERWALL_CRASHLOOP_THRESHOLD", 5, 2, 100)
 CRASH_LOOP_WINDOW_S = _int_env("HYPERWALL_CRASHLOOP_WINDOW_S", 60, 10, 3_600)
 CRASH_LOOP_COOLDOWN_S = _int_env("HYPERWALL_CRASHLOOP_COOLDOWN_S", 120, 10, 7_200)
 
+# Systemic-outage guard: when a majority of cells (never fewer than
+# OUTAGE_MIN_CELLS) record failures within OUTAGE_WINDOW_S, the cause is
+# almost certainly shared (Emby wedged, network stall) — cells then back off
+# for OUTAGE_BACKOFF_S and skip the transcode escalation instead of piling
+# N concurrent transcode jobs onto a struggling server.
+OUTAGE_WINDOW_S = _int_env("HYPERWALL_OUTAGE_WINDOW_S", 45, 10, 600)
+OUTAGE_MIN_CELLS = _int_env("HYPERWALL_OUTAGE_MIN_CELLS", 3, 2, 100)
+OUTAGE_BACKOFF_S = _int_env("HYPERWALL_OUTAGE_BACKOFF_S", 20, 5, 600)
+
+# Direct-play budget: sources heavier than this transcode server-side even at
+# <=1080p (resolution alone misses a 1080p 120fps 96 Mbps file, which is real
+# decode + network load multiplied across the grid). 0 disables a check.
+MAX_DIRECT_FPS = _int_env("HYPERWALL_MAX_DIRECT_FPS", 66, 0, 1_000)
+MAX_DIRECT_BITRATE_MBPS = _int_env("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", 60, 0, 10_000)
+
 # Memory-aware demuxer cache budget. Each cell wants PER_CELL demuxer bytes, but
 # the grid total is capped at CACHE_BUDGET_MB so large grids don't blow up RAM.
 DEMUXER_PER_CELL_MB = _int_env("HYPERWALL_DEMUXER_PER_CELL_MB", 512, 32, 2_048)

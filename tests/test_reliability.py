@@ -14,9 +14,11 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
 from hyperwall.reliability import (  # noqa: E402
+    apply_jitter,
     count_recent,
     escalation_plan,
     is_stalled,
+    is_systemic_outage,
     scale_demuxer_mb,
     should_park,
 )
@@ -139,6 +141,78 @@ def test_full_escalation_sequence():
     transcodes = [p["transcode"] for p in seq]
     assert actions == ["retry", "retry", "retry", "skip"]
     assert transcodes == [False, True, True, False]
+
+
+# ── apply_jitter ──────────────────────────────────────────────────────────────
+
+def test_jitter_bounds():
+    # rand=0 → 0.75x, rand→1 → 1.25x. Never outside that band.
+    assert apply_jitter(4.0, 0.0) == 3.0
+    assert abs(apply_jitter(4.0, 0.999999) - 5.0) < 0.01
+    assert apply_jitter(4.0, 0.5) == 4.0
+
+
+def test_jitter_clamps_bad_rand():
+    # Defensive: out-of-range rand samples clamp instead of exploding delays.
+    assert apply_jitter(4.0, -1.0) == 3.0
+    assert apply_jitter(4.0, 2.0) == 5.0
+
+
+def test_jitter_desynchronizes():
+    # Two cells with different samples must not retry at the same instant.
+    assert apply_jitter(8.0, 0.1) != apply_jitter(8.0, 0.9)
+
+
+# ── is_systemic_outage ────────────────────────────────────────────────────────
+
+def _events(*cells, t=100.0):
+    return [(t, c) for c in cells]
+
+
+def test_outage_majority_of_wall():
+    # 8-cell wall: 4 distinct cells failing recently = majority → outage.
+    ev = _events("a", "b", "c", "d")
+    assert is_systemic_outage(ev, 100.0, window_s=45, total_cells=8)
+
+
+def test_no_outage_below_majority():
+    ev = _events("a", "b", "c")
+    assert not is_systemic_outage(ev, 100.0, window_s=45, total_cells=8)
+
+
+def test_repeat_failures_from_one_cell_dont_count_twice():
+    # One flaky cell hammering retries is NOT an outage.
+    ev = [(100.0, "a"), (101.0, "a"), (102.0, "a"), (103.0, "a"), (104.0, "a")]
+    assert not is_systemic_outage(ev, 105.0, window_s=45, total_cells=8)
+
+
+def test_old_failures_age_out():
+    ev = [(10.0, "a"), (11.0, "b"), (12.0, "c"), (100.0, "d")]
+    assert not is_systemic_outage(ev, 100.0, window_s=45, total_cells=8)
+
+
+def test_small_walls_never_systemic():
+    # 1–2 cell walls can't distinguish systemic vs bad media — keep plain
+    # per-cell escalation there.
+    ev = _events("a", "b")
+    assert not is_systemic_outage(ev, 100.0, window_s=45, total_cells=2)
+
+
+def test_min_cells_floor_on_small_majority():
+    # 4-cell wall: majority is 2 but the floor is min_cells=3.
+    ev = _events("a", "b")
+    assert not is_systemic_outage(ev, 100.0, window_s=45, total_cells=4)
+    ev = _events("a", "b", "c")
+    assert is_systemic_outage(ev, 100.0, window_s=45, total_cells=4)
+
+
+def test_outage_constants_defaults():
+    from hyperwall import constants as c
+    assert c.OUTAGE_WINDOW_S == 45
+    assert c.OUTAGE_MIN_CELLS == 3
+    assert c.OUTAGE_BACKOFF_S == 20
+    assert c.MAX_DIRECT_FPS == 66
+    assert c.MAX_DIRECT_BITRATE_MBPS == 60
 
 
 # ── constants env clamping (integration of _int_env) ──────────────────────────

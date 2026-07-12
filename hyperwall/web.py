@@ -7,6 +7,7 @@ for phone/tablet control on port 8585.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -44,7 +45,19 @@ def _authorized(req: Any) -> bool:
     if not _TOKEN:
         return True
     supplied = req.headers.get("X-Hyperwall-Token") or req.args.get("token", "")
-    return supplied == _TOKEN
+    return hmac.compare_digest(supplied, _TOKEN)
+
+
+def _dispatch(ctl: Any, fn: Any) -> None:
+    """Run a controller/cell mutation on the GUI thread.
+
+    Flask handlers execute on worker threads; every mutating path below
+    touches Qt widgets (setText/setChecked/animations) or creates QTimers,
+    which is only safe on the thread that owns them. run_on_main queues the
+    callable into the Qt event loop; responses are therefore fire-and-forget
+    and report the *intended* state.
+    """
+    ctl.run_on_main(fn)
 
 
 def _cell_snapshot(cell: Any) -> dict[str, Any]:
@@ -90,7 +103,7 @@ def api_pause() -> Any:
     ctl = _ctl()
     if ctl is None:
         return jsonify({"error": "no controller"}), 503
-    ctl._global_toggle_pause()
+    _dispatch(ctl, ctl._global_toggle_pause)
     return jsonify({"ok": True})
 
 
@@ -103,7 +116,8 @@ def api_next(cell_idx: int) -> Any:
         return jsonify({
             "error": f"cell {cell_idx} out of range (0–{len(ctl.cells) - 1})"
         }), 400
-    ctl.next_video(ctl.cells[cell_idx], False)
+    cell = ctl.cells[cell_idx]
+    _dispatch(ctl, lambda: ctl.next_video(cell, False))
     return jsonify({"ok": True})
 
 
@@ -116,7 +130,8 @@ def api_prev(cell_idx: int) -> Any:
         return jsonify({
             "error": f"cell {cell_idx} out of range (0–{len(ctl.cells) - 1})"
         }), 400
-    ctl.prev_video(ctl.cells[cell_idx])
+    cell = ctl.cells[cell_idx]
+    _dispatch(ctl, lambda: ctl.prev_video(cell))
     return jsonify({"ok": True})
 
 
@@ -130,8 +145,9 @@ def api_loop(cell_idx: int) -> Any:
             "error": f"cell {cell_idx} out of range (0–{len(ctl.cells) - 1})"
         }), 400
     cell = ctl.cells[cell_idx]
-    cell._toggle_loop()
-    return jsonify({"ok": True, "looping": cell.looping})
+    intended = not cell.looping
+    _dispatch(ctl, lambda: (cell.btn_loop.setChecked(intended), cell._toggle_loop()))
+    return jsonify({"ok": True, "looping": intended})
 
 
 @app.route("/api/mute/<int:cell_idx>", methods=["POST"])
@@ -144,8 +160,11 @@ def api_mute(cell_idx: int) -> Any:
             "error": f"cell {cell_idx} out of range (0–{len(ctl.cells) - 1})"
         }), 400
     cell = ctl.cells[cell_idx]
-    cell._toggle_mute()
-    return jsonify({"ok": True, "muted": cell.muted})
+    intended = not cell.muted
+    # _toggle_mute/_toggle_loop derive state from the button's checked state
+    # (they're click handlers); set it first so the web toggle actually flips.
+    _dispatch(ctl, lambda: (cell.btn_mute.setChecked(intended), cell._toggle_mute()))
+    return jsonify({"ok": True, "muted": intended})
 
 
 @app.route("/api/filter", methods=["POST"])
@@ -156,7 +175,9 @@ def api_filter() -> Any:
     mode = (request.get_json(silent=True) or {}).get("mode", "all")
     if mode not in ("all", "favorites"):
         return jsonify({"error": "mode must be 'all' or 'favorites'"}), 400
-    ctl._set_filter(mode)
+    # Must run on the GUI thread: _set_filter schedules staggered restarts
+    # via QTimer, which never fires when created on a Flask worker thread.
+    _dispatch(ctl, lambda: ctl._set_filter(mode))
     return jsonify({"ok": True, "filter": mode})
 
 
@@ -167,14 +188,16 @@ def api_controls() -> Any:
         return jsonify({"error": "no controller"}), 503
     visible = (request.get_json(silent=True) or {}).get("visible")
     if visible is None:
-        ctl._global_toggle_controls()
-    elif visible:
-        if not ctl.controls_visible:
-            ctl._global_toggle_controls()
+        intended = not ctl.controls_visible
     else:
-        if ctl.controls_visible:
+        intended = bool(visible)
+
+    def _apply() -> None:
+        if ctl.controls_visible != intended:
             ctl._global_toggle_controls()
-    return jsonify({"ok": True, "visible": ctl.controls_visible})
+
+    _dispatch(ctl, _apply)
+    return jsonify({"ok": True, "visible": intended})
 
 
 @app.route("/api/shutdown", methods=["POST"])
@@ -184,7 +207,7 @@ def api_shutdown() -> Any:
         return jsonify({"error": "no controller"}), 503
     if not _authorized(request):
         return jsonify({"error": "unauthorized"}), 403
-    ctl._shutdown()
+    _dispatch(ctl, ctl._shutdown)
     return jsonify({"ok": True})
 
 

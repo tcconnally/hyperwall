@@ -19,16 +19,21 @@ sys.path.insert(0, REPO_ROOT)
 from hyperwall.urls import (  # noqa: E402
     build_stream_url,
     exceeds_1080p,
+    exceeds_direct_budget,
     needs_transcode,
 )
 
 
-def _item(width=None, height=None, top_level=False):
+def _item(width=None, height=None, top_level=False, fps=None, bitrate=None):
     stream = {"Type": "Video"}
     if width is not None:
         stream["Width"] = width
     if height is not None:
         stream["Height"] = height
+    if fps is not None:
+        stream["AverageFrameRate"] = fps
+    if bitrate is not None:
+        stream["BitRate"] = bitrate
     if top_level:
         return {"Id": "x", "MediaStreams": [stream]}
     return {"Id": "x", "MediaSources": [{"MediaStreams": [stream]}]}
@@ -67,6 +72,63 @@ def test_none_dimensions_safe():
 
 def test_no_streams_safe():
     assert not exceeds_1080p({"Id": "x"})
+
+
+def test_portrait_1080x1920_does_not_exceed():
+    # Same pixel count as landscape 1080p — the old `h > 1080` check forced a
+    # pointless server transcode for every vertical video.
+    assert not exceeds_1080p(_item(1080, 1920))
+
+
+def test_portrait_4k_exceeds():
+    # 2160x3840 portrait is genuinely more than 1080p worth of pixels.
+    assert exceeds_1080p(_item(2160, 3840))
+
+
+def test_portrait_wide_short_edge_exceeds():
+    # 1440x1920: long edge fits but short edge exceeds 1080.
+    assert exceeds_1080p(_item(1440, 1920))
+
+
+# ── exceeds_direct_budget (fps / bitrate) ─────────────────────────────────────
+
+def test_budget_disabled_by_default():
+    assert not exceeds_direct_budget(_item(1920, 1080, fps=120, bitrate=96_000_000))
+
+
+def test_high_fps_exceeds_budget():
+    assert exceeds_direct_budget(_item(1920, 1080, fps=120), max_fps=66)
+
+
+def test_60fps_within_budget():
+    assert not exceeds_direct_budget(_item(1920, 1080, fps=60), max_fps=66)
+
+
+def test_high_bitrate_exceeds_budget():
+    assert exceeds_direct_budget(
+        _item(1920, 1080, bitrate=96_000_000), max_bitrate_mbps=60,
+    )
+
+
+def test_bitrate_falls_back_to_source_container():
+    item = {
+        "Id": "x",
+        "MediaSources": [{
+            "Bitrate": 96_000_000,
+            "MediaStreams": [{"Type": "Video", "Width": 1920, "Height": 1080}],
+        }],
+    }
+    assert exceeds_direct_budget(item, max_bitrate_mbps=60)
+
+
+def test_budget_missing_fields_safe():
+    assert not exceeds_direct_budget({"Id": "x"}, max_fps=66, max_bitrate_mbps=60)
+
+
+def test_needs_transcode_includes_budget():
+    heavy = _item(1920, 1080, fps=120)
+    assert needs_transcode(heavy, auto_transcode=True, max_fps=66)
+    assert not needs_transcode(heavy, auto_transcode=False, max_fps=66)
 
 
 # ── needs_transcode (flag binding) ────────────────────────────────────────────

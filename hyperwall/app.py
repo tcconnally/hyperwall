@@ -53,10 +53,11 @@ except ImportError:
 
 
 # ── mpv DLL registration ─────────────────────────────────────────────────────
-# Must happen once, before any mpv import. The cookie must stay alive
-# (held at module level) to prevent GC from removing the DLL directory.
+# Must happen once, before any mpv import. Every cookie must stay alive
+# (held at module level) to prevent GC from removing its DLL directory —
+# a single variable here would drop all but the last directory registered.
 
-_mpv_dll_cookie = None
+_mpv_dll_cookies: list = []
 
 if os.name == "nt":
     _dll_dirs = [SCRIPT_DIR]
@@ -66,7 +67,7 @@ if os.name == "nt":
     for _d in _dll_dirs:
         if os.path.isdir(_d):
             try:
-                _mpv_dll_cookie = os.add_dll_directory(_d)
+                _mpv_dll_cookies.append(os.add_dll_directory(_d))
             except AttributeError:
                 os.environ["PATH"] = (
                     _d + os.pathsep + os.environ.get("PATH", "")

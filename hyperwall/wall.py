@@ -13,6 +13,7 @@ import logging
 import os
 import time as _time
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -22,6 +23,7 @@ from PyQt6.QtCore import (
     Qt,
     QTimer,
     pyqtSignal,
+    pyqtSlot,
 )
 from PyQt6.QtGui import QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
@@ -34,6 +36,8 @@ from PyQt6.QtWidgets import (
 
 from .cell import VideoCell
 from .constants import (
+    OUTAGE_MIN_CELLS,
+    OUTAGE_WINDOW_S,
     STREAM_START_STAGGER_MS,
     STATS_ENABLED,
     STATS_COUNTER_PROPS,
@@ -44,6 +48,7 @@ from .constants import (
     SCRIPT_DIR,
 )
 from .emby import EmbyClient, ContentLoader, needs_transcode
+from .reliability import is_systemic_outage
 from .urls import build_stream_url
 from .playlist import PlaylistManager, DEFAULT_GROUP
 
@@ -94,6 +99,28 @@ class MouseIdleHider(QObject):
             self._hidden = True
 
 
+class MainThreadInvoker(QObject):
+    """Marshals callables onto the GUI thread via a queued signal.
+
+    Qt widgets (and QTimer creation) are only safe on the thread that owns
+    them; the Flask web remote runs on its own threads. Emitting `call` from
+    any thread queues the callable into the main event loop.
+    """
+
+    call = pyqtSignal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.call.connect(self._run, Qt.ConnectionType.QueuedConnection)
+
+    @pyqtSlot(object)
+    def _run(self, fn: Any) -> None:
+        try:
+            fn()
+        except Exception:
+            logger.exception("Main-thread invocation failed")
+
+
 class WallController:
     """Orchestrates the video wall across multiple monitors."""
 
@@ -131,6 +158,15 @@ class WallController:
         self._api_pool_closed = False
         self._cleaned_up = False
         self._shutdown_requested = False
+
+        # Cross-thread → GUI-thread marshaling (used by the web remote).
+        # Must be constructed on the main thread so queued calls land here.
+        self._invoker = MainThreadInvoker()
+
+        # Systemic-outage tracking: (monotonic ts, cell id) per playback
+        # failure, consulted by cells to decide whether to escalate.
+        self._failure_events: deque[tuple[float, int]] = deque(maxlen=512)
+        self._last_outage_log_ts = 0.0
 
         # Emergency escape
         self._escape_filter = EmergencyKeyFilter(self._shutdown)
@@ -307,6 +343,35 @@ class WallController:
         cell._emby_item_id = item["Id"]
         cell.play(item, url)
 
+    def run_on_main(self, fn: Any) -> None:
+        """Queue a callable onto the GUI thread (safe from any thread)."""
+        self._invoker.call.emit(fn)
+
+    def register_failure(self, cell: VideoCell) -> bool:
+        """Record a cell playback failure; True if it looks systemic.
+
+        "Systemic" = a majority of the wall (min OUTAGE_MIN_CELLS distinct
+        cells) failed within OUTAGE_WINDOW_S — a shared cause like Emby or
+        the network, where per-cell transcode escalation only piles load
+        onto an already-struggling server.
+        """
+        now = _time.monotonic()
+        self._failure_events.append((now, id(cell)))
+        outage = is_systemic_outage(
+            self._failure_events, now,
+            window_s=OUTAGE_WINDOW_S,
+            total_cells=len(self.cells),
+            min_cells=OUTAGE_MIN_CELLS,
+        )
+        if outage and now - self._last_outage_log_ts > 10.0:
+            self._last_outage_log_ts = now
+            logger.warning(
+                "Systemic outage suspected: majority of cells failing within "
+                "%ds — cells backing off without transcode escalation.",
+                OUTAGE_WINDOW_S,
+            )
+        return outage
+
     def _cell_group(self, cell: VideoCell) -> str:
         """Source group a cell draws from. Defaults to the shared 'all' group;
         per-monitor sourcing sets cell._source_group to a distinct key."""
@@ -353,7 +418,7 @@ class WallController:
             try:
                 c._mpv["pause"] = any_playing
                 c._paused = any_playing
-                c.btn_play.setText("▶" if any_playing else "⏸")
+                c.set_paused_ui(any_playing)
             except Exception as e:
                 logger.debug("Pause toggle failed on cell: %s", e)
 
@@ -529,14 +594,24 @@ class WallController:
                 except Exception as e:
                     logger.warning("stats flush failed: %s", e)
 
-        # Terminate all mpv instances in parallel
+        # Terminate all mpv instances in parallel, with a wait that is
+        # actually bounded: no `with` block here, because the executor's
+        # __exit__ calls shutdown(wait=True) and would block past the timeout
+        # on any wedged terminate. Leftover workers are abandoned instead.
         import concurrent.futures as _cf
-        with _cf.ThreadPoolExecutor(max_workers=min(len(self.cells), 32)) as ex:
+        if self.cells:
+            ex = _cf.ThreadPoolExecutor(max_workers=min(len(self.cells), 32))
             futures = [ex.submit(c.release) for c in self.cells]
-            _cf.wait(futures, timeout=3.0)
-        for f in futures:
-            if f.exception():
-                logger.warning("Cell release failed: %s", f.exception())
+            done, not_done = _cf.wait(futures, timeout=5.0)
+            for f in done:
+                if f.exception():
+                    logger.warning("Cell release failed: %s", f.exception())
+            if not_done:
+                logger.warning(
+                    "%d cell release(s) still running after 5s — abandoning.",
+                    len(not_done),
+                )
+            ex.shutdown(wait=False)
 
         if STATS_ENABLED:
             self._dump_stats_json()

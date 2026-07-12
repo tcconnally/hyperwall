@@ -46,10 +46,10 @@ def test_01_entry_point_imports():
 def test_02_package_identity():
     """Package has version and banner."""
     from hyperwall import __version__, runtime_banner
-    assert __version__ == "10.0.0"
+    assert __version__ == "10.1.0"
     banner = runtime_banner()
     assert "Hyperwall" in banner
-    assert "10.0.0" in banner
+    assert "10.1.0" in banner
 
 
 def test_03_config_loads():

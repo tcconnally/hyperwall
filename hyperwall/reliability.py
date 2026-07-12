@@ -6,10 +6,12 @@ functions so it can be unit-tested without a display server, an mpv build, or
 a live Emby instance. `cell.py` imports these; the wiring (QTimers, mpv calls,
 overlays) stays in the widget while the *decisions* are verifiable in isolation.
 
-Three concerns (Epic 2 / #7):
+Five concerns (Epic 2 / #7 + the 2026-07-11 stampede review):
   - stall detection      → is_stalled()
   - crash-loop parking   → count_recent() / should_park()
   - cache-budget scaling → scale_demuxer_mb()
+  - retry desync         → apply_jitter()
+  - outage detection     → is_systemic_outage()
 """
 
 from __future__ import annotations
@@ -71,6 +73,48 @@ def scale_demuxer_mb(
     n = max(1, int(n_cells))
     per = min(per_cell_mb, total_budget_mb / n)
     return int(max(floor_mb, per))
+
+
+def apply_jitter(delay_s: float, rand: float) -> float:
+    """Spread a retry delay over [0.75x, 1.25x] to desynchronize cells.
+
+    Every cell computes the same escalation_plan delays, so a wall-wide fault
+    (Emby hiccup, network stall) makes all cells retry at the same instant —
+    a thundering herd against an already-struggling server. `rand` is an
+    injected uniform sample in [0, 1) (pass random.random()) so this stays
+    pure and deterministic under test.
+    """
+    r = min(1.0, max(0.0, float(rand)))
+    return delay_s * (0.75 + 0.5 * r)
+
+
+def is_systemic_outage(
+    events: Iterable[tuple[float, object]],
+    now: float,
+    *,
+    window_s: float,
+    total_cells: int,
+    min_cells: int = 3,
+) -> bool:
+    """True when enough *distinct* cells failed recently to imply a shared
+    cause (server/network outage) rather than per-item bad media.
+
+    `events` is an iterable of (timestamp, cell_key) failure records. The
+    trigger is a majority of the wall, but never fewer than `min_cells`, so
+    small walls (1–2 cells) keep plain per-cell escalation — with that few
+    cells, "systemic vs bad file" is indistinguishable anyway.
+
+    Callers use this to switch strategy: back off longer and *don't* escalate
+    to server transcode (piling N concurrent transcode jobs onto a server
+    that's already stalling makes the outage worse — observed 2026-07-11).
+    """
+    if total_cells < min_cells:
+        return False
+    recent = {
+        key for t, key in events if 0 <= now - t <= window_s
+    }
+    needed = max(min_cells, (total_cells + 1) // 2)
+    return len(recent) >= needed
 
 
 def escalation_plan(attempt: int, max_retries: int) -> dict:
