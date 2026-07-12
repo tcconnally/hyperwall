@@ -16,6 +16,7 @@ sys.path.insert(0, REPO_ROOT)
 from hyperwall.reliability import (  # noqa: E402
     apply_jitter,
     count_recent,
+    end_file_reason,
     escalation_plan,
     is_stalled,
     is_systemic_outage,
@@ -213,6 +214,79 @@ def test_outage_constants_defaults():
     assert c.OUTAGE_BACKOFF_S == 20
     assert c.MAX_DIRECT_FPS == 66
     assert c.MAX_DIRECT_BITRATE_MBPS == 60
+
+
+# ── end_file_reason (python-mpv event decoding) ───────────────────────────────
+# Shapes below match a live probe (2026-07-12) against the shipped mpv-2.dll
+# + python-mpv 1.x: as_dict() carries reason as BYTES; data.reason is an int.
+
+class _EvDict:
+    """python-mpv 1.x shape: as_dict() with bytes values."""
+    def __init__(self, reason):
+        self._reason = reason
+
+    def as_dict(self):
+        return {"event": b"end-file", "reason": self._reason}
+
+
+class _EvData:
+    """python-mpv 1.x shape without as_dict: .data.reason int enum."""
+    class _Data:
+        def __init__(self, reason):
+            self.reason = reason
+
+    def __init__(self, reason):
+        self.data = self._Data(reason)
+
+
+class _EvLegacy:
+    """Old python-mpv shape: .event is a plain dict."""
+    def __init__(self, reason):
+        self.event = {"reason": reason}
+
+
+def test_reason_bytes_stop():
+    assert end_file_reason(_EvDict(b"stop")) == "stop"
+
+
+def test_reason_bytes_error():
+    assert end_file_reason(_EvDict(b"error")) == "error"
+
+
+def test_reason_bytes_eof():
+    assert end_file_reason(_EvDict(b"eof")) == "eof"
+
+
+def test_reason_int_enum():
+    assert end_file_reason(_EvData(0)) == "eof"
+    assert end_file_reason(_EvData(2)) == "stop"
+    assert end_file_reason(_EvData(4)) == "error"
+    assert end_file_reason(_EvData(5)) == "redirect"
+
+
+def test_reason_unknown_int_defaults_eof():
+    assert end_file_reason(_EvData(99)) == "eof"
+
+
+def test_reason_legacy_dict():
+    assert end_file_reason(_EvLegacy("eof")) == "eof"
+    assert end_file_reason(_EvLegacy("stop")) == "stop"
+
+
+def test_reason_garbage_defaults_eof():
+    # The historic default — a shape we can't read must degrade, not crash.
+    assert end_file_reason(object()) == "eof"
+    assert end_file_reason(None) == "eof"
+
+
+def test_reason_as_dict_raising_falls_through():
+    class _Raises:
+        def as_dict(self):
+            raise RuntimeError("boom")
+        class _Data:
+            reason = 2
+        data = _Data()
+    assert end_file_reason(_Raises()) == "stop"
 
 
 # ── constants env clamping (integration of _int_env) ──────────────────────────

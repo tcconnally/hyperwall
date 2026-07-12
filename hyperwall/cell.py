@@ -69,7 +69,13 @@ from .constants import (
     _s,
     apply_env_overrides,
 )
-from .reliability import apply_jitter, escalation_plan, is_stalled, should_park
+from .reliability import (
+    apply_jitter,
+    end_file_reason,
+    escalation_plan,
+    is_stalled,
+    should_park,
+)
 from . import theme
 
 logger = logging.getLogger("HyperWall")
@@ -157,6 +163,7 @@ class VideoCell(QWidget):
     request_next = pyqtSignal(object, bool)
     request_prev = pyqtSignal(object)
     _sig_eof = pyqtSignal(int, str)
+    _sig_track_done = pyqtSignal(int)
 
     def __init__(self, controller: Any):
         super().__init__()
@@ -182,7 +189,12 @@ class VideoCell(QWidget):
         self._mouse_in_cell = False
         self._emby_session_id: str | None = None
         self._emby_item_id: str | None = None
-        self._switching = False  # set in play(), consumed in _handle_eof
+        # True between a reuse-loadfile and the old track's stale end-file
+        # (reason "stop"). NEVER set for a fresh mpv — no stale event will
+        # arrive to clear it, and a latched _switching once silently disabled
+        # the eof handling of every cell's first track (2026-07-11 lockup).
+        self._switching = False
+        self._track_done = False  # this track already triggered its advance
         self._audio_started = False  # True once an audio track has been selected
 
         # Reliability / self-healing (Epic 2)
@@ -262,6 +274,9 @@ class VideoCell(QWidget):
 
         self.setMouseTracking(True)
         self._sig_eof.connect(self._handle_eof, Qt.ConnectionType.QueuedConnection)
+        self._sig_track_done.connect(
+            self._handle_track_done, Qt.ConnectionType.QueuedConnection
+        )
 
         # Stall watchdog: polls for silent freezes (frozen frame / wedged
         # decoder / network hang that survives reconnect) which never emit an
@@ -338,12 +353,17 @@ class VideoCell(QWidget):
 
         @m.event_callback("end-file")
         def _on_end_file(ev: Any) -> None:
-            reason = "eof"
-            try:
-                reason = ev.event.get("reason", "eof")
-            except Exception:
-                pass
-            self._sig_eof.emit(gen, str(reason))
+            self._sig_eof.emit(gen, end_file_reason(ev))
+
+        # PRIMARY advance trigger. With keep_open="always" a naturally
+        # finished track fires NO end-file event at all — mpv just pauses on
+        # the last frame and flips eof-reached to True (probed live against
+        # the shipped DLL, 2026-07-12). Advancement wired only to end-file
+        # left every finished clip frozen until (at best) the stall watchdog.
+        @m.property_observer("eof-reached")
+        def _on_eof_reached(_name: str, value: Any) -> None:
+            if value is True and gen == self._mpv_gen:
+                self._sig_track_done.emit(gen)
 
         @m.property_observer("time-pos")
         def _on_time(_name: str, value: float | None) -> None:
@@ -575,13 +595,20 @@ class VideoCell(QWidget):
             logger.error("mpv not initialized — cannot play.")
             return
 
-        # _switching flag suppresses the stale end-file that loadfile fires
-        # when replacing a playing track. Without it, that end-file requests
-        # next_video unnecessarily, colliding with the cell's new content.
-        self._switching = True
+        # _switching suppresses stale events from the track loadfile replaces:
+        # the old track's end-file (reason "stop") and any in-flight
+        # eof-reached signal. Only a REUSED mpv has a track to replace — on a
+        # fresh instance no stale event will ever arrive, and setting the flag
+        # there latches it forever (watchdog + advance both gated on it).
+        self._switching = not need_create
+        self._track_done = False
         try:
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
+            # keep-open pauses the player at EOF and the pause property
+            # PERSISTS across loadfile (probed live 2026-07-12) — without an
+            # explicit unpause every post-EOF load sits frozen on frame 0.
+            self._mpv["pause"] = False
             self._paused = False
             self.btn_play.setText(_G_PAUSE)
         except Exception as e:
@@ -937,38 +964,84 @@ class VideoCell(QWidget):
 
     # ── EOF / error handling ──────────────────────────────────────────────
 
+    def _handle_track_done(self, gen: int) -> None:
+        """A track finished naturally (eof-reached flipped True).
+
+        This is the wall's primary advance path: with keep_open="always" mpv
+        emits NO end-file at natural EOF — it pauses on the last frame and
+        flips the eof-reached property. The signal is queued from the mpv
+        event thread, so re-check liveness against the CURRENT player state:
+        a stale signal from a track that play() has since replaced must not
+        advance the new one.
+        """
+        if gen != self._mpv_gen or self._mpv is None:
+            return
+        if self._switching or self._track_done:
+            return
+        try:
+            if self._mpv["eof-reached"] is not True:
+                return  # stale — the track this signal was about is gone
+        except Exception:
+            return
+        if not self._played_anything:
+            logger.warning("Track ended before first frame — treating as error.")
+            self._track_done = True
+            self._on_error()
+            return
+        if self.looping:
+            try:
+                self._mpv.seek(0, "absolute")
+                self._mpv["pause"] = False
+                self._paused = False
+                return
+            except Exception as e:
+                logger.warning("Loop seek failed: %s", e)
+        self._track_done = True
+        logger.info(
+            "Track finished: %s — advancing.",
+            (self.current_item or {}).get("Name", "?"),
+        )
+        self._request_next_throttled(False)
+
     def _handle_eof(self, gen: int, reason: str) -> None:
         if gen != self._mpv_gen:
             return
+        if reason in ("stop", "quit", "redirect", "restarted"):
+            # "stop" is the stale end-file from a loadfile replace (and quit/
+            # redirect are never an advance either). With the old broken
+            # reason extraction these all read as "eof" and needed the
+            # _switching dance to avoid phantom advances.
+            self._switching = False
+            return
         if reason == "error":
-            # Clear the switching guard here too: it's set in play() and was
-            # previously only cleared on the first "eof". On the error path it
-            # would leak True, letting a later genuine EOF be swallowed as if it
-            # were a stale loadfile end-file.
+            # Clear the switching guard here too: on the error path it would
+            # leak True, gating the new track's eof handling forever.
             self._switching = False
             self._on_error()
             return
-        if reason == "eof":
-            if self._switching:
-                # loadfile just replaced a playing track — this end-file
-                # is the old track ending, not the new one. Suppress the
-                # stale next_video request.
-                self._switching = False
-                return
-            if not self._played_anything:
-                logger.warning("EOF before first frame — treating as error.")
-                self._on_error()
-                return
-            if self.looping and self._mpv is not None:
-                try:
-                    self._mpv.seek(0, "absolute")
-                    self._mpv["pause"] = False
-                    self._paused = False
-                except Exception as e:
-                    logger.warning("Loop seek failed: %s", e)
-                    self._request_next_throttled(False)
-            else:
+        # reason == "eof": under keep_open="always" this doesn't fire at
+        # natural EOF (eof-reached handles that above); kept as a fallback
+        # for stream types that do emit it.
+        if self._switching:
+            self._switching = False
+            return
+        if self._track_done:
+            return  # eof-reached already advanced this track
+        if not self._played_anything:
+            logger.warning("EOF before first frame — treating as error.")
+            self._on_error()
+            return
+        if self.looping and self._mpv is not None:
+            try:
+                self._mpv.seek(0, "absolute")
+                self._mpv["pause"] = False
+                self._paused = False
+            except Exception as e:
+                logger.warning("Loop seek failed: %s", e)
                 self._request_next_throttled(False)
+        else:
+            self._track_done = True
+            self._request_next_throttled(False)
 
     def _request_next_throttled(self, is_retry: bool) -> None:
         MIN_INTERVAL = 0.75
@@ -1004,8 +1077,12 @@ class VideoCell(QWidget):
         paused, not being seeked) but whose time-pos hasn't advanced for
         STALL_TIMEOUT_S is treated as a playback error, reusing the existing
         retry/escalation chain — no new failure semantics.
+
+        Deliberately does NOT skip on _switching: play() resets the progress
+        timestamp (full grace window), so a load that silently wedges still
+        gets rescued instead of the guard flag disabling the safety net.
         """
-        if self._mpv is None or self._parked or self._switching:
+        if self._mpv is None or self._parked:
             return
         if not self._played_anything:
             # Startup / EOF-before-first-frame is handled by the normal path.
