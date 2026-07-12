@@ -48,6 +48,24 @@ try {
     Remove-Item -LiteralPath $src
     & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Source $src -Exe $exe
     Check "missing_src_exit0" 0 $LASTEXITCODE
+
+    # Case 5: stub older than exe but a PACKAGE file is newer → stale → exit 2.
+    # This is the real-world miss: edits land in hyperwall/*.py, not the stub.
+    Set-Content -LiteralPath $src -Value "src"
+    Start-Sleep -Milliseconds 50
+    Set-Content -LiteralPath $exe -Value "exe"
+    $pkg = Join-Path $tmp "hyperwall"
+    New-Item -ItemType Directory -Path $pkg | Out-Null
+    Start-Sleep -Milliseconds 50
+    Set-Content -LiteralPath (Join-Path $pkg "cell.py") -Value "edited"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Source $src -Exe $exe
+    Check "stale_package_file_exit2" 2 $LASTEXITCODE
+
+    # Case 6: package present but all its files older than exe → current → exit 0
+    Start-Sleep -Milliseconds 50
+    Set-Content -LiteralPath $exe -Value "exe-rebuilt"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Source $src -Exe $exe
+    Check "fresh_exe_with_package_exit0" 0 $LASTEXITCODE
 }
 finally {
     Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue

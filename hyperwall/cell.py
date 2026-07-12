@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import sys
+import threading
 import time as _time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeoutError
 from typing import Any
 
 from PyQt6.QtCore import (
@@ -58,6 +59,7 @@ from .constants import (
     MOUSE_IDLE_MS,
     MPV_LOG_NOISE,
     MPV_OPTS,
+    OUTAGE_BACKOFF_S,
     OVERLAY_SHOW_MS,
     STALL_TIMEOUT_S,
     STATS_COUNTER_PROPS,
@@ -67,7 +69,7 @@ from .constants import (
     _s,
     apply_env_overrides,
 )
-from .reliability import escalation_plan, is_stalled, should_park
+from .reliability import apply_jitter, escalation_plan, is_stalled, should_park
 from . import theme
 
 logger = logging.getLogger("HyperWall")
@@ -176,6 +178,7 @@ class VideoCell(QWidget):
         self._played_anything = False
         self._paused = False  # main-thread cache; safe to read cross-thread
         self._last_next_request_ts = 0.0
+        self._pending_next = False  # a throttled advance waiting to re-fire
         self._mouse_in_cell = False
         self._emby_session_id: str | None = None
         self._emby_item_id: str | None = None
@@ -263,8 +266,13 @@ class VideoCell(QWidget):
         # Stall watchdog: polls for silent freezes (frozen frame / wedged
         # decoder / network hang that survives reconnect) which never emit an
         # end-file or error event, so the retry chain would otherwise never fire.
+        # Per-cell jitter on the interval desynchronizes the watchdogs — all
+        # cells are constructed in one loop, and identical cadence means a
+        # wall-wide stall gets flagged by every cell in the same tick.
         self._watchdog_timer = QTimer(self)
-        self._watchdog_timer.setInterval(WATCHDOG_INTERVAL_MS)
+        self._watchdog_timer.setInterval(
+            WATCHDOG_INTERVAL_MS + random.randint(0, 1_000)
+        )
         self._watchdog_timer.timeout.connect(self._check_stall)
         self._watchdog_timer.start()
 
@@ -383,22 +391,39 @@ class VideoCell(QWidget):
 
         self._mpv = m
 
-    def _destroy_mpv(self) -> None:
-        """Terminate mpv with a bounded timeout."""
+    def _destroy_mpv(self, wait_s: float = 1.5) -> None:
+        """Terminate mpv with a genuinely bounded wait.
+
+        terminate runs on a daemon thread; we join for at most `wait_s` and
+        then truly abandon it. The previous ThreadPoolExecutor version looked
+        bounded but wasn't: exiting its `with` block calls shutdown(wait=True),
+        which blocks the GUI thread until terminate returns — one wedged libmpv
+        teardown froze every cell on the wall indefinitely.
+        """
         if self._mpv is None:
             return
         if STATS_ENABLED:
             self._flush_stats()
         mpv_ref = self._mpv
         self._mpv = None
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(mpv_ref.terminate)
+
+        def _terminate() -> None:
             try:
-                fut.result(timeout=1.5)
-            except FutTimeoutError:
-                logger.warning("mpv terminate timed out — abandoning process.")
+                mpv_ref.terminate()
             except Exception as e:
                 logger.debug("mpv terminate raised: %s", e)
+
+        t = threading.Thread(
+            target=_terminate, name="mpv-terminate", daemon=True
+        )
+        t.start()
+        if wait_s > 0:
+            t.join(wait_s)
+            if t.is_alive():
+                logger.warning(
+                    "mpv terminate still running after %.1fs — abandoning it "
+                    "on a daemon thread.", wait_s,
+                )
 
     def _flush_stats(self) -> None:
         """Snapshot current mpv stats into running totals."""
@@ -530,6 +555,21 @@ class VideoCell(QWidget):
         if need_create:
             self._destroy_mpv()
             self._ensure_mpv()
+        elif self._mpv is not None:
+            # Reusing the instance: loadfile resets mpv's per-file counters,
+            # so bank the outgoing track's stats now or they're lost.
+            if STATS_ENABLED:
+                self._flush_stats()
+            # A cell that was unmuted and re-muted still has aid=auto and
+            # decodes audio it never plays. The new file starts a fresh
+            # decoder anyway, so this is the blip-free moment to drop back
+            # to aid=no (mirrors the lazy re-enable in _enable_audio_track).
+            if self.muted and self._audio_started:
+                try:
+                    self._mpv["aid"] = "no"
+                    self._audio_started = False
+                except Exception as e:
+                    logger.debug("mpv: failed to re-disable aid: %s", e)
 
         if self._mpv is None:
             logger.error("mpv not initialized — cannot play.")
@@ -782,6 +822,11 @@ class VideoCell(QWidget):
                 logger.warning("seek failed: %s", e)
         self._dragging = False
 
+    def set_paused_ui(self, paused: bool) -> None:
+        """Sync the play/pause button glyph to an externally-set pause state
+        (global pause toggle, web remote) using the VS15 monochrome glyphs."""
+        self.btn_play.setText(_G_PLAY if paused else _G_PAUSE)
+
     def _toggle_play(self) -> None:
         if self._mpv is None:
             return
@@ -928,14 +973,29 @@ class VideoCell(QWidget):
     def _request_next_throttled(self, is_retry: bool) -> None:
         MIN_INTERVAL = 0.75
         now = _time.monotonic()
-        if not is_retry and (now - self._last_next_request_ts) < MIN_INTERVAL:
-            logger.warning(
-                "next_video throttled (last fire %.2fs ago)",
-                now - self._last_next_request_ts,
-            )
+        elapsed = now - self._last_next_request_ts
+        if not is_retry and elapsed < MIN_INTERVAL:
+            # Defer instead of dropping: a dropped EOF advance used to leave
+            # the cell frozen on its last frame until the stall watchdog
+            # rescued it 20s later. One pending advance at a time.
+            if not self._pending_next:
+                self._pending_next = True
+                delay_ms = int((MIN_INTERVAL - elapsed) * 1000) + 50
+                logger.warning(
+                    "next_video throttled (last fire %.2fs ago) — "
+                    "deferring %dms", elapsed, delay_ms,
+                )
+                QTimer.singleShot(delay_ms, self._fire_pending_next)
             return
+        self._pending_next = False
         self._last_next_request_ts = now
         self.request_next.emit(self, is_retry)
+
+    def _fire_pending_next(self) -> None:
+        if not self._pending_next:
+            return
+        self._pending_next = False
+        self._request_next_throttled(False)
 
     def _check_stall(self) -> None:
         """Watchdog: flag a silently frozen stream as an error.
@@ -1007,17 +1067,40 @@ class VideoCell(QWidget):
         # hammering Emby and park the cell instead.
         if self._record_failure_and_maybe_park():
             return
+        # Systemic-outage check: when most of the wall is failing at once the
+        # cause is shared (server/network), so a per-cell transcode escalation
+        # only adds load to a struggling server. Back off longer instead.
+        outage = False
+        try:
+            outage = self.controller.register_failure(self)
+        except Exception as e:
+            logger.debug("register_failure failed: %s", e)
         self._retry_count += 1
         logger.warning(
             "Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES
         )
+        if outage:
+            delay_s = apply_jitter(OUTAGE_BACKOFF_S, random.random())
+            logger.warning(
+                "Systemic outage suspected — backing off %.1fs without "
+                "transcode escalation.", delay_s,
+            )
+            QTimer.singleShot(
+                int(delay_s * 1000),
+                lambda: self._request_next_throttled(True),
+            )
+            return
         plan = escalation_plan(self._retry_count, MAX_RETRIES)
         if plan["action"] == "retry":
             if plan["transcode"] and not self._force_transcode:
                 self._force_transcode = True
                 logger.info("Escalating to server transcode.")
+            # Jitter desynchronizes retries: identical deterministic delays
+            # made every cell hit the server at the same instant after a
+            # wall-wide fault.
+            delay_s = apply_jitter(plan["delay_s"], random.random())
             QTimer.singleShot(
-                plan["delay_s"] * 1000,
+                int(delay_s * 1000),
                 lambda: self._request_next_throttled(True),
             )
         else:

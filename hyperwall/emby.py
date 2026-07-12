@@ -32,14 +32,22 @@ _AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1"
 
 
 def needs_transcode(item: dict[str, Any]) -> bool:
-    """Heuristic: return True if the source exceeds 1080p.
+    """Heuristic: return True if the source exceeds 1080p (orientation-
+    agnostic) or the fps/bitrate direct-play budget.
 
     Thin wrapper over the pure helper in urls.py, binding the resolved
-    HYPERWALL_AUTO_TRANSCODE flag. Kept here for backward-compatible imports.
+    HYPERWALL_AUTO_TRANSCODE flag and the direct-play budget constants.
+    Kept here for backward-compatible imports.
     """
+    from .constants import MAX_DIRECT_BITRATE_MBPS, MAX_DIRECT_FPS
     from .urls import needs_transcode as _needs_transcode
 
-    return _needs_transcode(item, auto_transcode=_AUTO_TRANSCODE)
+    return _needs_transcode(
+        item,
+        auto_transcode=_AUTO_TRANSCODE,
+        max_fps=MAX_DIRECT_FPS,
+        max_bitrate_mbps=MAX_DIRECT_BITRATE_MBPS,
+    )
 
 
 class EmbyClient:
