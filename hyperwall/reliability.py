@@ -6,12 +6,13 @@ functions so it can be unit-tested without a display server, an mpv build, or
 a live Emby instance. `cell.py` imports these; the wiring (QTimers, mpv calls,
 overlays) stays in the widget while the *decisions* are verifiable in isolation.
 
-Five concerns (Epic 2 / #7 + the 2026-07-11 stampede review):
+Six concerns (Epic 2 / #7 + the 2026-07-11 stampede/lockup reviews):
   - stall detection      → is_stalled()
   - crash-loop parking   → count_recent() / should_park()
   - cache-budget scaling → scale_demuxer_mb()
   - retry desync         → apply_jitter()
   - outage detection     → is_systemic_outage()
+  - mpv event decoding   → end_file_reason()
 """
 
 from __future__ import annotations
@@ -115,6 +116,67 @@ def is_systemic_outage(
     }
     needed = max(min_cells, (total_cells + 1) // 2)
     return len(recent) >= needed
+
+
+# libmpv MPV_END_FILE_REASON_* values, as surfaced by python-mpv's
+# MpvEventEndFile.reason when only the int is available.
+_END_FILE_REASONS = {
+    0: "eof",
+    1: "restarted",
+    2: "stop",
+    3: "quit",
+    4: "error",
+    5: "redirect",
+}
+
+
+def end_file_reason(ev: object) -> str:
+    """Extract the canonical end-file reason string from a python-mpv event.
+
+    Duck-typed across python-mpv API generations (probed live 2026-07-12
+    against the shipped mpv-2.dll + python-mpv 1.x):
+      - 1.x: ev.as_dict() → {"reason": b"stop"/b"error"/...} (bytes!)
+      - 1.x: ev.data → MpvEventEndFile with .reason as an int
+      - legacy: ev.event → plain dict with a "reason" key
+
+    The old inline extraction did `ev.event.get("reason")`, which raises
+    AttributeError on python-mpv 1.x and silently defaulted EVERY event —
+    including load errors and loadfile replaces — to "eof". Unknown shapes
+    still fall back to "eof" (the historic default) so a future API change
+    degrades to the old behavior rather than crashing the event thread.
+    """
+    def _norm(raw: object) -> str | None:
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", "replace")
+        if isinstance(raw, bool):  # bools are ints; reject explicitly
+            return None
+        if isinstance(raw, int):
+            return _END_FILE_REASONS.get(raw, "eof")
+        if isinstance(raw, str) and raw:
+            return raw
+        return None
+
+    try:
+        got = _norm(ev.as_dict().get("reason"))  # type: ignore[attr-defined]
+        if got is not None:
+            return got
+    except Exception:
+        pass
+    try:
+        got = _norm(getattr(getattr(ev, "data", None), "reason", None))
+        if got is not None:
+            return got
+    except Exception:
+        pass
+    try:
+        legacy = getattr(ev, "event", None)
+        if isinstance(legacy, dict):
+            got = _norm(legacy.get("reason"))
+            if got is not None:
+                return got
+    except Exception:
+        pass
+    return "eof"
 
 
 def escalation_plan(attempt: int, max_retries: int) -> dict:
