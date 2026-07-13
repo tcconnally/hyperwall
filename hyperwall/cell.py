@@ -144,17 +144,45 @@ _G_FAV = "⭐" + _MONO
 
 
 class ClickSlider(QSlider):
-    """Slider that jumps to click position."""
+    """Slider that treats any left press as an absolute grab.
+
+    The previous jump-then-delegate version moved the handle under the
+    cursor and relied on QSlider's own hit-test to begin a drag. With the
+    9px styled handle, the raw x→value mapping lands the handle a few px
+    off near the groove ends, the hit-test misses, and Qt falls back to a
+    page-step: no sliderPressed/sliderReleased, so the seek wiring never
+    fires and the UI timer snaps the thumb back — click-seek only worked
+    mid-bar. Owning press/move/release makes click and drag one code path;
+    setSliderDown() emits the same pressed/released signals the seek
+    handlers are wired to.
+    """
+
+    def _value_at(self, x: float) -> int:
+        return QStyle.sliderValueFromPosition(
+            self.minimum(), self.maximum(), int(x), max(1, self.width()),
+        )
 
     def mousePressEvent(self, event: Any) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self.setSliderPosition(
-                QStyle.sliderValueFromPosition(
-                    self.minimum(), self.maximum(),
-                    int(event.position().x()), self.width(),
-                )
-            )
+            self.setSliderPosition(self._value_at(event.position().x()))
+            self.setSliderDown(True)   # emits sliderPressed
+            event.accept()
+            return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: Any) -> None:
+        if self.isSliderDown():
+            self.setSliderPosition(self._value_at(event.position().x()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: Any) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.isSliderDown():
+            self.setSliderDown(False)  # emits sliderReleased
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class VideoCell(QWidget):
