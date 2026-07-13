@@ -124,6 +124,10 @@ MPV_OPTS: dict[str, object] = dict(
     network_timeout=15,
     stream_lavf_o="reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
     keep_open="always",
+    # Open the queued playlist entry's demuxer once the current one is fully
+    # read (≈ demuxer_readahead_secs before EOF) — the gapless-advance warmup
+    # for the wall's prefetched next item (probed ~60ms to first frame).
+    prefetch_playlist="yes",
     force_window="no",
     idle="yes",
     osd_level=0,

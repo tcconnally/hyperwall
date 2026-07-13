@@ -265,6 +265,7 @@ class WallController:
 
     def _build_url(
         self, item: dict[str, Any], force_transcode: bool = False,
+        prefetch: bool = False,
     ) -> tuple[str, str]:
         iid = item["Id"]
         key = self.client.access_token
@@ -280,9 +281,11 @@ class WallController:
         )
         if transcode:
             tag = "TRANSCODE/retry" if force_transcode else "TRANSCODE/auto"
-            logger.info("[%s] %s", tag, item.get("Name"))
         else:
-            logger.info("[DIRECT] %s", item.get("Name"))
+            tag = "DIRECT"
+        if prefetch:
+            tag += "/prefetch"
+        logger.info("[%s] %s", tag, item.get("Name"))
         return url, sid
 
     # ── session management ────────────────────────────────────────────────
@@ -342,6 +345,19 @@ class WallController:
         cell._emby_session_id = sid
         cell._emby_item_id = item["Id"]
         cell.play(item, url)
+        self._arm_prefetch(cell)
+
+    def _arm_prefetch(self, cell: VideoCell) -> None:
+        """Draw the cell's next item now and queue it on the live mpv so
+        prefetch-playlist warms its demuxer before the current track ends.
+        Skipped silently when the pool is empty or the cell has no live
+        player — the advance then just takes the cold path."""
+        item = self.playlists.next(self._cell_group(cell))
+        if item is None:
+            return
+        url, sid = self._build_url(item, prefetch=True)
+        if not cell.prefetch(item, url, sid):
+            logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
 
     def run_on_main(self, fn: Any) -> None:
         """Queue a callable onto the GUI thread (safe from any thread)."""
@@ -381,11 +397,22 @@ class WallController:
         if is_retry and cell.current_item:
             self._hand_off(cell, cell.current_item, cell._force_transcode)
             return
+        prev = cell.current_item
+        # Fast path: the next item is already queued and warmed on this
+        # cell's mpv playlist — the advance is a ~60ms cut, not a cold open.
+        if cell.advance_to_prefetched():
+            if prev:
+                cell.history.append(prev)
+            logger.info(
+                "[PREFETCH→] %s", (cell.current_item or {}).get("Name"),
+            )
+            self._arm_prefetch(cell)
+            return
         item = self.playlists.next(self._cell_group(cell))
         if item is None:
             return
-        if cell.current_item:
-            cell.history.append(cell.current_item)
+        if prev:
+            cell.history.append(prev)
         self._hand_off(cell, item)
 
     def prev_video(self, cell: VideoCell) -> None:
@@ -437,6 +464,10 @@ class WallController:
         self.filter_mode = mode
         self.playlists.set_source(self.filtered, DEFAULT_GROUP)
         logger.info("Filter: %s (%d items)", mode.upper(), len(self.filtered))
+        # Queued prefetches were drawn from the OLD pool — drop them so the
+        # restart below can't fast-path into an item the filter excludes.
+        for c in self.cells:
+            c.drop_prefetch()
         for i, c in enumerate(self.cells):
             QTimer.singleShot(
                 i * STREAM_START_STAGGER_MS,
@@ -585,6 +616,11 @@ class WallController:
         # Stop all Emby sessions
         for c in self.cells:
             self.stop_emby_session(c._emby_item_id, c._emby_session_id)
+            # A queued prefetch may have opened its stream server-side
+            # (mpv pre-opens the demuxer near the current track's EOF).
+            if c._prefetched is not None:
+                p_item, _p_url, p_sid = c._prefetched
+                self.stop_emby_session(p_item.get("Id"), p_sid)
 
         # Flush stats
         if STATS_ENABLED:
