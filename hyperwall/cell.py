@@ -815,10 +815,13 @@ class VideoCell(QWidget):
         self.vol_slider.setValue(0)
         self.vol_slider.setFixedWidth(_s(52))
         self.vol_slider.setFixedHeight(_s(14))
-        self.vol_slider.setToolTip("Volume")
-        # Dead chrome while muted (the wall's default state); _toggle_mute
-        # brings it back the moment audio is live.
-        self.vol_slider.setVisible(False)
+        self.vol_slider.setToolTip("Volume (drag to unmute)")
+        # Always present. It was hidden while muted, but showing a child
+        # dynamically under the pill's QGraphicsOpacityEffect doesn't repaint
+        # reliably on the live wall (fine offscreen, where grab() forces a
+        # full render) — and a static row is better anyway: nothing shifts,
+        # and dragging up from 0 while muted already unmutes via
+        # _vol_changed. At 0 the empty groove reads "silent" on its own.
 
         self.lbl_time = QLabel("0:00 / 0:00")
         self.lbl_time.setFixedWidth(_s(78))
@@ -1061,9 +1064,11 @@ class VideoCell(QWidget):
             except Exception as e:
                 logger.debug("toggle_mute failed: %s", e)
         self.btn_mute.setText(_G_MUTE if muted else _G_UNMUTE)
-        self.vol_slider.setVisible(not muted)
         if not muted and self.vol_slider.value() == 0:
             self.vol_slider.setValue(70)
+        # Nudge the whole pill through the opacity effect — targeted child
+        # updates have been seen to stale under QGraphicsOpacityEffect live.
+        self.controls_frame.update()
 
     def _vol_changed(self, val: int) -> None:
         if self._mpv is not None:
