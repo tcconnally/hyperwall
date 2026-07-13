@@ -133,8 +133,18 @@ def test_needs_transcode_includes_budget():
 
 # ── needs_transcode (flag binding) ────────────────────────────────────────────
 
-def test_needs_transcode_true_for_4k_when_enabled():
-    assert needs_transcode(_item(3840, 2160), auto_transcode=True)
+def test_needs_transcode_false_for_4k():
+    # Resolution is not a gate (dropped 2026-07-13): 4K within the fps/bitrate
+    # budget direct-plays — the A/B bench measured 0 drops on the direct arm
+    # while server live-transcodes stalled, corrupted, and couldn't seek ahead.
+    assert not needs_transcode(_item(3840, 2160), auto_transcode=True)
+
+
+def test_needs_transcode_true_for_4k_over_budget():
+    # The budget still catches genuinely heavy sources regardless of size.
+    assert needs_transcode(
+        _item(3840, 2160, fps=120), auto_transcode=True, max_fps=66,
+    )
 
 
 def test_needs_transcode_false_when_disabled():

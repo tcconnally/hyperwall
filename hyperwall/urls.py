@@ -78,12 +78,21 @@ def needs_transcode(
 
     `auto_transcode` is the resolved HYPERWALL_AUTO_TRANSCODE flag; when False
     the heuristic is disabled and everything tries DIRECT first. When on,
-    a source transcodes if it exceeds 1080p worth of pixels OR the optional
-    fps/bitrate direct-play budget (see exceeds_direct_budget).
+    a source transcodes only if it exceeds the optional fps/bitrate
+    direct-play budget (see exceeds_direct_budget).
+
+    Resolution is deliberately NOT a gate. The >1080p pixel check sent ~30%
+    of plays to the server for live transcode, and the 2026-07-13 A/B bench
+    showed that arm is where the pain lived: unseekable growing-HLS streams,
+    mid-stream corruption, and wall-wide stalls when the server fell behind —
+    while the direct arm played the same 4K sources with zero dropped frames.
+    A desktop GPU decodes 4K trivially; concurrent live transcodes are the
+    scarce resource. exceeds_1080p() remains for callers that want a
+    resolution probe.
     """
     if not auto_transcode:
         return False
-    return exceeds_1080p(item) or exceeds_direct_budget(
+    return exceeds_direct_budget(
         item, max_fps=max_fps, max_bitrate_mbps=max_bitrate_mbps,
     )
 
