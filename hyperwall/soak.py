@@ -87,7 +87,8 @@ class SoakController(QObject):
     """Owns the churn, sampling, and end-of-run timers. GUI thread only."""
 
     def __init__(self, wall) -> None:
-        super().__init__(wall)
+        # No Qt parent: wall (WallController) is not a QObject.
+        super().__init__()
         self._wall = wall
         self._t0 = time.monotonic()
         self._advances = 0

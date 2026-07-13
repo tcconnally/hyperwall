@@ -323,9 +323,12 @@ def main() -> None:
     else:
         logger.info("Web remote unavailable (flask not installed).")
 
+    # NOTE: WallController is a plain object, not a QObject — it must not be
+    # used as a Qt parent (crashed the 10.6.0 soak launch). These live on
+    # locals until app.exec() returns.
     from .perftrace import PERFTRACE_ENABLED, LoopLagSampler
     if PERFTRACE_ENABLED:
-        _lag_sampler = LoopLagSampler(wall)
+        _lag_sampler = LoopLagSampler()
         _lag_sampler.start()
 
     from .soak import SOAK_MINUTES, SoakController
