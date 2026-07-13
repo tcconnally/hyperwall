@@ -27,6 +27,7 @@ SUITES = [
     "test_scenes",
     "test_backends",
     "test_theme",
+    "test_instrumentation",
 ]
 
 
