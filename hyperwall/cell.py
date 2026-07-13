@@ -200,7 +200,10 @@ class VideoCell(QWidget):
         self.history: deque[dict[str, Any]] = deque(maxlen=50)
         self.looping = False
         self.muted = True
-        self.controls_visible = True
+        # Controls start hidden (the frame is hide()n after build); this flag
+        # must agree or the first hover is a no-op until the autohide timer
+        # happens to correct it.
+        self.controls_visible = False
 
         # Internal state
         self._mpv: Any = None          # mpv.MPV instance
@@ -224,6 +227,9 @@ class VideoCell(QWidget):
         self._switching = False
         self._track_done = False  # this track already triggered its advance
         self._audio_started = False  # True once an audio track has been selected
+        # (item, url, emby_session_id) queued on the live mpv playlist so
+        # prefetch-playlist warms its demuxer before the current track ends.
+        self._prefetched: tuple[dict[str, Any], str, str] | None = None
 
         # Reliability / self-healing (Epic 2)
         self._last_progress_ts = 0.0   # monotonic ts of last time-pos advance
@@ -260,11 +266,11 @@ class VideoCell(QWidget):
         self.controls_frame.hide()
         self._reposition_controls()
 
-        # Autohide timer
+        # Autohide timer (armed on hover / global-show; controls start hidden
+        # so there is nothing to auto-hide at startup)
         self._autohide_timer = QTimer(self)
         self._autohide_timer.setSingleShot(True)
         self._autohide_timer.timeout.connect(self._autohide_controls)
-        self._autohide_timer.start(AUTOHIDE_MS)
 
         # UI refresh timer (only runs while controls visible)
         self._ui_timer = QTimer(self)
@@ -556,8 +562,10 @@ class VideoCell(QWidget):
 
     # ── playback ──────────────────────────────────────────────────────────
 
-    def play(self, item: dict[str, Any], url: str) -> None:
-        """Load a video into this cell."""
+    def _begin_track(self, item: dict[str, Any]) -> None:
+        """Per-track state + UI reset shared by play() and the prefetched
+        advance. No title overlay here: the wall stays chrome-free during
+        steady playback (title lives in the hover control bar)."""
         if self.current_item is not item:
             self._retry_count = 0
             self._force_transcode = False
@@ -569,9 +577,7 @@ class VideoCell(QWidget):
         self._last_seen_pos = -1.0
         self._last_progress_ts = _time.monotonic()
 
-        title = item.get("Name", "Unknown")
-        self.lbl_title.setText(title)
-        self._show_title_overlay(title)
+        self.lbl_title.setText(item.get("Name", "Unknown"))
 
         # Update tag/fav buttons
         raw = item.get("Tags", [])
@@ -584,6 +590,25 @@ class VideoCell(QWidget):
         self.btn_fav.setChecked(
             item.get("UserData", {}).get("IsFavorite", False)
         )
+        # The LOADING pulse / error card used to be dismissed by the title
+        # card that popped on every track change; with that chrome gone the
+        # overlay must be dropped explicitly when a new track starts.
+        self._hide_overlay()
+
+    def _hide_overlay(self) -> None:
+        """Drop any overlay card (LOADING pulse, error notice) immediately —
+        a new track is starting and the wall stays chrome-free."""
+        self._overlay_show_timer.stop()
+        self._overlay_anim.stop()
+        self._loading_pulse.stop()
+        self._title_overlay.hide()
+
+    def play(self, item: dict[str, Any], url: str) -> None:
+        """Load a video into this cell."""
+        # loadfile (replace) clears the mpv playlist tail, so any queued
+        # prefetch entry is gone with it (probed live 2026-07-13).
+        self._prefetched = None
+        self._begin_track(item)
 
         # Determine if we need to recreate mpv
         need_create = self._mpv is None or self._force_transcode
@@ -647,6 +672,72 @@ class VideoCell(QWidget):
             logger.error("mpv loadfile failed: %s", e)
             self._sig_eof.emit(self._mpv_gen, "error")
             return
+
+    # ── gapless prefetch ──────────────────────────────────────────────────
+
+    def prefetch(self, item: dict[str, Any], url: str, session_id: str) -> bool:
+        """Queue the next item on the live mpv playlist.
+
+        With prefetch-playlist=yes, mpv opens the queued entry's demuxer as
+        soon as the current one is fully read (≈ demuxer_readahead_secs
+        before EOF), so the network stream is already warm when we advance —
+        probed at ~60ms to first frame vs a cold loadfile's open latency.
+        """
+        if self._mpv is None:
+            return False
+        try:
+            self._mpv.command("loadfile", url, "append")
+        except Exception as e:
+            logger.debug("prefetch append failed: %s", e)
+            return False
+        self._prefetched = (item, url, session_id)
+        return True
+
+    def drop_prefetch(self) -> None:
+        """Forget the queued entry (e.g. the wall's filter changed and the
+        drawn item may no longer belong). The mpv-side playlist entry is
+        cleared by the next loadfile replace."""
+        self._prefetched = None
+
+    def advance_to_prefetched(self) -> bool:
+        """Jump to the prefetched playlist entry.
+
+        Returns False when there is nothing usable (no queue, dead mpv,
+        command failure) — the caller falls back to a cold play(). Mirrors
+        play()'s reuse path: bank stats, drop a re-muted cell back to
+        aid=no, arm the _switching guard for the old track's stale
+        end-file (reason "stop", probed live), and explicitly unpause
+        because the keep-open EOF pause persists across the switch.
+        """
+        if self._prefetched is None or self._mpv is None:
+            return False
+        item, _url, sid = self._prefetched
+        self._prefetched = None
+        if STATS_ENABLED:
+            self._flush_stats()
+        if self.muted and self._audio_started:
+            try:
+                self._mpv["aid"] = "no"
+                self._audio_started = False
+            except Exception as e:
+                logger.debug("mpv: failed to re-disable aid: %s", e)
+        self._switching = True
+        self._track_done = False
+        try:
+            self._mpv.command("playlist-next")
+            self._mpv["pause"] = False
+            self._paused = False
+            self.btn_play.setText(_G_PAUSE)
+        except Exception as e:
+            self._switching = False
+            logger.warning(
+                "Prefetched advance failed (%s) — falling back to reload.", e
+            )
+            return False
+        self._begin_track(item)
+        self._emby_session_id = sid
+        self._emby_item_id = item["Id"]
+        return True
 
     def release(self) -> None:
         """Clean up and release all resources."""
