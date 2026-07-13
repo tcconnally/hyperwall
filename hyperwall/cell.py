@@ -77,6 +77,7 @@ from .reliability import (
     should_park,
 )
 from . import theme
+from .perftrace import traced
 
 logger = logging.getLogger("HyperWall")
 
@@ -607,6 +608,7 @@ class VideoCell(QWidget):
         self._loading_pulse.stop()
         self._title_overlay.hide()
 
+    @traced("cell.play")
     def play(self, item: dict[str, Any], url: str) -> None:
         """Load a video into this cell."""
         # loadfile (replace) clears the mpv playlist tail, so any queued
@@ -703,6 +705,7 @@ class VideoCell(QWidget):
         cleared by the next loadfile replace."""
         self._prefetched = None
 
+    @traced("cell.advance_to_prefetched")
     def advance_to_prefetched(self) -> bool:
         """Jump to the prefetched playlist entry.
 
@@ -864,6 +867,7 @@ class VideoCell(QWidget):
             self._autohide_timer.stop()
             self._fade_controls(False)
 
+    @traced("cell._fade_controls")
     def _fade_controls(self, visible: bool) -> None:
         self._ctrl_anim.stop()
         if visible:
@@ -970,6 +974,7 @@ class VideoCell(QWidget):
             self.seek_slider.setValue(int(pos / dur * 1000))
         self.lbl_time.setText(f"{self._fmt_time(pos)} / {self._fmt_time(dur)}")
 
+    @traced("cell._seek_press")
     def _seek_press(self) -> None:
         self._dragging = True
         self._autohide_timer.stop()
@@ -980,6 +985,7 @@ class VideoCell(QWidget):
             except Exception:
                 pass
 
+    @traced("cell._seek_release")
     def _seek_release(self) -> None:
         if self._mpv is not None and self._duration_s > 0:
             try:
@@ -998,6 +1004,7 @@ class VideoCell(QWidget):
         (global pause toggle, web remote) using the VS15 monochrome glyphs."""
         self.btn_play.setText(_G_PLAY if paused else _G_PAUSE)
 
+    @traced("cell._toggle_play")
     def _toggle_play(self) -> None:
         if self._mpv is None:
             return
@@ -1042,6 +1049,7 @@ class VideoCell(QWidget):
         except Exception as e:
             logger.debug("enable audio track failed: %s", e)
 
+    @traced("cell._toggle_mute")
     def _toggle_mute(self) -> None:
         muted = self.btn_mute.isChecked()
         self.muted = muted
@@ -1083,6 +1091,7 @@ class VideoCell(QWidget):
             self.btn_mute.setChecked(True)
             self.btn_mute.setText(_G_MUTE)
 
+    @traced("cell._toggle_tag")
     def _toggle_tag(self) -> None:
         if not self.current_item:
             return
@@ -1100,6 +1109,7 @@ class VideoCell(QWidget):
         self.btn_tag.setChecked("ToDelete" in tags)  # :checked tints the glyph red
         self.controller.update_tags(self.current_item)
 
+    @traced("cell._toggle_fav")
     def _toggle_fav(self) -> None:
         if not self.current_item:
             return
@@ -1109,6 +1119,7 @@ class VideoCell(QWidget):
 
     # ── EOF / error handling ──────────────────────────────────────────────
 
+    @traced("cell._handle_track_done")
     def _handle_track_done(self, gen: int) -> None:
         """A track finished naturally (eof-reached flipped True).
 
