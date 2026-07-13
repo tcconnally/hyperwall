@@ -328,6 +328,10 @@ def main() -> None:
         _lag_sampler = LoopLagSampler(wall)
         _lag_sampler.start()
 
+    from .soak import SOAK_MINUTES, SoakController
+    if SOAK_MINUTES > 0:
+        _soak = SoakController(wall)
+
     app.aboutToQuit.connect(wall._cleanup)
     sys.exit(app.exec())
 
