@@ -13,9 +13,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["HYPERWALL_SOAK_MINUTES"] = "1"
 
-from PyQt6.QtCore import QCoreApplication
-
-_app = QCoreApplication.instance() or QCoreApplication([])
+# The ubuntu CI job is the pure-logic lane and deliberately has no PyQt
+# (and hyperwall.soak needs ctypes.wintypes anyway); these tests then skip
+# there and run for real on the windows-build job, which installs pyqt6
+# and runs the suite before building.
+try:
+    from PyQt6.QtCore import QCoreApplication
+    _app = QCoreApplication.instance() or QCoreApplication([])
+    _PYQT = os.name == "nt"
+except ImportError:
+    _PYQT = False
 
 
 class _FakeCell:
@@ -59,6 +66,10 @@ def test_soak_controller_constructs_against_plain_wall():
 
 
 def run_all() -> int:
+    if not _PYQT:
+        print("  SKIP  PyQt6/Windows unavailable — instrumentation tests "
+              "run on the windows-build job.")
+        return 0
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0
     for t in tests:
