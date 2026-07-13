@@ -160,7 +160,11 @@ Write-Host ""
 Write-Host "[*] Building hyperwall.exe..."
 # Hand build.bat the interpreter we already validated above so it doesn't
 # re-detect Python from scratch in cmd (that probe misses some PATH setups).
-$env:HYPERWALL_PY = "py"
+# Pass the RESOLVED path, not the bare name: the Python 3.14 Install Manager
+# exposes py/python as App Execution Aliases that this pwsh session resolves
+# but cmd's PATH lookup does not — a bare "py" makes build.bat die with
+# "'py' is not recognized" even though the alias runs fine by absolute path.
+$env:HYPERWALL_PY = (Get-Command py).Source
 cmd /c "$ScriptDir\build.bat"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[FAIL] Build failed" -ForegroundColor Red
