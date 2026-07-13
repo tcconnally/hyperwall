@@ -86,28 +86,32 @@ logger = logging.getLogger("HyperWall")
 # bar reads as one slab instead of a row of grey chips.
 CTRL_STYLE = f"""
     QFrame#controls {{
-        background: {theme.rgba(theme.SURFACE_0, 0.86)};
-        border-top: 1px solid {theme.rgba(theme.ACCENT_BRIGHT, 0.22)};
-        border-radius: {_s(8)}px {_s(8)}px 0 0;
+        background: {theme.rgba(theme.SURFACE_0, 0.90)};
+        border: 1px solid {theme.rgba(theme.ACCENT_BRIGHT, 0.18)};
+        border-radius: {_s(20)}px;
     }}
-    QLabel {{ color: {theme.TEXT_DIM}; font-family: {theme.FONT}; font-size: {_s(9)}px; background: transparent; }}
+    QLabel {{ color: {theme.TEXT_DIM}; font-family: {theme.FONT}; font-size: {_s(10)}px; background: transparent; }}
+    /* Buttons are bare glyphs on the pill surface — no chip fill at rest, so
+       the bigger icons carry the identity; hover lifts to a round accent. */
     QPushButton {{
-        background: {theme.rgba('#ffffff', 0.06)}; border: none;
-        border-radius: {_s(5)}px; color: {theme.TEXT}; font-size: {_s(11)}px; padding: 1px;
-        min-width: {_s(24)}px; min-height: {_s(24)}px; max-width: {_s(24)}px; max-height: {_s(24)}px;
+        background: transparent; border: none;
+        border-radius: {_s(15)}px; color: {theme.TEXT}; font-size: {_s(15)}px; padding: 0;
+        font-family: 'Segoe UI Symbol', 'Segoe UI Emoji', {theme.FONT};
+        min-width: {_s(30)}px; min-height: {_s(30)}px; max-width: {_s(30)}px; max-height: {_s(30)}px;
     }}
     QPushButton:hover   {{ background: {theme.ACCENT}; color: white; }}
     QPushButton:pressed {{ background: {theme.ACCENT_DEEP}; }}
-    QPushButton:checked {{ background: {theme.ACCENT_DIM}; color: white; }}
-    /* Favorite / trash: active state keeps the neutral bar fill and tints the
-       monochrome glyph itself (gold / red) via QSS — reliable regardless of
-       whether the platform font honours a VS16 colour-emoji selector. */
-    QPushButton#favBtn:checked {{ background: {theme.rgba('#ffffff', 0.06)}; color: {theme.FAVORITE}; }}
-    QPushButton#tagBtn:checked {{ background: {theme.rgba('#ffffff', 0.06)}; color: {theme.DANGER}; }}
-    QSlider::groove:horizontal {{ background: {theme.rgba('#ffffff', 0.16)}; height: {_s(3)}px; border-radius: {_s(2)}px; }}
+    QPushButton:checked {{ background: {theme.rgba('#ffffff', 0.10)}; color: {theme.ACCENT_BRIGHT}; }}
+    /* Favorite / trash: active state tints the monochrome glyph itself
+       (gold / red) via QSS — reliable regardless of whether the platform
+       font honours a VS16 colour-emoji selector. */
+    QPushButton#favBtn:checked {{ background: {theme.rgba('#ffffff', 0.10)}; color: {theme.FAVORITE}; }}
+    QPushButton#tagBtn:checked {{ background: {theme.rgba('#ffffff', 0.10)}; color: {theme.DANGER}; }}
+    QFrame#ctrlSep {{ background: {theme.rgba('#ffffff', 0.14)}; }}
+    QSlider::groove:horizontal {{ background: {theme.rgba('#ffffff', 0.18)}; height: {_s(4)}px; border-radius: {_s(2)}px; }}
     QSlider::sub-page:horizontal {{ background: {theme.ACCENT}; border-radius: {_s(2)}px; }}
     QSlider::handle:horizontal {{
-        background: #ffffff; width: {_s(9)}px; height: {_s(9)}px; margin: {_s(-3)}px 0; border-radius: {_s(5)}px;
+        background: #ffffff; width: {_s(12)}px; height: {_s(12)}px; margin: {_s(-4)}px 0; border-radius: {_s(6)}px;
     }}
     QSlider::handle:horizontal:hover {{ background: {theme.ACCENT_BRIGHT}; }}
 """
@@ -763,70 +767,80 @@ class VideoCell(QWidget):
         self._ctrl_anim.finished.connect(self._on_ctrl_fade_done)
         self._ctrl_effect.setOpacity(CONTROLS_OPACITY)
 
-        outer = QVBoxLayout(self.controls_frame)
-        outer.setContentsMargins(4, 2, 4, 2)
-        outer.setSpacing(1)
+        # Single-row floating pill: transport | seek + time | loop/audio | flags.
+        # The title is no longer squatting in the bar — it shows as the hover
+        # card (see _fade_controls) — which frees the stretch for a long,
+        # precise seek slider.
+        row = QHBoxLayout(self.controls_frame)
+        row.setContentsMargins(_s(12), _s(4), _s(12), _s(4))
+        row.setSpacing(_s(4))
+
+        def _btn(text: str, tip: str, checkable: bool = False) -> QPushButton:
+            b = QPushButton(text)
+            b.setCheckable(checkable)
+            b.setToolTip(tip)
+            return b
+
+        def _sep() -> QFrame:
+            s = QFrame()
+            s.setObjectName("ctrlSep")
+            s.setFixedSize(1, _s(18))
+            return s
+
+        self.btn_prev = _btn(_G_PREV, "Previous")
+        self.btn_play = _btn(_G_PAUSE, "Play / pause")
+        self.btn_next = _btn(_G_NEXT, "Next")
+        self.btn_loop = _btn(_G_LOOP, "Loop this video", checkable=True)
+        self.btn_tag = _btn(_G_TRASH, "Flag for deletion", checkable=True)
+        self.btn_fav = _btn(_G_FAV, "Favorite", checkable=True)
+        self.btn_mute = _btn(_G_MUTE, "Mute / unmute", checkable=True)
+        self.btn_mute.setChecked(True)
+        # Named so their active (checked) state tints the glyph (gold / red)
+        # instead of filling with accent — see the #favBtn:checked /
+        # #tagBtn:checked rules in CTRL_STYLE.
+        self.btn_fav.setObjectName("favBtn")
+        self.btn_tag.setObjectName("tagBtn")
 
         self.seek_slider = ClickSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setRange(0, 1000)
-        self.seek_slider.setFixedHeight(_s(10))
+        self.seek_slider.setFixedHeight(_s(14))
         self.seek_slider.sliderPressed.connect(self._seek_press)
         self.seek_slider.sliderReleased.connect(self._seek_release)
-        outer.addWidget(self.seek_slider)
-
-        row = QHBoxLayout()
-        row.setSpacing(2)
-        row.setContentsMargins(0, 0, 0, 0)
-
-        def _btn(text: str, checkable: bool = False) -> QPushButton:
-            b = QPushButton(text)
-            b.setCheckable(checkable)
-            return b
-
-        self.btn_prev = _btn(_G_PREV)
-        self.btn_play = _btn(_G_PAUSE)
-        self.btn_next = _btn(_G_NEXT)
-        self.btn_loop = _btn(_G_LOOP, checkable=True)
-        self.btn_tag = _btn(_G_TRASH, checkable=True)
-        self.btn_fav = _btn(_G_FAV, checkable=True)
-        self.btn_mute = _btn(_G_MUTE, checkable=True)
-        self.btn_mute.setChecked(True)
-        # Named so their active (checked) state keeps a neutral bar-tone fill and
-        # tints the glyph (gold / red) instead of filling with accent — see the
-        # #favBtn:checked / #tagBtn:checked rules in CTRL_STYLE.
-        self.btn_fav.setObjectName("favBtn")
-        self.btn_tag.setObjectName("tagBtn")
 
         self.vol_slider = QSlider(Qt.Orientation.Horizontal)
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(0)
-        self.vol_slider.setFixedWidth(_s(45))
-        self.vol_slider.setFixedHeight(_s(10))
+        self.vol_slider.setFixedWidth(_s(52))
+        self.vol_slider.setFixedHeight(_s(14))
+        self.vol_slider.setToolTip("Volume")
+        # Dead chrome while muted (the wall's default state); _toggle_mute
+        # brings it back the moment audio is live.
+        self.vol_slider.setVisible(False)
 
         self.lbl_time = QLabel("0:00 / 0:00")
-        self.lbl_time.setFixedWidth(_s(75))
+        self.lbl_time.setFixedWidth(_s(78))
         self.lbl_time.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
+        # Kept as the current-title store (play()/_begin_track write it; the
+        # hover card reads it) — not part of the bar layout anymore.
         self.lbl_title = QLabel("Initializing…")
-        self.lbl_title.setStyleSheet(
-            f"color: white; font-family: 'Segoe UI', system-ui, sans-serif;"
-            f" font-size: {_s(12)}px; font-weight: 700; background: transparent;"
-        )
+        self.lbl_title.hide()
 
-        for w in (
-            self.btn_prev, self.btn_play, self.btn_next, self.btn_loop,
-            self.btn_tag, self.btn_fav, self.btn_mute,
-        ):
+        for w in (self.btn_prev, self.btn_play, self.btn_next):
             row.addWidget(w)
-        row.addSpacing(2)
-        row.addWidget(self.vol_slider)
-        row.addSpacing(4)
+        row.addSpacing(_s(6))
+        row.addWidget(self.seek_slider, stretch=1)
         row.addWidget(self.lbl_time)
-        row.addSpacing(2)
-        row.addWidget(self.lbl_title, stretch=1)
-        outer.addLayout(row)
+        row.addSpacing(_s(6))
+        row.addWidget(_sep())
+        row.addWidget(self.btn_loop)
+        row.addWidget(self.btn_mute)
+        row.addWidget(self.vol_slider)
+        row.addWidget(_sep())
+        row.addWidget(self.btn_tag)
+        row.addWidget(self.btn_fav)
 
         # Wire signals
         self.btn_play.clicked.connect(self._toggle_play)
@@ -857,6 +871,10 @@ class VideoCell(QWidget):
             if not self._ui_timer.isActive():
                 self._refresh_progress_ui()
                 self._ui_timer.start()
+            # The bar no longer carries the title — flash the hover card
+            # instead (auto-fades). LOADING/error cards keep priority.
+            if self.current_item and not self._title_overlay.isVisible():
+                self._show_title_overlay(self.lbl_title.text())
         self._ctrl_anim.setStartValue(self._ctrl_effect.opacity())
         self._ctrl_anim.setEndValue(CONTROLS_OPACITY if visible else 0.0)
         self._ctrl_anim.start()
@@ -877,7 +895,10 @@ class VideoCell(QWidget):
     def _reposition_controls(self) -> None:
         if hasattr(self, "controls_frame"):
             h = self.controls_frame.height()
-            self.controls_frame.setGeometry(0, self.height() - h, self.width(), h)
+            m = _s(12)  # float the pill off the cell edges
+            self.controls_frame.setGeometry(
+                m, self.height() - h - m, self.width() - 2 * m, h,
+            )
             self.controls_frame.raise_()
 
     # ── title overlay ─────────────────────────────────────────────────────
@@ -920,7 +941,8 @@ class VideoCell(QWidget):
         w = min(ovl.sizeHint().width(), max(vw.width() - 24, 0))
         h = ovl.sizeHint().height()
         x = vw.x() + (vw.width() - w) // 2
-        y = vw.y() + vw.height() - h - 20
+        # Clear the floating control pill so the card never sits under it.
+        y = vw.y() + vw.height() - h - CONTROLS_HEIGHT - _s(24)
         ovl.setFixedWidth(w)
         ovl.move(x, y)
 
@@ -1031,6 +1053,7 @@ class VideoCell(QWidget):
             except Exception as e:
                 logger.debug("toggle_mute failed: %s", e)
         self.btn_mute.setText(_G_MUTE if muted else _G_UNMUTE)
+        self.vol_slider.setVisible(not muted)
         if not muted and self.vol_slider.value() == 0:
             self.vol_slider.setValue(70)
 

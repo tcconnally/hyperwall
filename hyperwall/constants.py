@@ -49,7 +49,7 @@ def _s(px: int) -> int:
 # ── Timing ───────────────────────────────────────────────────────────────────
 STREAM_START_STAGGER_MS = 300   # ms between cell starts
 MAX_RETRIES = 3                 # then skip the dead stream
-CONTROLS_HEIGHT = int(44 * UI_SCALE)  # px
+CONTROLS_HEIGHT = int(40 * UI_SCALE)  # px — single-row floating pill
 CONTROLS_OPACITY = 0.82
 AUTOHIDE_MS = 5_000             # one-shot startup auto-hide
 OVERLAY_SHOW_MS = 3_000         # title overlay before fade
