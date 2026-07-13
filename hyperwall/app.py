@@ -323,6 +323,11 @@ def main() -> None:
     else:
         logger.info("Web remote unavailable (flask not installed).")
 
+    from .perftrace import PERFTRACE_ENABLED, LoopLagSampler
+    if PERFTRACE_ENABLED:
+        _lag_sampler = LoopLagSampler(wall)
+        _lag_sampler.start()
+
     app.aboutToQuit.connect(wall._cleanup)
     sys.exit(app.exec())
 

@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .cell import VideoCell
+from .perftrace import traced
 from .constants import (
     OUTAGE_MIN_CELLS,
     OUTAGE_WINDOW_S,
@@ -331,6 +332,7 @@ class WallController:
 
     # ── playout ───────────────────────────────────────────────────────────
 
+    @traced("wall._hand_off")
     def _hand_off(
         self,
         cell: VideoCell,
@@ -347,6 +349,7 @@ class WallController:
         cell.play(item, url)
         self._arm_prefetch(cell)
 
+    @traced("wall._arm_prefetch")
     def _arm_prefetch(self, cell: VideoCell) -> None:
         """Draw the cell's next item now and queue it on the live mpv so
         prefetch-playlist warms its demuxer before the current track ends.
@@ -393,6 +396,7 @@ class WallController:
         per-monitor sourcing sets cell._source_group to a distinct key."""
         return getattr(cell, "_source_group", DEFAULT_GROUP) or DEFAULT_GROUP
 
+    @traced("wall.next_video")
     def next_video(self, cell: VideoCell, is_retry: bool = False) -> None:
         if is_retry and cell.current_item:
             self._hand_off(cell, cell.current_item, cell._force_transcode)
@@ -415,6 +419,7 @@ class WallController:
             cell.history.append(prev)
         self._hand_off(cell, item)
 
+    @traced("wall.prev_video")
     def prev_video(self, cell: VideoCell) -> None:
         if cell.history:
             item = cell.history.pop()
@@ -430,6 +435,7 @@ class WallController:
             "Controls: %s", "VISIBLE" if self.controls_visible else "HIDDEN"
         )
 
+    @traced("wall._global_toggle_pause")
     def _global_toggle_pause(self) -> None:
         active_mpvs = [c for c in self.cells if c._mpv is not None]
         if not active_mpvs:
@@ -449,6 +455,7 @@ class WallController:
             except Exception as e:
                 logger.debug("Pause toggle failed on cell: %s", e)
 
+    @traced("wall._set_filter")
     def _set_filter(self, mode: str) -> None:
         if mode == "favorites":
             subset = [
