@@ -448,16 +448,19 @@ class VideoCell(QWidget):
     def _flush_stats(self) -> None:
         """Snapshot current mpv stats into running totals."""
         if self._mpv is not None:
+            # Stats names are property-only: read via attribute (m[...] is
+            # options/<name> and raises), or the snapshot silently no-ops and
+            # the totals ride on whatever the observers last delivered.
             for prop in STATS_COUNTER_PROPS:
                 try:
-                    v = self._mpv[prop]
+                    v = getattr(self._mpv, prop.replace("-", "_"))
                     if v is not None:
                         self._stats_current[prop] = float(v)
                 except Exception:
                     pass
             for prop in STATS_INFO_PROPS:
                 try:
-                    v = self._mpv[prop]
+                    v = getattr(self._mpv, prop.replace("-", "_"))
                     if v is not None:
                         self._stats_info[prop] = v
                 except Exception:
@@ -892,7 +895,7 @@ class VideoCell(QWidget):
         try:
             self._mpv["aid"] = "auto"
             self._audio_started = True
-            pos = self._mpv["time-pos"]
+            pos = self._mpv.time_pos  # property-only; m[...] would raise
             if pos is not None:
                 self._mpv.seek(pos, "absolute")
         except Exception as e:
@@ -979,7 +982,12 @@ class VideoCell(QWidget):
         if self._switching or self._track_done:
             return
         try:
-            if self._mpv["eof-reached"] is not True:
+            # Attribute access, NOT item access: python-mpv's m[...] reads
+            # options/<name>, and eof-reached is property-only, so the old
+            # m["eof-reached"] raised on every call and this guard silently
+            # swallowed EVERY natural-EOF advance (cell froze on the last
+            # frame until the stall watchdog "rescued" it as an error).
+            if self._mpv.eof_reached is not True:
                 return  # stale — the track this signal was about is gone
         except Exception:
             return
