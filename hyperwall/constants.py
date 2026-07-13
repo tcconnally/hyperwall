@@ -87,9 +87,12 @@ OUTAGE_WINDOW_S = _int_env("HYPERWALL_OUTAGE_WINDOW_S", 45, 10, 600)
 OUTAGE_MIN_CELLS = _int_env("HYPERWALL_OUTAGE_MIN_CELLS", 3, 2, 100)
 OUTAGE_BACKOFF_S = _int_env("HYPERWALL_OUTAGE_BACKOFF_S", 20, 5, 600)
 
-# Direct-play budget: sources heavier than this transcode server-side even at
-# <=1080p (resolution alone misses a 1080p 120fps 96 Mbps file, which is real
-# decode + network load multiplied across the grid). 0 disables a check.
+# Direct-play budget: sources heavier than this transcode server-side. This is
+# the ONLY auto-transcode gate — the >1080p resolution gate was dropped
+# 2026-07-13 (A/B bench: 4K direct-plays with 0 drops, while the live-transcode
+# arm produced unseekable, corruption-prone, stall-prone streams). A 1080p
+# 120fps 96 Mbps file is still real decode + network load multiplied across
+# the grid, hence the fps/bitrate caps. 0 disables a check.
 MAX_DIRECT_FPS = _int_env("HYPERWALL_MAX_DIRECT_FPS", 66, 0, 1_000)
 MAX_DIRECT_BITRATE_MBPS = _int_env("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", 60, 0, 10_000)
 

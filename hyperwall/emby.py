@@ -26,14 +26,14 @@ from .backends import (
 
 logger = logging.getLogger("HyperWall")
 
-# Auto-transcode heuristic: sources >1080p get server-side downscale.
-# Override with HYPERWALL_AUTO_TRANSCODE=0.
+# Auto-transcode heuristic: sources beyond the fps/bitrate direct-play
+# budget get server-side downscale. Override with HYPERWALL_AUTO_TRANSCODE=0.
 _AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1"
 
 
 def needs_transcode(item: dict[str, Any]) -> bool:
-    """Heuristic: return True if the source exceeds 1080p (orientation-
-    agnostic) or the fps/bitrate direct-play budget.
+    """Heuristic: return True if the source exceeds the fps/bitrate
+    direct-play budget (resolution is not a gate — see urls.needs_transcode).
 
     Thin wrapper over the pure helper in urls.py, binding the resolved
     HYPERWALL_AUTO_TRANSCODE flag and the direct-play budget constants.
