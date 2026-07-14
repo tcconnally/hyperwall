@@ -7,7 +7,7 @@ heavy libs to print the runtime banner.
 
 from __future__ import annotations
 
-__version__ = "10.6.2"
+__version__ = "10.6.3"
 # Short "major.minor" form, derived — used for User-Agent / Emby auth Version /
 # window titles so a version bump touches exactly ONE line (this file).
 VERSION_SHORT = ".".join(__version__.split(".")[:2])

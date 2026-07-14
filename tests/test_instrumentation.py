@@ -54,6 +54,20 @@ def test_loop_lag_sampler_constructs_and_ticks():
     assert True
 
 
+def test_resource_snapshot_returns_real_values():
+    # Regression: truncated GetCurrentProcess pseudo-handle made every
+    # Win32 call fail silently — an hour-long soak logged gdi=0/ws=None.
+    # A live process always has a nonzero working set and ≥1 thread.
+    from hyperwall.soak import _resource_snapshot
+    snap = _resource_snapshot()
+    assert snap.get("ws_mb", 0) > 0, f"working set missing/zero: {snap}"
+    assert snap.get("private_mb", 0) > 0, f"private bytes missing/zero: {snap}"
+    assert snap.get("threads", 0) >= 1
+    # USER objects: any process with a QCoreApplication has at least one
+    # (message-only) window on Windows; GDI can legitimately be 0 offscreen.
+    assert "user" in snap and "gdi" in snap
+
+
 def test_soak_controller_constructs_against_plain_wall():
     from hyperwall.soak import SoakController
     wall = _PlainWall()
