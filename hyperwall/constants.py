@@ -98,8 +98,11 @@ MAX_DIRECT_BITRATE_MBPS = _int_env("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", 60, 0, 1
 
 # Memory-aware demuxer cache budget. Each cell wants PER_CELL demuxer bytes, but
 # the grid total is capped at CACHE_BUDGET_MB so large grids don't blow up RAM.
-DEMUXER_PER_CELL_MB = _int_env("HYPERWALL_DEMUXER_PER_CELL_MB", 512, 32, 2_048)
-CACHE_BUDGET_MB = _int_env("HYPERWALL_CACHE_BUDGET_MB", 3_072, 128, 65_536)
+# Sized for this box (32 GB): 1 GB/cell, 8 GB grid cap — deep enough that the
+# 60s readahead (see MPV_OPTS) is byte-bound only above ~140 Mbps, so network
+# blips stay invisible. Was 512MB/3GB, tuned for a leaner host.
+DEMUXER_PER_CELL_MB = _int_env("HYPERWALL_DEMUXER_PER_CELL_MB", 1_024, 32, 4_096)
+CACHE_BUDGET_MB = _int_env("HYPERWALL_CACHE_BUDGET_MB", 8_192, 128, 65_536)
 
 # ── MPV Options ──────────────────────────────────────────────────────────────
 MPV_OPTS: dict[str, object] = dict(
@@ -112,15 +115,26 @@ MPV_OPTS: dict[str, object] = dict(
     # (~3.2 GB → ~2.2 GB) at equal CPU/power and zero frame drops. If a
     # driver/GPU regresses, override with HYPERWALL_HWDEC=nvdec-copy.
     hwdec="d3d11va",
-    profile="fast",
+    # High-quality downscaling. A video wall's core job is shrinking 4K/1080p
+    # sources into small grid cells, so the downscaler IS the picture quality.
+    # profile=fast used to force bilinear to save GPU this box doesn't need
+    # (benchmark: ~1% GPU, 0 drops) — replaced with mitchell + correct/linear
+    # downscaling (crisp, cheap), ewa_lanczossharp for the rare upscale, and
+    # deband to kill gradient banding. Force a profile via HYPERWALL_PROFILE
+    # if a weaker GPU ever runs this.
+    dscale="mitchell",
+    correct_downscaling="yes",
+    linear_downscaling="yes",
+    scale="ewa_lanczossharp",
+    deband="yes",
     video_sync="audio",
     video_sync_max_video_change=5,
     interpolation="no",
     target_colorspace_hint="yes",
     cache="yes",
-    cache_secs=30,
-    demuxer_max_bytes="512MiB",
-    demuxer_readahead_secs=30,
+    cache_secs=60,
+    demuxer_max_bytes="1024MiB",
+    demuxer_readahead_secs=60,
     network_timeout=15,
     stream_lavf_o="reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
     keep_open="always",

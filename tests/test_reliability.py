@@ -296,8 +296,8 @@ def test_constants_defaults_load():
     assert c.STALL_TIMEOUT_S == 20
     assert c.WATCHDOG_INTERVAL_MS == 5_000
     assert c.CRASH_LOOP_THRESHOLD == 5
-    assert c.DEMUXER_PER_CELL_MB == 512
-    assert c.CACHE_BUDGET_MB == 3_072
+    assert c.DEMUXER_PER_CELL_MB == 1_024
+    assert c.CACHE_BUDGET_MB == 8_192
 
 
 def test_apply_cache_budget_shape():
