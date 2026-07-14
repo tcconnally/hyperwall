@@ -108,6 +108,9 @@ CTRL_STYLE = f"""
        font honours a VS16 colour-emoji selector. */
     QPushButton#favBtn:checked {{ background: {theme.rgba('#ffffff', 0.10)}; color: {theme.FAVORITE}; }}
     QPushButton#tagBtn:checked {{ background: {theme.rgba('#ffffff', 0.10)}; color: {theme.DANGER}; }}
+    /* Audible (unmuted) cell: bright speaker so live-audio cells are
+       identifiable at a glance across the wall. */
+    QPushButton#muteBtn[audible="true"] {{ color: {theme.ACCENT_BRIGHT}; }}
     QFrame#ctrlSep {{ background: {theme.rgba('#ffffff', 0.14)}; }}
     QSlider::groove:horizontal {{ background: {theme.rgba('#ffffff', 0.18)}; height: {_s(4)}px; border-radius: {_s(2)}px; }}
     QSlider::sub-page:horizontal {{ background: {theme.ACCENT}; border-radius: {_s(2)}px; }}
@@ -205,6 +208,7 @@ class VideoCell(QWidget):
         self.history: deque[dict[str, Any]] = deque(maxlen=50)
         self.looping = False
         self.muted = True
+        self._last_vol = 70  # per-cell; restored when unmuting from silence
         # Controls start hidden (the frame is hide()n after build); this flag
         # must agree or the first hover is a no-op until the autohide timer
         # happens to correct it.
@@ -803,6 +807,11 @@ class VideoCell(QWidget):
         # #tagBtn:checked rules in CTRL_STYLE.
         self.btn_fav.setObjectName("favBtn")
         self.btn_tag.setObjectName("tagBtn")
+        # Audible cells tint the speaker glyph accent-bright (#muteBtn
+        # [audible="true"] rule) so a glance at the wall shows exactly which
+        # cells are live — audio is per-cell and several can play at once.
+        self.btn_mute.setObjectName("muteBtn")
+        self.btn_mute.setProperty("audible", False)
 
         self.seek_slider = ClickSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setRange(0, 1000)
@@ -1052,9 +1061,23 @@ class VideoCell(QWidget):
         except Exception as e:
             logger.debug("enable audio track failed: %s", e)
 
-    @traced("cell._toggle_mute")
-    def _toggle_mute(self) -> None:
-        muted = self.btn_mute.isChecked()
+    def _sync_mute_ui(self, muted: bool) -> None:
+        """Single writer for every mute-state visual: glyph, checked state,
+        and the audible accent tint. Three call sites used to update these
+        piecemeal — the exact shape that lets button state drift from
+        player state."""
+        self.btn_mute.setChecked(muted)
+        self.btn_mute.setText(_G_MUTE if muted else _G_UNMUTE)
+        self.btn_mute.setProperty("audible", not muted)
+        st = self.btn_mute.style()
+        st.unpolish(self.btn_mute)
+        st.polish(self.btn_mute)
+        # Nudge the whole pill through the opacity effect — targeted child
+        # updates have been seen to stale under QGraphicsOpacityEffect live.
+        self.controls_frame.update()
+
+    def _apply_mute(self, muted: bool) -> None:
+        """Single writer for the mute state itself (cache + mpv + UI)."""
         self.muted = muted
         if not muted:
             self._enable_audio_track()
@@ -1062,39 +1085,33 @@ class VideoCell(QWidget):
             try:
                 self._mpv["mute"] = muted
             except Exception as e:
-                logger.debug("toggle_mute failed: %s", e)
-        self.btn_mute.setText(_G_MUTE if muted else _G_UNMUTE)
-        if not muted and self.vol_slider.value() == 0:
-            self.vol_slider.setValue(70)
-        # Nudge the whole pill through the opacity effect — targeted child
-        # updates have been seen to stale under QGraphicsOpacityEffect live.
-        self.controls_frame.update()
+                logger.debug("apply_mute failed: %s", e)
+        self._sync_mute_ui(muted)
+
+    @traced("cell._toggle_mute")
+    def _toggle_mute(self) -> None:
+        muted = self.btn_mute.isChecked()
+        self._apply_mute(muted)
+        # Unmuting must land somewhere audible: restore this cell's last
+        # used volume (default 70). The old ==0 check missed sliders left
+        # at low nonzero values from earlier fiddling.
+        if not muted and self.vol_slider.value() < 10:
+            self.vol_slider.setValue(self._last_vol)
 
     def _vol_changed(self, val: int) -> None:
+        if val >= 10:
+            # Remember deliberate volumes only — a near-silent 4 must not
+            # become the level a later unmute "restores" to.
+            self._last_vol = val
         if self._mpv is not None:
             try:
                 self._mpv["volume"] = float(val)
             except Exception as e:
                 logger.debug("vol_changed failed: %s", e)
         if val > 0 and self.muted:
-            self.muted = False
-            self._enable_audio_track()
-            if self._mpv is not None:
-                try:
-                    self._mpv["mute"] = False
-                except Exception as e:
-                    logger.debug("vol_changed mute-clear failed: %s", e)
-            self.btn_mute.setChecked(False)
-            self.btn_mute.setText(_G_UNMUTE)
+            self._apply_mute(False)   # drag up from silence = unmute
         elif val == 0 and not self.muted:
-            self.muted = True
-            if self._mpv is not None:
-                try:
-                    self._mpv["mute"] = True
-                except Exception as e:
-                    logger.debug("vol_changed mute-set failed: %s", e)
-            self.btn_mute.setChecked(True)
-            self.btn_mute.setText(_G_MUTE)
+            self._apply_mute(True)    # drag to zero = mute
 
     @traced("cell._toggle_tag")
     def _toggle_tag(self) -> None:

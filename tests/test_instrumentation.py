@@ -18,8 +18,8 @@ os.environ["HYPERWALL_SOAK_MINUTES"] = "1"
 # there and run for real on the windows-build job, which installs pyqt6
 # and runs the suite before building.
 try:
-    from PyQt6.QtCore import QCoreApplication
-    _app = QCoreApplication.instance() or QCoreApplication([])
+    from PyQt6.QtWidgets import QApplication
+    _app = QApplication.instance() or QApplication([])
     _PYQT = os.name == "nt"
 except ImportError:
     _PYQT = False
