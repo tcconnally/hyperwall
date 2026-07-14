@@ -65,6 +65,16 @@ def _resource_snapshot() -> dict[str, int]:
         k32 = ctypes.windll.kernel32
         u32 = ctypes.windll.user32
         psapi = ctypes.windll.psapi
+        # Declare 64-bit handle types explicitly: the default c_int restype
+        # truncates the pseudo-handle, every call below then fails silently
+        # and the first soak run logged gdi=0/ws=None for the whole hour.
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        u32.GetGuiResources.argtypes = [ctypes.c_void_p, wt.DWORD]
+        psapi.GetProcessMemoryInfo.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(_PROCESS_MEMORY_COUNTERS),
+            wt.DWORD,
+        ]
         h = k32.GetCurrentProcess()
         pmc = _PROCESS_MEMORY_COUNTERS()
         pmc.cb = ctypes.sizeof(pmc)
