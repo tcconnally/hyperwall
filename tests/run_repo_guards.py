@@ -46,10 +46,10 @@ def test_01_entry_point_imports():
 def test_02_package_identity():
     """Package has version and banner."""
     from hyperwall import __version__, runtime_banner
-    assert __version__ == "10.8.0"
+    assert __version__ == "10.9.0"
     banner = runtime_banner()
     assert "Hyperwall" in banner
-    assert "10.8.0" in banner
+    assert "10.9.0" in banner
 
 
 def test_03_config_loads():
@@ -72,6 +72,11 @@ def test_04_constants_present():
     )
     assert isinstance(MPV_OPTS, dict)
     assert "vo" in MPV_OPTS
+    # HQ downscaling is load-bearing for a downscaling wall — guard against a
+    # silent revert to bilinear (profile=fast).
+    assert MPV_OPTS.get("dscale") == "mitchell"
+    assert MPV_OPTS.get("correct_downscaling") == "yes"
+    assert MPV_OPTS.get("profile") != "fast"
     assert STREAM_START_STAGGER_MS > 0
     assert MAX_RETRIES > 0
 
