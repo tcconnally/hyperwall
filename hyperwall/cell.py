@@ -235,7 +235,6 @@ class VideoCell(QWidget):
         # the eof handling of every cell's first track (2026-07-11 lockup).
         self._switching = False
         self._track_done = False  # this track already triggered its advance
-        self._audio_started = False  # True once an audio track has been selected
         # (item, url, emby_session_id) queued on the live mpv playlist so
         # prefetch-playlist warms its demuxer before the current track ends.
         self._prefetched: tuple[dict[str, Any], str, str] | None = None
@@ -376,13 +375,14 @@ class VideoCell(QWidget):
             m["mute"] = self.muted
         except Exception as e:
             logger.debug("mpv: failed to set initial mute: %s", e)
-        # Don't decode an audio track for a muted cell (the wall's default):
-        # aid=no skips audio demux+decode for that cell, which adds up across
-        # the grid. The track is (re)selected lazily on first unmute via
-        # _enable_audio_track(), so no reload is needed to hear a cell.
-        self._audio_started = not self.muted
+        # Always select the audio track (even while muted). Audio decode is
+        # negligible next to 4K video on this hardware, and keeping the
+        # decoder + clock warm makes unmute a pure `mute=no` flip — no track
+        # switch, no relock seek, so the picture never freezes. (The old
+        # aid=no lazy-enable saved a sliver of decode but the unmute seek it
+        # required froze the whole cell for ~1s — see git history.)
         try:
-            m["aid"] = "auto" if self._audio_started else "no"
+            m["aid"] = "auto"
         except Exception as e:
             logger.debug("mpv: failed to set initial aid: %s", e)
         if self.looping:
@@ -654,16 +654,6 @@ class VideoCell(QWidget):
             # so bank the outgoing track's stats now or they're lost.
             if STATS_ENABLED:
                 self._flush_stats()
-            # A cell that was unmuted and re-muted still has aid=auto and
-            # decodes audio it never plays. The new file starts a fresh
-            # decoder anyway, so this is the blip-free moment to drop back
-            # to aid=no (mirrors the lazy re-enable in _enable_audio_track).
-            if self.muted and self._audio_started:
-                try:
-                    self._mpv["aid"] = "no"
-                    self._audio_started = False
-                except Exception as e:
-                    logger.debug("mpv: failed to re-disable aid: %s", e)
 
         if self._mpv is None:
             logger.error("mpv not initialized — cannot play.")
@@ -723,10 +713,10 @@ class VideoCell(QWidget):
 
         Returns False when there is nothing usable (no queue, dead mpv,
         command failure) — the caller falls back to a cold play(). Mirrors
-        play()'s reuse path: bank stats, drop a re-muted cell back to
-        aid=no, arm the _switching guard for the old track's stale
-        end-file (reason "stop", probed live), and explicitly unpause
-        because the keep-open EOF pause persists across the switch.
+        play()'s reuse path: bank stats, arm the _switching guard for the
+        old track's stale end-file (reason "stop", probed live), and
+        explicitly unpause because the keep-open EOF pause persists across
+        the switch.
         """
         if self._prefetched is None or self._mpv is None:
             return False
@@ -734,12 +724,6 @@ class VideoCell(QWidget):
         self._prefetched = None
         if STATS_ENABLED:
             self._flush_stats()
-        if self.muted and self._audio_started:
-            try:
-                self._mpv["aid"] = "no"
-                self._audio_started = False
-            except Exception as e:
-                logger.debug("mpv: failed to re-disable aid: %s", e)
         self._switching = True
         self._track_done = False
         try:
@@ -1045,31 +1029,6 @@ class VideoCell(QWidget):
             except Exception as e:
                 logger.debug("toggle_loop failed: %s", e)
 
-    def _enable_audio_track(self) -> None:
-        """Lazily (re)select an audio track the first time a cell is unmuted.
-
-        Muted cells load with aid=no (see _ensure_mpv) so the grid doesn't
-        decode audio it never plays; this restores the track on demand without
-        a full reload. No-op once a track is already selected.
-
-        Selecting a track mid-stream starts its decoder cold with an empty
-        buffer, and because video_sync=audio the master clock immediately
-        follows this half-filled track — playback stutters until audio_buffer
-        fills. Re-seeking to the current position flushes and refills both
-        decoders from a common point so the clock re-locks cleanly (one brief
-        blip on unmute instead of sustained choppiness).
-        """
-        if self._audio_started or self._mpv is None:
-            return
-        try:
-            self._mpv["aid"] = "auto"
-            self._audio_started = True
-            pos = self._mpv.time_pos  # property-only; m[...] would raise
-            if pos is not None:
-                self._mpv.seek(pos, "absolute")
-        except Exception as e:
-            logger.debug("enable audio track failed: %s", e)
-
     def _sync_mute_ui(self, muted: bool) -> None:
         """Single writer for every mute-state visual: glyph, checked state,
         and the audible accent tint. Three call sites used to update these
@@ -1086,10 +1045,12 @@ class VideoCell(QWidget):
         self.controls_frame.update()
 
     def _apply_mute(self, muted: bool) -> None:
-        """Single writer for the mute state itself (cache + mpv + UI)."""
+        """Single writer for the mute state itself (cache + mpv + UI).
+
+        The audio track is always selected (see _ensure_mpv), so unmuting
+        is just clearing mpv's mute flag — the decoder and clock are already
+        warm, no seek, no freeze."""
         self.muted = muted
-        if not muted:
-            self._enable_audio_track()
         if self._mpv is not None:
             try:
                 self._mpv["mute"] = muted

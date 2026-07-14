@@ -22,8 +22,9 @@ except ImportError:
 
 class _FakeMpv:
     def __init__(self):
-        self.props = {"mute": True, "volume": 100.0, "aid": "no",
+        self.props = {"mute": True, "volume": 100.0, "aid": "auto",
                       "pause": False, "time-pos": 12.0, "eof-reached": False}
+        self.seeks = 0
 
     def __setitem__(self, k, v):
         self.props[k] = v
@@ -32,13 +33,15 @@ class _FakeMpv:
         return self.props[k]
 
     def __getattr__(self, name):
+        if name == "seeks":
+            raise AttributeError(name)
         key = name.replace("_", "-")
         if key in self.props:
             return self.props[key]
         raise AttributeError(name)
 
     def seek(self, *a, **k):
-        pass
+        self.seeks += 1
 
     def command(self, *a):
         pass
@@ -66,6 +69,18 @@ def test_unmute_from_fresh_restores_default_volume():
     assert cell.vol_slider.value() == 70
     assert cell._mpv.props["volume"] == 70.0
     assert cell.btn_mute.property("audible") is True
+
+
+def test_unmute_is_pure_flag_flip_no_seek():
+    # The video-freeze fix: unmute must not seek (a seek flushes the video
+    # decoder and freezes the picture ~1s). Audio is armed at load, so
+    # unmuting only clears mpv's mute flag — aid untouched, zero seeks.
+    cell = _make_cell()
+    cell.btn_mute.click()          # unmute
+    assert cell._mpv.seeks == 0
+    assert cell._mpv.props["aid"] == "auto"   # never toggled off/on
+    cell.btn_mute.click()          # re-mute
+    assert cell._mpv.seeks == 0
 
 
 def test_unmute_from_low_nonzero_restores_last_volume():
