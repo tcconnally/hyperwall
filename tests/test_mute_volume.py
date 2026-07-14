@@ -96,6 +96,34 @@ def test_remute_after_drag_unmute():
     assert cell.btn_mute.property("audible") is False
 
 
+def test_drag_down_does_not_poison_last_vol():
+    # Owner report round 2: dragging DOWN from 70 swept every value ≥10
+    # through valueChanged, leaving _last_vol ≈ 10 — the next unmute
+    # "restored" to a whisper. Mid-drag samples must not count.
+    cell = _make_cell()
+    cell.btn_mute.click()          # unmute → restores default 70
+    assert cell.vol_slider.value() == 70
+    # Simulate a real drag down to silence: press, sweep, release at 0.
+    cell.vol_slider.setSliderDown(True)
+    for v in (55, 30, 12, 6, 0):
+        cell.vol_slider.setValue(v)
+    cell.vol_slider.setSliderDown(False)   # emits sliderReleased at 0
+    assert cell.muted is True              # drag-to-zero mutes
+    assert cell._last_vol == 70            # sweep values NOT recorded
+    cell.btn_mute.click()                  # unmute again
+    assert cell.vol_slider.value() == 70   # restores loud, not a whisper
+    assert cell._mpv.props["volume"] == 70.0
+
+
+def test_drag_release_records_resting_volume():
+    cell = _make_cell()
+    cell.btn_mute.click()                  # unmute at 70
+    cell.vol_slider.setSliderDown(True)
+    cell.vol_slider.setValue(45)
+    cell.vol_slider.setSliderDown(False)   # release at 45 → recorded
+    assert cell._last_vol == 45
+
+
 def test_drag_to_zero_mutes_and_syncs_ui():
     cell = _make_cell()
     cell.vol_slider.setValue(50)

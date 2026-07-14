@@ -467,6 +467,14 @@ class VideoCell(QWidget):
             return
         if STATS_ENABLED:
             self._flush_stats()
+        # Silence the handle BEFORE terminate: a wedged teardown gets
+        # abandoned on a daemon thread below, and an abandoned-but-alive
+        # instance that was audible would keep playing sound that no
+        # control can reach (its cell now talks to the replacement).
+        try:
+            self._mpv["mute"] = True
+        except Exception:
+            pass
         mpv_ref = self._mpv
         self._mpv = None
 
@@ -866,6 +874,7 @@ class VideoCell(QWidget):
         self.btn_fav.clicked.connect(self._toggle_fav)
         self.btn_mute.clicked.connect(self._toggle_mute)
         self.vol_slider.valueChanged.connect(self._vol_changed)
+        self.vol_slider.sliderReleased.connect(self._record_resting_vol)
 
     # ── control visibility ────────────────────────────────────────────────
 
@@ -1098,10 +1107,20 @@ class VideoCell(QWidget):
         if not muted and self.vol_slider.value() < 10:
             self.vol_slider.setValue(self._last_vol)
 
+    def _record_resting_vol(self) -> None:
+        """Remember where a volume drag ENDED (sliderReleased)."""
+        if self.vol_slider.value() >= 10:
+            self._last_vol = self.vol_slider.value()
+
     def _vol_changed(self, val: int) -> None:
-        if val >= 10:
-            # Remember deliberate volumes only — a near-silent 4 must not
-            # become the level a later unmute "restores" to.
+        # Remember deliberate resting volumes only. Mid-drag samples must
+        # not count: dragging DOWN from 70 sweeps every value ≥10 past this
+        # handler, which left _last_vol ≈ 10 and made the next unmute
+        # "restore" to a whisper (owner-reported). Drag endpoints land via
+        # _record_resting_vol; this guard covers non-drag changes (clicks,
+        # the unmute restore itself is excluded by isSliderDown()=False but
+        # harmlessly re-records its own value).
+        if val >= 10 and not self.vol_slider.isSliderDown():
             self._last_vol = val
         if self._mpv is not None:
             try:
