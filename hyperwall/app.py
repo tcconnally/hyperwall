@@ -194,12 +194,25 @@ def main() -> None:
     # 4. Process priority (HIGH)
     if os.name == "nt" and not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
         try:
-            ctypes.windll.kernel32.SetPriorityClass(
-                ctypes.windll.kernel32.GetCurrentProcess(), 0x00000080
-            )
-            logger.info("Kernel: Priority set to HIGH.")
-        except Exception:
-            pass
+            # Explicit 64-bit handle types: with ctypes' default c_int
+            # restype the pseudo-handle truncates and SetPriorityClass
+            # fails silently (returns 0) — this call was a no-op from v9
+            # through v10.9 while logging success (2026-07-13 audit).
+            k32 = ctypes.windll.kernel32
+            k32.GetCurrentProcess.restype = ctypes.c_void_p
+            k32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            k32.GetPriorityClass.argtypes = [ctypes.c_void_p]
+            ok = k32.SetPriorityClass(k32.GetCurrentProcess(), 0x00000080)
+            got = k32.GetPriorityClass(k32.GetCurrentProcess())
+            if ok and got == 0x00000080:
+                logger.info("Kernel: Priority set to HIGH (verified).")
+            else:
+                logger.warning(
+                    "Kernel: HIGH priority NOT applied "
+                    "(SetPriorityClass=%s, class=%#x).", ok, got,
+                )
+        except Exception as e:
+            logger.warning("Kernel: priority change failed: %s", e)
 
     app = QApplication(sys.argv)
     theme.apply(app)
@@ -320,8 +333,13 @@ def main() -> None:
 
     if _WEB_AVAILABLE:
         _web.start(wall)
+    elif "_web" in globals():
+        # flask IS bundled (static import chain) — the real gate is the env
+        # var. The old message blamed "flask not installed" and sent
+        # debugging down the wrong path (2026-07-13 audit).
+        logger.info("Web remote off (set HYPERWALL_WEB=1 to enable).")
     else:
-        logger.info("Web remote unavailable (flask not installed).")
+        logger.info("Web remote unavailable (flask not importable).")
 
     # NOTE: WallController is a plain object, not a QObject — it must not be
     # used as a Qt parent (crashed the 10.6.0 soak launch). These live on

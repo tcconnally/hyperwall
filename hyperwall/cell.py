@@ -220,6 +220,7 @@ class VideoCell(QWidget):
         self._duration_s = 0.0
         self._play_pos = 0.0
         self._dragging = False
+        self._paused_before_seek = False
         self._retry_count = 0
         self._force_transcode = False
         self._played_anything = False
@@ -520,9 +521,13 @@ class VideoCell(QWidget):
                         self._stats_info[prop] = v
                 except Exception:
                     pass
-        for k, v in self._stats_current.items():
+        # Detach-swap before iterating: the stats observers write these
+        # dicts from the mpv event thread, and iterating a dict that grows
+        # mid-iteration raises. The reference swap is GIL-atomic; observers
+        # write to the fresh dict while we drain the detached one.
+        current, self._stats_current = self._stats_current, {}
+        for k, v in current.items():
             self._stats_total[k] = self._stats_total.get(k, 0.0) + v
-        self._stats_current.clear()
 
     def _mpv_log(self, level: str, component: str, message: str) -> None:
         """Route mpv log messages to Python logging, suppressing noise."""
@@ -627,6 +632,15 @@ class VideoCell(QWidget):
     @traced("cell.play")
     def play(self, item: dict[str, Any], url: str) -> None:
         """Load a video into this cell."""
+        if self._parked:
+            # A manual/web advance during the park cooldown is a deliberate
+            # resume: clear the parked state so a failure of THIS load runs
+            # the normal retry chain instead of being swallowed by the
+            # _on_error parked-guard (2026-07-13 audit). The pending unpark
+            # timer no-ops (it checks _parked).
+            self._parked = False
+            self._failure_ts.clear()
+            logger.info("Parked cell manually resumed.")
         # loadfile (replace) clears the mpv playlist tail, so any queued
         # prefetch entry is gone with it (probed live 2026-07-13).
         self._prefetched = None
@@ -915,8 +929,10 @@ class VideoCell(QWidget):
         if self._mouse_in_cell:
             self._autohide_timer.start(AUTOHIDE_MS)
             return
+        # Only this cell's state: the controller flag is the GLOBAL toggle
+        # (C key / web). One cell's autohide used to clear it wall-wide,
+        # desyncing the global toggle and the web status (2026-07-13 audit).
         self.controls_visible = False
-        self.controller.controls_visible = False
         self._fade_controls(False)
 
     def _reposition_controls(self) -> None:
@@ -930,7 +946,10 @@ class VideoCell(QWidget):
 
     # ── title overlay ─────────────────────────────────────────────────────
 
-    def _show_title_overlay(self, title: str) -> None:
+    def _show_title_overlay(self, title: str, sticky: bool = False) -> None:
+        """Show the overlay card. sticky=True keeps it up (no auto-fade) —
+        used by the parked card, which previously faded after 3s and left a
+        black frozen cell unexplained for the rest of the 120s cooldown."""
         self._overlay_show_timer.stop()
         self._overlay_anim.stop()
         self._loading_pulse.stop()
@@ -941,7 +960,8 @@ class VideoCell(QWidget):
         self._reposition_overlay()
         self._title_overlay.show()
         self._title_overlay.raise_()
-        self._overlay_show_timer.start(OVERLAY_SHOW_MS)
+        if not sticky:
+            self._overlay_show_timer.start(OVERLAY_SHOW_MS)
 
     def _show_loading(self) -> None:
         """Show a pulsing 'LOADING' card until the first frame arrives.
@@ -1001,6 +1021,10 @@ class VideoCell(QWidget):
     def _seek_press(self) -> None:
         self._dragging = True
         self._autohide_timer.stop()
+        # Remember the pre-drag pause state: releasing a seek used to
+        # unconditionally resume, silently un-pausing a deliberately
+        # paused cell (2026-07-13 audit).
+        self._paused_before_seek = self._paused
         if self._mpv is not None:
             try:
                 self._mpv["pause"] = True
@@ -1015,9 +1039,12 @@ class VideoCell(QWidget):
                 frac = min(self.seek_slider.value() / 1000.0, 0.90)
                 target = frac * self._duration_s
                 self._mpv.seek(target, "absolute")
-                self._mpv["pause"] = False
-                self._paused = False
-                self.btn_play.setText(_G_PAUSE)
+                # Restore the PRE-DRAG pause state instead of always
+                # resuming — a paused cell stays paused after a seek.
+                resume_paused = getattr(self, "_paused_before_seek", False)
+                self._mpv["pause"] = resume_paused
+                self._paused = resume_paused
+                self.btn_play.setText(_G_PLAY if resume_paused else _G_PAUSE)
             except Exception as e:
                 logger.warning("seek failed: %s", e)
         self._dragging = False
@@ -1026,6 +1053,14 @@ class VideoCell(QWidget):
         """Sync the play/pause button glyph to an externally-set pause state
         (global pause toggle, web remote) using the VS15 monochrome glyphs."""
         self.btn_play.setText(_G_PLAY if paused else _G_PAUSE)
+        self._nudge_pill()
+
+    def _nudge_pill(self) -> None:
+        """Repaint the whole control pill. Targeted child updates stale
+        under its QGraphicsOpacityEffect on the live wall (confirmed on the
+        volume slider) — every programmatic control-state change routes a
+        full-pill update through here."""
+        self.controls_frame.update()
 
     @traced("cell._toggle_play")
     def _toggle_play(self) -> None:
@@ -1036,11 +1071,13 @@ class VideoCell(QWidget):
             self._mpv["pause"] = new_pause
             self._paused = new_pause
             self.btn_play.setText(_G_PLAY if new_pause else _G_PAUSE)
+            self._nudge_pill()
         except Exception as e:
             logger.debug("toggle_play failed: %s", e)
 
     def _toggle_loop(self) -> None:
         self.looping = self.btn_loop.isChecked()
+        self._nudge_pill()
         if self._mpv is not None:
             try:
                 self._mpv["loop-file"] = "inf" if self.looping else "no"
@@ -1069,7 +1106,10 @@ class VideoCell(QWidget):
             if pos is not None:
                 self._mpv.seek(pos, "absolute+keyframes")
         except Exception as e:
-            logger.debug("enable audio track failed: %s", e)
+            # WARNING, not debug: _apply_mute proceeds to show the audible
+            # glow, so a swallowed failure here = a "live" cell with no
+            # sound and no trace (2026-07-13 audit).
+            logger.warning("Audio track arm failed on unmute: %s", e)
 
     def _sync_mute_ui(self, muted: bool) -> None:
         """Single writer for every mute-state visual: glyph, checked state,
@@ -1082,9 +1122,7 @@ class VideoCell(QWidget):
         st = self.btn_mute.style()
         st.unpolish(self.btn_mute)
         st.polish(self.btn_mute)
-        # Nudge the whole pill through the opacity effect — targeted child
-        # updates have been seen to stale under QGraphicsOpacityEffect live.
-        self.controls_frame.update()
+        self._nudge_pill()
 
     def _apply_mute(self, muted: bool) -> None:
         """Single writer for the mute state itself (cache + mpv + UI).
@@ -1140,6 +1178,7 @@ class VideoCell(QWidget):
     def _toggle_tag(self) -> None:
         if not self.current_item:
             return
+        self._nudge_pill()
         raw = self.current_item.setdefault("Tags", [])
         tags = (
             [t.get("Name", "") for t in raw]
@@ -1158,6 +1197,7 @@ class VideoCell(QWidget):
     def _toggle_fav(self) -> None:
         if not self.current_item:
             return
+        self._nudge_pill()
         new = self.btn_fav.isChecked()  # :checked tints the glyph gold
         self.current_item.setdefault("UserData", {})["IsFavorite"] = new
         self.controller.update_favorite(self.current_item["Id"], new)
@@ -1176,6 +1216,11 @@ class VideoCell(QWidget):
         advance the new one.
         """
         if gen != self._mpv_gen or self._mpv is None:
+            return
+        if self._paused:
+            # Explicitly paused (global pause / user) — don't yank the wall
+            # forward underneath a pause. The resume path re-checks
+            # eof-reached and advances then (wall._global_toggle_pause).
             return
         if self._switching or self._track_done:
             return
@@ -1327,7 +1372,9 @@ class VideoCell(QWidget):
                 "Retrying in %ds.",
                 CRASH_LOOP_THRESHOLD, CRASH_LOOP_WINDOW_S, CRASH_LOOP_COOLDOWN_S,
             )
-            self._show_title_overlay("Media unavailable — retrying soon…")
+            self._show_title_overlay(
+                "Media unavailable — retrying soon…", sticky=True,
+            )
             QTimer.singleShot(CRASH_LOOP_COOLDOWN_S * 1000, self._unpark)
             return True
         return False

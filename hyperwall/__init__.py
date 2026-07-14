@@ -7,7 +7,7 @@ heavy libs to print the runtime banner.
 
 from __future__ import annotations
 
-__version__ = "10.9.1"
+__version__ = "10.10.0"
 # Short "major.minor" form, derived — used for User-Agent / Emby auth Version /
 # window titles so a version bump touches exactly ONE line (this file).
 VERSION_SHORT = ".".join(__version__.split(".")[:2])
@@ -25,6 +25,11 @@ def _repo_root() -> Path:
 
 
 def _git_value(args: list[str]) -> str | None:
+    if getattr(sys, "frozen", False):
+        # A frozen exe never sits in a git repo (_repo_root points inside
+        # the PyInstaller payload) — skip the doomed subprocess spawn that
+        # every launch paid for (2026-07-13 audit).
+        return None
     try:
         result = subprocess.run(
             ["git", *args],

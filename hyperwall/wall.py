@@ -150,7 +150,10 @@ class WallController:
         # (global de-dup until the pool is exhausted). Per-monitor sourcing
         # (Epic 4) assigns cells to different groups.
         self.playlists = PlaylistManager()
-        self.controls_visible = True
+        # Must match the cells' initial hidden state: True here made the
+        # first C-press a no-op and /api/controls report success without
+        # acting (2026-07-13 audit).
+        self.controls_visible = False
 
         # Thread management
         self._api_pool = ThreadPoolExecutor(
@@ -247,6 +250,11 @@ class WallController:
         if not items:
             logger.warning("No items returned — check config.ini libraries.")
             for cell in self.cells:
+                # play() never runs for these cells: stop the endless
+                # LOADING pulse explicitly, and raise the label — an
+                # unraised Qt sibling can render BEHIND the native video
+                # HWND (2026-07-13 audit).
+                cell._hide_overlay()
                 lbl = QLabel("No items found — check config.ini libraries", cell)
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 lbl.setStyleSheet(
@@ -255,6 +263,7 @@ class WallController:
                 )
                 lbl.resize(cell.video_frame.size())
                 lbl.show()
+                lbl.raise_()
             return
         for i, cell in enumerate(self.cells):
             QTimer.singleShot(
@@ -440,13 +449,17 @@ class WallController:
         active_mpvs = [c for c in self.cells if c._mpv is not None]
         if not active_mpvs:
             return
-        try:
-            any_playing = any(
-                not bool(c._mpv["pause"]) for c in active_mpvs
-            )
-        except Exception as e:
-            logger.debug("Pause state read failed, assuming paused: %s", e)
-            any_playing = False
+        # Per-cell reads: one wedged mpv used to abort the whole generator
+        # and force any_playing=False — turning a global PAUSE press into a
+        # global RESUME (2026-07-13 audit). Unreadable cells count as paused.
+        states = []
+        for c in active_mpvs:
+            try:
+                states.append(not bool(c._mpv["pause"]))
+            except Exception as e:
+                logger.warning("Pause state read failed on a cell: %s", e)
+                states.append(False)
+        any_playing = any(states)
         for c in active_mpvs:
             try:
                 c._mpv["pause"] = any_playing
@@ -454,6 +467,15 @@ class WallController:
                 c.set_paused_ui(any_playing)
             except Exception as e:
                 logger.debug("Pause toggle failed on cell: %s", e)
+        if not any_playing:
+            # RESUME: cells that hit natural EOF while paused skipped their
+            # advance (paused cells don't auto-advance); re-arm them now.
+            for c in active_mpvs:
+                try:
+                    if c._mpv.eof_reached is True:
+                        self.next_video(c, False)
+                except Exception:
+                    pass
 
     @traced("wall._set_filter")
     def _set_filter(self, mode: str) -> None:
@@ -506,8 +528,17 @@ class WallController:
                     "PlayAccess",
                 ):
                     data.pop(k, None)
-                self.client.post(f"/Items/{iid}", json=data, timeout=7)
-                logger.info("API: Tags updated for '%s'", name)
+                r = self.client.post(f"/Items/{iid}", json=data, timeout=7)
+                if r.status_code >= 300:
+                    # Non-2xx used to be logged as success while the server
+                    # rejected the write (2026-07-13 audit).
+                    logger.error(
+                        "API: Tag update REJECTED for '%s' (HTTP %d) — "
+                        "the flag shown in the UI was not persisted.",
+                        name, r.status_code,
+                    )
+                else:
+                    logger.info("API: Tags updated for '%s'", name)
             except Exception as e:
                 logger.error("API: Tag error for '%s': %s", name, e)
 
@@ -519,12 +550,19 @@ class WallController:
                 path = (
                     f"/Users/{self.client.user_id}/FavoriteItems/{item_id}"
                 )
-                (self.client.post if state else self.client.delete)(
+                r = (self.client.post if state else self.client.delete)(
                     path, timeout=7
                 )
-                logger.info(
-                    "API: Favorite toggled for %s -> %s", item_id, state
-                )
+                if r.status_code >= 300:
+                    logger.error(
+                        "API: Favorite toggle REJECTED for %s (HTTP %d) — "
+                        "the state shown in the UI was not persisted.",
+                        item_id, r.status_code,
+                    )
+                else:
+                    logger.info(
+                        "API: Favorite toggled for %s -> %s", item_id, state
+                    )
             except Exception as e:
                 logger.error("API: Favorite error: %s", e)
 

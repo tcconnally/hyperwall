@@ -142,18 +142,69 @@ def ensure_nvidia_profile() -> bool:
         "Applying NVIDIA profile (driver %s) — UAC elevation required.", drv
     )
     try:
-        rc = ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", npi_exe,
-            f'-silentImport "{NIP_FILE}"', SCRIPT_DIR, 0,  # SW_HIDE
-        )
-        if rc <= 32:
+        # ShellExecuteExW with a process handle, not fire-and-forget
+        # ShellExecuteW: the old path wrote the sentinel the moment NPI
+        # *launched*, so a failed -silentImport was cached as success and
+        # never retried until the next driver update (2026-07-13 audit).
+        # Explicit ctypes types throughout — the truncated-handle class has
+        # produced silent no-ops twice in this codebase.
+        import ctypes.wintypes as wt
+
+        class _SHELLEXECUTEINFOW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wt.DWORD), ("fMask", wt.ULONG),
+                ("hwnd", ctypes.c_void_p), ("lpVerb", wt.LPCWSTR),
+                ("lpFile", wt.LPCWSTR), ("lpParameters", wt.LPCWSTR),
+                ("lpDirectory", wt.LPCWSTR), ("nShow", ctypes.c_int),
+                ("hInstApp", ctypes.c_void_p), ("lpIDList", ctypes.c_void_p),
+                ("lpClass", wt.LPCWSTR), ("hkeyClass", ctypes.c_void_p),
+                ("dwHotKey", wt.DWORD), ("hIconOrMonitor", ctypes.c_void_p),
+                ("hProcess", ctypes.c_void_p),
+            ]
+
+        SEE_MASK_NOCLOSEPROCESS = 0x00000040
+        info = _SHELLEXECUTEINFOW()
+        info.cbSize = ctypes.sizeof(info)
+        info.fMask = SEE_MASK_NOCLOSEPROCESS
+        info.lpVerb = "runas"
+        info.lpFile = npi_exe
+        info.lpParameters = f'-silentImport "{NIP_FILE}"'
+        info.lpDirectory = SCRIPT_DIR
+        info.nShow = 0  # SW_HIDE
+
+        shell32 = ctypes.windll.shell32
+        shell32.ShellExecuteExW.argtypes = [
+            ctypes.POINTER(_SHELLEXECUTEINFOW)
+        ]
+        shell32.ShellExecuteExW.restype = wt.BOOL
+        if not shell32.ShellExecuteExW(ctypes.byref(info)) or not info.hProcess:
             logger.warning(
-                "ShellExecuteW returned %d — NPI did not launch.", rc
+                "NPI launch failed (ShellExecuteExW) — isolation not applied."
             )
             return False
+
+        k32 = ctypes.windll.kernel32
+        k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, wt.DWORD]
+        k32.GetExitCodeProcess.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(wt.DWORD)
+        ]
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        WAIT_OBJECT_0 = 0
+        waited = k32.WaitForSingleObject(info.hProcess, 30_000)
+        exit_code = wt.DWORD(0xFFFFFFFF)
+        k32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code))
+        k32.CloseHandle(info.hProcess)
+
+        if waited != WAIT_OBJECT_0 or exit_code.value != 0:
+            logger.warning(
+                "NPI import NOT confirmed (wait=%s, exit=%s) — sentinel not "
+                "written; will retry next launch.", waited, exit_code.value,
+            )
+            return False
+
         with open(NV_SENTINEL, "w", encoding="utf-8") as f:
             f.write(drv)
-        logger.info("NVIDIA profile applied; sentinel written.")
+        logger.info("NVIDIA profile applied (NPI exit 0); sentinel written.")
         return True
     except Exception as e:
         logger.warning("Failed to apply NVIDIA profile: %s", e)
