@@ -28,6 +28,7 @@ SUITES = [
     "test_backends",
     "test_theme",
     "test_instrumentation",
+    "test_mute_volume",
 ]
 
 
