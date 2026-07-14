@@ -29,6 +29,7 @@ SUITES = [
     "test_theme",
     "test_instrumentation",
     "test_mute_volume",
+    "test_audit_regressions",
 ]
 
 

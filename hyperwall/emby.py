@@ -180,17 +180,29 @@ class EmbyClient:
                 if progress_callback:
                     progress_callback(f"Loading '{lib}'...")
                 try:
-                    items = self.get(
-                        f"/Users/{self.user_id}/Items",
-                        params={
-                            "ParentId": lid,
-                            "Recursive": "true",
-                            "IncludeItemTypes": "Video,MusicVideo,Movie,Episode",
-                            "Fields": "MediaSources,MediaStreams,UserData,Tags",
-                            "Limit": "10000",
-                        },
-                        timeout=30,
-                    ).json().get("Items", [])
+                    # Paginate: a single fixed Limit silently truncated
+                    # libraries beyond it while logging a success-looking
+                    # count (2026-07-13 audit).
+                    items: list[dict[str, Any]] = []
+                    page = 5_000
+                    while True:
+                        body = self.get(
+                            f"/Users/{self.user_id}/Items",
+                            params={
+                                "ParentId": lid,
+                                "Recursive": "true",
+                                "IncludeItemTypes": "Video,MusicVideo,Movie,Episode",
+                                "Fields": "MediaSources,MediaStreams,UserData,Tags",
+                                "StartIndex": str(len(items)),
+                                "Limit": str(page),
+                            },
+                            timeout=30,
+                        ).json()
+                        batch = body.get("Items", [])
+                        items.extend(batch)
+                        total = body.get("TotalRecordCount", len(items))
+                        if not batch or len(items) >= total:
+                            break
                     logger.info("Library '%s': %d items", lib, len(items))
                     all_items.extend(items)
                 except requests.RequestException as e:
@@ -266,7 +278,9 @@ class CleanupWorker(QObject):
                 name = item.get("Name", "Unknown")
                 self.progress.emit(name)
                 try:
-                    self.client.delete(f"/Items/{item['Id']}", timeout=7)
+                    r = self.client.delete(f"/Items/{item['Id']}", timeout=7)
+                    if r.status_code >= 300:
+                        raise RuntimeError(f"HTTP {r.status_code}")
                     logger.info("Maintenance: Deleted '%s'", name)
                     ok += 1
                 except Exception as e:

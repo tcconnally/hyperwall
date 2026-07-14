@@ -22,6 +22,13 @@ CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.ini")
 LOG_FILE = os.path.join(SCRIPT_DIR, "hyperwall.log")
 LAUNCHER_EXE = os.path.join(SCRIPT_DIR, "hyperwall.exe")
 NIP_FILE = os.path.join(SCRIPT_DIR, "hyperwall.nip")
+# The exe bundles a copy of the profile (hyperwall.spec datas) — a
+# distributed exe with no loose .nip beside it silently skipped G-Sync
+# isolation because only SCRIPT_DIR was consulted (2026-07-13 audit).
+if getattr(sys, "frozen", False) and not os.path.exists(NIP_FILE):
+    _bundled_nip = os.path.join(getattr(sys, "_MEIPASS", ""), "hyperwall.nip")
+    if os.path.exists(_bundled_nip):
+        NIP_FILE = _bundled_nip
 NPI_DIR = os.path.join(SCRIPT_DIR, "tools")
 NPI_EXE = os.path.join(NPI_DIR, "nvidiaProfileInspector.exe")
 NV_SENTINEL = os.path.join(SCRIPT_DIR, ".hyperwall_nvprofile.sentinel")
