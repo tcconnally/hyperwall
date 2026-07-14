@@ -235,6 +235,7 @@ class VideoCell(QWidget):
         # the eof handling of every cell's first track (2026-07-11 lockup).
         self._switching = False
         self._track_done = False  # this track already triggered its advance
+        self._audio_started = False  # True once this track's audio is armed
         # (item, url, emby_session_id) queued on the live mpv playlist so
         # prefetch-playlist warms its demuxer before the current track ends.
         self._prefetched: tuple[dict[str, Any], str, str] | None = None
@@ -375,14 +376,17 @@ class VideoCell(QWidget):
             m["mute"] = self.muted
         except Exception as e:
             logger.debug("mpv: failed to set initial mute: %s", e)
-        # Always select the audio track (even while muted). Audio decode is
-        # negligible next to 4K video on this hardware, and keeping the
-        # decoder + clock warm makes unmute a pure `mute=no` flip — no track
-        # switch, no relock seek, so the picture never freezes. (The old
-        # aid=no lazy-enable saved a sliver of decode but the unmute seek it
-        # required froze the whole cell for ~1s — see git history.)
+        # Lazy audio: muted cells load with aid=no. Beyond saving decode,
+        # this is load-bearing for correctness — some real files are so
+        # poorly interleaved that demuxing their audio stream at load drags
+        # the whole cell into a paused-for-cache freeze (probed live on
+        # demonmika_joi_2: aid=auto stalls at ~9s, aid=no plays clean).
+        # v10.8 armed audio at load to make unmute seamless and reintroduced
+        # exactly that freeze on the wall's *primary* passive-playback mode;
+        # audio is (re)armed on first unmute instead — see _enable_audio_track.
+        self._audio_started = not self.muted
         try:
-            m["aid"] = "auto"
+            m["aid"] = "auto" if self._audio_started else "no"
         except Exception as e:
             logger.debug("mpv: failed to set initial aid: %s", e)
         if self.looping:
@@ -654,6 +658,14 @@ class VideoCell(QWidget):
             # so bank the outgoing track's stats now or they're lost.
             if STATS_ENABLED:
                 self._flush_stats()
+            # New track: a re-muted cell drops back to aid=no so the next
+            # file starts in the safe lazy-audio state (see _ensure_mpv).
+            if self.muted and self._audio_started:
+                try:
+                    self._mpv["aid"] = "no"
+                    self._audio_started = False
+                except Exception as e:
+                    logger.debug("mpv: failed to re-disable aid: %s", e)
 
         if self._mpv is None:
             logger.error("mpv not initialized — cannot play.")
@@ -713,10 +725,10 @@ class VideoCell(QWidget):
 
         Returns False when there is nothing usable (no queue, dead mpv,
         command failure) — the caller falls back to a cold play(). Mirrors
-        play()'s reuse path: bank stats, arm the _switching guard for the
-        old track's stale end-file (reason "stop", probed live), and
-        explicitly unpause because the keep-open EOF pause persists across
-        the switch.
+        play()'s reuse path: bank stats, drop a re-muted cell back to
+        aid=no, arm the _switching guard for the old track's stale
+        end-file (reason "stop", probed live), and explicitly unpause
+        because the keep-open EOF pause persists across the switch.
         """
         if self._prefetched is None or self._mpv is None:
             return False
@@ -724,6 +736,12 @@ class VideoCell(QWidget):
         self._prefetched = None
         if STATS_ENABLED:
             self._flush_stats()
+        if self.muted and self._audio_started:
+            try:
+                self._mpv["aid"] = "no"
+                self._audio_started = False
+            except Exception as e:
+                logger.debug("mpv: failed to re-disable aid: %s", e)
         self._switching = True
         self._track_done = False
         try:
@@ -1029,6 +1047,30 @@ class VideoCell(QWidget):
             except Exception as e:
                 logger.debug("toggle_loop failed: %s", e)
 
+    def _enable_audio_track(self) -> None:
+        """Arm this track's audio the first time the cell is unmuted.
+
+        Muted cells load aid=no (see _ensure_mpv) — safe for poorly
+        interleaved files. Selecting the track cold under video_sync=audio
+        would stutter until the buffer fills, so we relock with a seek. The
+        relock is a KEYFRAME seek, not an exact one: exact re-decodes from
+        the last keyframe to the current position (the ~1s freeze owners
+        reported), while keyframe jumps to the nearest keyframe fast and
+        still flushes/refills both decoders. Probed across the library:
+        keyframe starts audio cleanly with ≤4 sample stalls where no-seek
+        stuttered up to 12; exact worked but froze. No-op once armed.
+        """
+        if self._audio_started or self._mpv is None:
+            return
+        try:
+            self._mpv["aid"] = "auto"
+            self._audio_started = True
+            pos = self._mpv.time_pos  # property-only; m[...] would raise
+            if pos is not None:
+                self._mpv.seek(pos, "absolute+keyframes")
+        except Exception as e:
+            logger.debug("enable audio track failed: %s", e)
+
     def _sync_mute_ui(self, muted: bool) -> None:
         """Single writer for every mute-state visual: glyph, checked state,
         and the audible accent tint. Three call sites used to update these
@@ -1047,10 +1089,11 @@ class VideoCell(QWidget):
     def _apply_mute(self, muted: bool) -> None:
         """Single writer for the mute state itself (cache + mpv + UI).
 
-        The audio track is always selected (see _ensure_mpv), so unmuting
-        is just clearing mpv's mute flag — the decoder and clock are already
-        warm, no seek, no freeze."""
+        Unmuting arms the audio track first (lazy — see _enable_audio_track),
+        then clears mpv's mute flag."""
         self.muted = muted
+        if not muted:
+            self._enable_audio_track()
         if self._mpv is not None:
             try:
                 self._mpv["mute"] = muted

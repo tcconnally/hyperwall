@@ -22,9 +22,10 @@ except ImportError:
 
 class _FakeMpv:
     def __init__(self):
-        self.props = {"mute": True, "volume": 100.0, "aid": "auto",
+        self.props = {"mute": True, "volume": 100.0, "aid": "no",
                       "pause": False, "time-pos": 12.0, "eof-reached": False}
         self.seeks = 0
+        self.seek_flags = []
 
     def __setitem__(self, k, v):
         self.props[k] = v
@@ -42,6 +43,8 @@ class _FakeMpv:
 
     def seek(self, *a, **k):
         self.seeks += 1
+        if len(a) > 1:
+            self.seek_flags.append(a[1])
 
     def command(self, *a):
         pass
@@ -71,16 +74,17 @@ def test_unmute_from_fresh_restores_default_volume():
     assert cell.btn_mute.property("audible") is True
 
 
-def test_unmute_is_pure_flag_flip_no_seek():
-    # The video-freeze fix: unmute must not seek (a seek flushes the video
-    # decoder and freezes the picture ~1s). Audio is armed at load, so
-    # unmuting only clears mpv's mute flag — aid untouched, zero seeks.
+def test_unmute_arms_audio_with_keyframe_seek():
+    # Lazy audio: cells load aid=no (safe for poorly-interleaved files that
+    # cache-stall if their audio is demuxed at load). First unmute arms the
+    # track and relocks with a KEYFRAME seek — fast, no exact-seek freeze.
     cell = _make_cell()
-    cell.btn_mute.click()          # unmute
-    assert cell._mpv.seeks == 0
-    assert cell._mpv.props["aid"] == "auto"   # never toggled off/on
-    cell.btn_mute.click()          # re-mute
-    assert cell._mpv.seeks == 0
+    assert cell._audio_started is False
+    cell.btn_mute.click()          # unmute → arm audio
+    assert cell._mpv.props["aid"] == "auto"
+    assert cell._audio_started is True
+    assert cell._mpv.seeks == 1
+    assert cell._mpv.seek_flags == ["absolute+keyframes"]  # not exact
 
 
 def test_unmute_from_low_nonzero_restores_last_volume():
