@@ -139,6 +139,13 @@ MPV_OPTS: dict[str, object] = dict(
     interpolation="no",
     target_colorspace_hint="yes",
     cache="yes",
+    # Resume only with 3s of buffer in hand: after a cache starvation
+    # (network reset/stall) mpv otherwise resumes the instant one frame is
+    # available and immediately starves again — a freeze-flicker loop. One
+    # slightly longer pause beats three visible stutters (probed: option
+    # accepted + read back).
+    cache_pause="yes",
+    cache_pause_wait=3,
     cache_secs=60,
     demuxer_max_bytes="1024MiB",
     demuxer_readahead_secs=60,
