@@ -103,6 +103,23 @@ OUTAGE_BACKOFF_S = _int_env("HYPERWALL_OUTAGE_BACKOFF_S", 20, 5, 600)
 MAX_DIRECT_FPS = _int_env("HYPERWALL_MAX_DIRECT_FPS", 66, 0, 1_000)
 MAX_DIRECT_BITRATE_MBPS = _int_env("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", 60, 0, 10_000)
 
+
+def effective_bitrate_budget_mbps(n_cells: int) -> int:
+    """Cell-count-aware direct-play bitrate cap.
+
+    An explicit HYPERWALL_MAX_DIRECT_BITRATE_MBPS wins verbatim. Otherwise
+    the default 60 is scaled down as cells go up (8 cells → ~33 Mbps): the
+    graduated middle ground between transcode-everything and
+    direct-everything. High-bitrate outliers transcode server-side, where
+    Emby throttles delivery to ~realtime — smooth by construction — while
+    the bulk of the library stays direct. ≤4 cells resolve to the base
+    (measured clean at 4 cells).
+    """
+    if os.environ.get("HYPERWALL_MAX_DIRECT_BITRATE_MBPS"):
+        return MAX_DIRECT_BITRATE_MBPS
+    from .reliability import scale_bitrate_budget_mbps
+    return scale_bitrate_budget_mbps(n_cells, MAX_DIRECT_BITRATE_MBPS)
+
 # Memory-aware demuxer cache budget. Each cell wants PER_CELL demuxer bytes, but
 # the grid total is capped at CACHE_BUDGET_MB so large grids don't blow up RAM.
 # Sized for this box (32 GB): 1 GB/cell, 8 GB grid cap — deep enough that the
@@ -223,7 +240,7 @@ def apply_cache_budget(opts: dict, n_cells: int) -> dict:
     Keeps the aggregate grid demuxer buffer within CACHE_BUDGET_MB so large
     grids (e.g. 6x6) don't exhaust RAM. Pure w.r.t. the reliability helper.
     """
-    from .reliability import scale_demuxer_mb
+    from .reliability import scale_demuxer_mb, scale_readahead_s
 
     out = dict(opts)
     mb = scale_demuxer_mb(
@@ -232,4 +249,11 @@ def apply_cache_budget(opts: dict, n_cells: int) -> dict:
         total_budget_mb=CACHE_BUDGET_MB,
     )
     out["demuxer_max_bytes"] = f"{mb}MiB"
+    # Readahead depth = burst size on every track open; scale it down with
+    # cell count so 8 cells don't starve each other's steady reads
+    # (2026-07-14: 80% of freezes began within 8s of a stream-open).
+    base = int(out.get("demuxer_readahead_secs", 60) or 60)
+    ra = scale_readahead_s(n_cells, base_s=base)
+    out["demuxer_readahead_secs"] = ra
+    out["cache_secs"] = min(int(out.get("cache_secs", 60) or 60), ra)
     return out

@@ -76,6 +76,39 @@ def scale_demuxer_mb(
     return int(max(floor_mb, per))
 
 
+def scale_readahead_s(n_cells: int, base_s: int = 60, floor_s: int = 10) -> int:
+    """Per-cell demuxer readahead (seconds), scaled down as cells go up.
+
+    Readahead depth is burst SIZE: on every track open, mpv fills it at
+    line rate. Eight cells each slurping 60s of a 20 Mbps stream produce
+    fill-bursts that starve the other cells' steady reads — measured
+    2026-07-14: 80% of freeze episodes began within 8s of a stream-open.
+    <=4 cells keep the full depth (measured clean); beyond that the depth
+    shrinks so aggregate burst demand stays roughly constant.
+    """
+    n = max(1, int(n_cells))
+    if n <= 4:
+        return base_s
+    return max(floor_s, int(base_s * 4 / n))
+
+
+def scale_bitrate_budget_mbps(
+    n_cells: int, base_mbps: int, link_mbps: int = 800,
+) -> int:
+    """Cell-count-aware direct-play bitrate cap (the graduated middle
+    ground between transcode-everything and direct-everything).
+
+    Items above the cap transcode server-side, where Emby throttles
+    delivery to ~realtime — smooth by construction. The cap divides a
+    conservative share of the link across cells with 3x burst headroom;
+    at <=4 cells it resolves to the configured base (measured clean), at
+    8 cells ~33 Mbps so the rare 40-60+ Mbps outliers transcode while the
+    bulk of the library stays direct.
+    """
+    n = max(1, int(n_cells))
+    return min(base_mbps, max(8, link_mbps // (3 * n)))
+
+
 def apply_jitter(delay_s: float, rand: float) -> float:
     """Spread a retry delay over [0.75x, 1.25x] to desynchronize cells.
 

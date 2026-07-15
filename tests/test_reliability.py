@@ -300,12 +300,56 @@ def test_constants_defaults_load():
     assert c.CACHE_BUDGET_MB == 8_192
 
 
+def test_scale_readahead_shrinks_beyond_four_cells():
+    from hyperwall.reliability import scale_readahead_s
+    assert scale_readahead_s(1) == 60
+    assert scale_readahead_s(4) == 60      # measured clean — unchanged
+    assert scale_readahead_s(8) == 30      # burst size halves at 8 cells
+    assert scale_readahead_s(16) == 15
+    assert scale_readahead_s(100) == 10    # floor
+
+
+def test_scale_bitrate_budget_graduated():
+    from hyperwall.reliability import scale_bitrate_budget_mbps
+    assert scale_bitrate_budget_mbps(4, 60) == 60   # <=4 cells: base wins
+    assert scale_bitrate_budget_mbps(8, 60) == 33   # 800/(3*8)
+    assert scale_bitrate_budget_mbps(16, 60) == 16
+    assert scale_bitrate_budget_mbps(100, 60) == 8  # floor
+
+
+def test_effective_budget_env_override_wins(monkey=None):
+    import os
+    from hyperwall import constants as c
+    old = os.environ.pop("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", None)
+    try:
+        assert c.effective_bitrate_budget_mbps(8) == 33
+        os.environ["HYPERWALL_MAX_DIRECT_BITRATE_MBPS"] = "60"
+        # explicit env wins verbatim even at 8 cells (module constant was
+        # parsed at import; presence of the var is the override signal)
+        assert c.effective_bitrate_budget_mbps(8) == c.MAX_DIRECT_BITRATE_MBPS
+    finally:
+        os.environ.pop("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", None)
+        if old is not None:
+            os.environ["HYPERWALL_MAX_DIRECT_BITRATE_MBPS"] = old
+
+
 def test_apply_cache_budget_shape():
     from hyperwall.constants import apply_cache_budget
     out = apply_cache_budget({"demuxer_max_bytes": "512MiB", "vo": "gpu-next"}, 36)
     assert out["vo"] == "gpu-next"           # untouched keys preserved
     assert out["demuxer_max_bytes"].endswith("MiB")
     assert int(out["demuxer_max_bytes"][:-3]) < 512  # scaled down for 36 cells
+
+
+def test_apply_cache_budget_scales_readahead():
+    from hyperwall.constants import apply_cache_budget
+    base = {"demuxer_max_bytes": "1024MiB", "demuxer_readahead_secs": 60,
+            "cache_secs": 60}
+    four = apply_cache_budget(dict(base), 4)
+    eight = apply_cache_budget(dict(base), 8)
+    assert four["demuxer_readahead_secs"] == 60   # unchanged at 4 cells
+    assert eight["demuxer_readahead_secs"] == 30  # burst-aware at 8
+    assert eight["cache_secs"] == 30              # follows readahead
 
 
 def run_all() -> int:
