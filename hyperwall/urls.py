@@ -97,6 +97,26 @@ def needs_transcode(
     )
 
 
+def tag_names(item: dict[str, Any]) -> list[str]:
+    """Tag names for an Emby item, tolerant of Emby's tag shapes.
+
+    Emby returns applied tags under ``TagItems`` (a list of ``{Name, Id}``)
+    and leaves the legacy ``Tags`` string list **null** on both the item
+    list and detail endpoints — so reading ``item["Tags"]`` alone sees an
+    already-tagged item as untagged (the wall's ToDelete indicator was wrong,
+    and toggling a library-loaded tagged clip hit ``list(None)``). Prefer
+    ``TagItems``; fall back to ``Tags`` (which may itself be a string list or,
+    on some shapes, a list of dicts). Always returns a fresh list of str.
+    """
+    ti = item.get("TagItems")
+    if ti:
+        return [t.get("Name", "") for t in ti if isinstance(t, dict)]
+    raw = item.get("Tags") or []
+    if raw and isinstance(raw[0], dict):
+        return [t.get("Name", "") for t in raw]
+    return list(raw)
+
+
 def build_stream_url(
     *,
     base: str,
