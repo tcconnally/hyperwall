@@ -317,6 +317,30 @@ def test_scale_bitrate_budget_graduated():
     assert scale_bitrate_budget_mbps(100, 60) == 8  # floor
 
 
+def test_scale_bitrate_budget_tracks_link_speed():
+    # The per-file cap divides the usable link across cells with 3x burst
+    # headroom — so a faster link raises the cap (up to the base) and a
+    # slower one lowers it. Guards the greg→skyhawk 1 GbE default (800).
+    from hyperwall.reliability import scale_bitrate_budget_mbps
+    assert scale_bitrate_budget_mbps(8, 60, link_mbps=800) == 33   # 1 GbE
+    assert scale_bitrate_budget_mbps(8, 60, link_mbps=2000) == 60  # 2.5 GbE → base
+    assert scale_bitrate_budget_mbps(8, 60, link_mbps=400) == 16   # half-link
+
+
+def test_link_mbps_constant_wired_into_effective_budget():
+    # LINK_MBPS is the single knob; effective_bitrate_budget_mbps must feed it
+    # through (default 800 → 33 Mbps at 8 cells).
+    import os
+    from hyperwall import constants as c
+    assert c.LINK_MBPS == 800
+    old = os.environ.pop("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", None)
+    try:
+        assert c.effective_bitrate_budget_mbps(8) == 33
+    finally:
+        if old is not None:
+            os.environ["HYPERWALL_MAX_DIRECT_BITRATE_MBPS"] = old
+
+
 def test_effective_budget_env_override_wins(monkey=None):
     import os
     from hyperwall import constants as c

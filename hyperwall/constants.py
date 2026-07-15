@@ -103,6 +103,14 @@ OUTAGE_BACKOFF_S = _int_env("HYPERWALL_OUTAGE_BACKOFF_S", 20, 5, 600)
 MAX_DIRECT_FPS = _int_env("HYPERWALL_MAX_DIRECT_FPS", 66, 0, 1_000)
 MAX_DIRECT_BITRATE_MBPS = _int_env("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", 60, 0, 10_000)
 
+# Usable server→client link budget (Mbps), used to divide the direct-play
+# bitrate cap across cells (see effective_bitrate_budget_mbps). Default 800 is
+# the practical ceiling of greg→skyhawk's 1 GbE link: ~940 Mbps TCP goodput at
+# line rate, held to ~85% so concurrent readahead fill-bursts + other traffic
+# (SSH, control) don't saturate it. Retune here (or via env) if that link
+# changes — e.g. 2.5 GbE ≈ 2000, 10 GbE ≈ 8000.
+LINK_MBPS = _int_env("HYPERWALL_LINK_MBPS", 800, 50, 100_000)
+
 
 def effective_bitrate_budget_mbps(n_cells: int) -> int:
     """Cell-count-aware direct-play bitrate cap.
@@ -110,15 +118,17 @@ def effective_bitrate_budget_mbps(n_cells: int) -> int:
     An explicit HYPERWALL_MAX_DIRECT_BITRATE_MBPS wins verbatim. Otherwise
     the default 60 is scaled down as cells go up (8 cells → ~33 Mbps): the
     graduated middle ground between transcode-everything and
-    direct-everything. High-bitrate outliers transcode server-side, where
-    Emby throttles delivery to ~realtime — smooth by construction — while
-    the bulk of the library stays direct. ≤4 cells resolve to the base
-    (measured clean at 4 cells).
+    direct-everything. The cap divides LINK_MBPS across cells with burst
+    headroom, so the aggregate steady-state stays well inside the link (8
+    cells × 33 Mbps ≈ 264 Mbps of an 800 Mbps budget). High-bitrate outliers
+    transcode server-side, where Emby throttles delivery to ~realtime —
+    smooth by construction — while the bulk of the library stays direct.
+    ≤4 cells resolve to the base (measured clean at 4 cells).
     """
     if os.environ.get("HYPERWALL_MAX_DIRECT_BITRATE_MBPS"):
         return MAX_DIRECT_BITRATE_MBPS
     from .reliability import scale_bitrate_budget_mbps
-    return scale_bitrate_budget_mbps(n_cells, MAX_DIRECT_BITRATE_MBPS)
+    return scale_bitrate_budget_mbps(n_cells, MAX_DIRECT_BITRATE_MBPS, LINK_MBPS)
 
 # Memory-aware demuxer cache budget. Each cell wants PER_CELL demuxer bytes, but
 # the grid total is capped at CACHE_BUDGET_MB so large grids don't blow up RAM.
