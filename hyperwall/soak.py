@@ -39,6 +39,10 @@ logger = logging.getLogger("HyperWall")
 
 SOAK_MINUTES = int(os.environ.get("HYPERWALL_SOAK_MINUTES", "0") or 0)
 SOAK_DWELL_S = int(os.environ.get("HYPERWALL_SOAK_DWELL_S", "75") or 0)
+# Function exerciser: each churn tick drives a random USER ACTION through
+# the same handlers a real click takes (advance/prev/seek/mute/volume/
+# pause/loop/favorite), then verifies state invariants. 0 = advances only.
+SOAK_ACTIONS = os.environ.get("HYPERWALL_SOAK_ACTIONS", "1") == "1"
 
 _RES_SAMPLE_S = 60
 
@@ -102,6 +106,10 @@ class SoakController(QObject):
         self._wall = wall
         self._t0 = time.monotonic()
         self._advances = 0
+        self._action_counts: dict[str, int] = {}
+        self._invariant_violations = 0
+        self._unmuted_cell = None   # at most one audible cell during a soak
+        self._paused_cell = None    # at most one paused cell during a soak
         self._baseline = _resource_snapshot()
 
         self._res_timer = QTimer(self)
@@ -132,32 +140,131 @@ class SoakController(QObject):
         base_ms = SOAK_DWELL_S * 1000 / cells
         self._churn_timer.start(int(base_ms * random.uniform(0.75, 1.25)))
 
+    # (action, weight). The trash tag is deliberately ABSENT: soak-writing
+    # ToDelete tags feeds the cleanup-delete pipeline - a stray one could
+    # cost a real file. Favorites are exercised as immediate double-toggles
+    # (net zero; the writes are HTTP-status-verified since the audit).
+    _ACTIONS = (
+        ("advance", 40), ("seek", 15), ("audio", 15), ("volume", 10),
+        ("pause", 10), ("prev", 4), ("loop", 3), ("favorite", 3),
+    )
+
     def _churn(self) -> None:
         try:
             cell = random.choice(self._wall.cells)
+            if SOAK_ACTIONS:
+                names = [a for a, _ in self._ACTIONS]
+                weights = [w for _, w in self._ACTIONS]
+                action = random.choices(names, weights=weights, k=1)[0]
+            else:
+                action = "advance"
+            self._action_counts[action] = self._action_counts.get(action, 0) + 1
+            self._do_action(action, cell)
+            self._verify_invariants(cell, action)
+        except Exception as e:
+            logger.warning("SOAK action failed: %s", e)
+        self._arm_churn()
+
+    def _do_action(self, action: str, cell) -> None:
+        """Drive one user action through the real handlers (button clicks /
+        slider grabs), never through private state pokes."""
+        if action == "advance":
             self._advances += 1
             self._wall.next_video(cell, False)
-        except Exception as e:
-            logger.warning("SOAK churn advance failed: %s", e)
-        self._arm_churn()
+        elif action == "prev":
+            self._wall.prev_video(cell)
+        elif action == "seek":
+            if cell._mpv is None or cell._duration_s <= 0:
+                return
+            cell.seek_slider.setSliderDown(True)
+            cell.seek_slider.setValue(random.randint(50, 980))
+            cell.seek_slider.setSliderDown(False)
+        elif action == "audio":
+            # Cycle audibility with at most ONE cell unmuted wall-wide, at a
+            # civilized volume - an hour of testing must not be an hour of
+            # random noise. Exercises the lazy audio arm + relock seek.
+            prev = self._unmuted_cell
+            if prev is not None and prev is not cell and not prev.muted:
+                prev.btn_mute.click()          # re-mute the previous one
+            if cell.muted:
+                cell.btn_mute.click()          # unmute (restores last vol)
+                cell.vol_slider.setValue(25)
+                self._unmuted_cell = cell
+            else:
+                cell.btn_mute.click()          # mute it back
+                self._unmuted_cell = None
+        elif action == "volume":
+            if not cell.muted:
+                cell.vol_slider.setValue(random.randint(10, 60))
+            # volume drag on a muted cell would unmute it - audibility is
+            # owned by the "audio" action to keep the one-audible invariant.
+        elif action == "pause":
+            prev = self._paused_cell
+            if prev is not None and prev is not cell and prev._paused:
+                prev.btn_play.click()          # resume the previous one
+            cell.btn_play.click()
+            self._paused_cell = cell if cell._paused else None
+        elif action == "loop":
+            cell.btn_loop.click()              # on
+            cell.btn_loop.click()              # immediately off (net zero)
+        elif action == "favorite":
+            if cell.current_item is not None:
+                cell.btn_fav.click()           # toggle
+                cell.btn_fav.click()           # restore (net zero)
+
+    def _verify_invariants(self, cell, action: str) -> None:
+        """The exerciser is a TEST: after every action, cached state, button
+        state, and QSS properties must agree. A mismatch is exactly the
+        state-drift class the 2026-07-13 audit hunted."""
+        problems = []
+        if cell.muted != cell.btn_mute.isChecked():
+            problems.append(
+                f"muted={cell.muted} vs btn_checked={cell.btn_mute.isChecked()}"
+            )
+        if cell.btn_mute.property("audible") is not (not cell.muted):
+            problems.append(
+                f"audible prop={cell.btn_mute.property('audible')} "
+                f"vs muted={cell.muted}"
+            )
+        if not cell.muted and cell.vol_slider.value() == 0:
+            problems.append("unmuted with volume slider at 0")
+        if cell.looping != cell.btn_loop.isChecked():
+            problems.append(
+                f"looping={cell.looping} vs btn={cell.btn_loop.isChecked()}"
+            )
+        if problems:
+            self._invariant_violations += 1
+            logger.warning(
+                "SOAK INVARIANT violated after %r: %s",
+                action, "; ".join(problems),
+            )
 
     def _sample(self) -> None:
         snap = _resource_snapshot()
         mins = (time.monotonic() - self._t0) / 60
         logger.info(
             "SOAK res @%.0fmin: ws=%sMB private=%sMB gdi=%s user=%s "
-            "threads=%s churn_advances=%d",
+            "threads=%s actions=%s invariant_violations=%d",
             mins, snap.get("ws_mb"), snap.get("private_mb"),
             snap.get("gdi"), snap.get("user"), snap.get("threads"),
-            self._advances,
+            dict(sorted(self._action_counts.items())),
+            self._invariant_violations,
         )
 
     def _finish(self) -> None:
         snap = _resource_snapshot()
         logger.info(
-            "SOAK done after %d min: churn_advances=%d  baseline %s → final %s",
-            SOAK_MINUTES, self._advances, self._baseline, snap,
+            "SOAK done after %d min: actions=%s invariant_violations=%d  "
+            "baseline %s → final %s",
+            SOAK_MINUTES, dict(sorted(self._action_counts.items())),
+            self._invariant_violations, self._baseline, snap,
         )
         self._res_timer.stop()
         self._churn_timer.stop()
+        # Leave the wall silent regardless of where the audio cycle ended.
+        if self._unmuted_cell is not None and not self._unmuted_cell.muted:
+            try:
+                self._unmuted_cell.btn_mute.click()
+            except Exception:
+                pass
         self._wall._shutdown()

@@ -12,6 +12,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["HYPERWALL_SOAK_MINUTES"] = "1"
+# Plain-wall churn test needs deterministic advances (fake cells
+# have no buttons for the function exerciser).
+os.environ["HYPERWALL_SOAK_ACTIONS"] = "0"
 
 # The ubuntu CI job is the pure-logic lane and deliberately has no PyQt
 # (and hyperwall.soak needs ctypes.wintypes anyway); these tests then skip
@@ -66,6 +69,58 @@ def test_resource_snapshot_returns_real_values():
     # USER objects: any process with a QCoreApplication has at least one
     # (message-only) window on Windows; GDI can legitimately be 0 offscreen.
     assert "user" in snap and "gdi" in snap
+
+
+def test_soak_function_exerciser_drives_real_cell():
+    """Every soak action runs against a real VideoCell through the real
+    handlers, and the state invariants hold after each one."""
+    from hyperwall.soak import SoakController
+    from hyperwall.cell import VideoCell
+
+    class _FakeMpv:
+        def __init__(self):
+            self.props = {"mute": True, "volume": 100.0, "aid": "no",
+                          "pause": False, "time-pos": 12.0,
+                          "eof-reached": False}
+        def __setitem__(self, k, v): self.props[k] = v
+        def __getitem__(self, k): return self.props[k]
+        def __getattr__(self, name):
+            key = name.replace("_", "-")
+            if key in self.props: return self.props[key]
+            raise AttributeError(name)
+        def seek(self, *a, **k): pass
+        def command(self, *a): pass
+
+    class _Ctl:
+        controls_visible = True
+        def update_favorite(self, *a): pass
+
+    cell = VideoCell(_Ctl())
+    cell.resize(1280, 720)
+    cell.show()
+    _app.processEvents()
+    cell._mpv = _FakeMpv()
+    cell._duration_s = 100.0
+    cell.current_item = {"Id": "x", "Name": "n",
+                         "UserData": {"IsFavorite": False}, "Tags": []}
+
+    class _W:
+        def __init__(self): self.cells = [cell]; self.nexts = 0; self.prevs = 0
+        def next_video(self, c, r=False): self.nexts += 1
+        def prev_video(self, c): self.prevs += 1
+        def _shutdown(self): pass
+
+    wall = _W()
+    soak = SoakController(wall)
+    for action in ("advance", "prev", "seek", "audio", "volume",
+                   "pause", "loop", "favorite", "audio"):
+        soak._do_action(action, cell)
+        soak._verify_invariants(cell, action)
+    assert soak._invariant_violations == 0, "state drift under exerciser"
+    assert wall.nexts == 1 and wall.prevs == 1
+    assert cell.muted is True, "second audio action must re-mute"
+    assert cell.looping is False, "loop must double-toggle to off"
+    assert cell.current_item["UserData"]["IsFavorite"] is False
 
 
 def test_soak_controller_constructs_against_plain_wall():
