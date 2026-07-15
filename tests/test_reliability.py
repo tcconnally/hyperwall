@@ -312,30 +312,30 @@ def test_scale_readahead_shrinks_beyond_four_cells():
 def test_scale_bitrate_budget_graduated():
     from hyperwall.reliability import scale_bitrate_budget_mbps
     assert scale_bitrate_budget_mbps(4, 60) == 60   # <=4 cells: base wins
-    assert scale_bitrate_budget_mbps(8, 60) == 33   # 800/(3*8)
-    assert scale_bitrate_budget_mbps(16, 60) == 16
+    assert scale_bitrate_budget_mbps(8, 60) == 50   # 800/(2*8) — relaxed 3x→2x
+    assert scale_bitrate_budget_mbps(16, 60) == 25
     assert scale_bitrate_budget_mbps(100, 60) == 8  # floor
 
 
 def test_scale_bitrate_budget_tracks_link_speed():
-    # The per-file cap divides the usable link across cells with 3x burst
+    # The per-file cap divides the usable link across cells with 2x burst
     # headroom — so a faster link raises the cap (up to the base) and a
     # slower one lowers it. Guards the greg→skyhawk 1 GbE default (800).
     from hyperwall.reliability import scale_bitrate_budget_mbps
-    assert scale_bitrate_budget_mbps(8, 60, link_mbps=800) == 33   # 1 GbE
+    assert scale_bitrate_budget_mbps(8, 60, link_mbps=800) == 50   # 1 GbE
     assert scale_bitrate_budget_mbps(8, 60, link_mbps=2000) == 60  # 2.5 GbE → base
-    assert scale_bitrate_budget_mbps(8, 60, link_mbps=400) == 16   # half-link
+    assert scale_bitrate_budget_mbps(8, 60, link_mbps=400) == 25   # half-link
 
 
 def test_link_mbps_constant_wired_into_effective_budget():
     # LINK_MBPS is the single knob; effective_bitrate_budget_mbps must feed it
-    # through (default 800 → 33 Mbps at 8 cells).
+    # through (default 800 → 50 Mbps at 8 cells).
     import os
     from hyperwall import constants as c
     assert c.LINK_MBPS == 800
     old = os.environ.pop("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", None)
     try:
-        assert c.effective_bitrate_budget_mbps(8) == 33
+        assert c.effective_bitrate_budget_mbps(8) == 50
     finally:
         if old is not None:
             os.environ["HYPERWALL_MAX_DIRECT_BITRATE_MBPS"] = old
@@ -346,7 +346,7 @@ def test_effective_budget_env_override_wins(monkey=None):
     from hyperwall import constants as c
     old = os.environ.pop("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", None)
     try:
-        assert c.effective_bitrate_budget_mbps(8) == 33
+        assert c.effective_bitrate_budget_mbps(8) == 50
         os.environ["HYPERWALL_MAX_DIRECT_BITRATE_MBPS"] = "60"
         # explicit env wins verbatim even at 8 cells (module constant was
         # parsed at import; presence of the var is the override signal)
@@ -355,6 +355,28 @@ def test_effective_budget_env_override_wins(monkey=None):
         os.environ.pop("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", None)
         if old is not None:
             os.environ["HYPERWALL_MAX_DIRECT_BITRATE_MBPS"] = old
+
+
+def test_gate_auto_transcode_caps_concurrency():
+    from hyperwall.reliability import gate_auto_transcode
+    # Under the ceiling → allowed; at/over → deferred to direct-play.
+    assert gate_auto_transcode(True, active_transcodes=0, max_concurrent=4)
+    assert gate_auto_transcode(True, active_transcodes=3, max_concurrent=4)
+    assert not gate_auto_transcode(True, active_transcodes=4, max_concurrent=4)
+    assert not gate_auto_transcode(True, active_transcodes=7, max_concurrent=4)
+
+
+def test_gate_auto_transcode_passthrough_and_disable():
+    from hyperwall.reliability import gate_auto_transcode
+    # A clip that doesn't want transcode never transcodes, gate or not.
+    assert not gate_auto_transcode(False, active_transcodes=0, max_concurrent=4)
+    # max_concurrent <= 0 disables the gate entirely.
+    assert gate_auto_transcode(True, active_transcodes=99, max_concurrent=0)
+
+
+def test_max_concurrent_transcodes_constant():
+    from hyperwall import constants as c
+    assert c.MAX_CONCURRENT_TRANSCODES == 4
 
 
 def test_apply_cache_budget_shape():
