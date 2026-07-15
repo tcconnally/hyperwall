@@ -30,6 +30,7 @@ SUITES = [
     "test_instrumentation",
     "test_mute_volume",
     "test_audit_regressions",
+    "test_freeze_visibility",
 ]
 
 

@@ -200,6 +200,7 @@ class VideoCell(QWidget):
     request_prev = pyqtSignal(object)
     _sig_eof = pyqtSignal(int, str)
     _sig_track_done = pyqtSignal(int)
+    _sig_buffering = pyqtSignal(int, bool)
 
     def __init__(self, controller: Any):
         super().__init__()
@@ -221,6 +222,13 @@ class VideoCell(QWidget):
         self._play_pos = 0.0
         self._dragging = False
         self._paused_before_seek = False
+        # Freeze visibility: paused-for-cache episodes (network starvation).
+        # These freezes are invisible to the frame-drop counters AND shorter
+        # than the 20s stall watchdog — the gap the owner kept seeing.
+        self._freeze_t0 = 0.0
+        self._freeze_count = 0
+        self._freeze_total_s = 0.0
+        self._buffering_card = False
         self._retry_count = 0
         self._force_transcode = False
         self._played_anything = False
@@ -321,6 +329,9 @@ class VideoCell(QWidget):
         self._sig_track_done.connect(
             self._handle_track_done, Qt.ConnectionType.QueuedConnection
         )
+        self._sig_buffering.connect(
+            self._handle_buffering, Qt.ConnectionType.QueuedConnection
+        )
 
         # Stall watchdog: polls for silent freezes (frozen frame / wedged
         # decoder / network hang that survives reconnect) which never emit an
@@ -412,6 +423,13 @@ class VideoCell(QWidget):
         def _on_eof_reached(_name: str, value: Any) -> None:
             if value is True and gen == self._mpv_gen:
                 self._sig_track_done.emit(gen)
+
+        # Freeze visibility: mpv pauses itself when the demuxer cache
+        # starves (network stall/reset). Bare emit per the observer rules.
+        @m.property_observer("paused-for-cache")
+        def _on_pfc(_name: str, value: Any) -> None:
+            if value is not None and gen == self._mpv_gen:
+                self._sig_buffering.emit(gen, bool(value))
 
         @m.property_observer("time-pos")
         def _on_time(_name: str, value: float | None) -> None:
@@ -619,6 +637,7 @@ class VideoCell(QWidget):
         # The LOADING pulse / error card used to be dismissed by the title
         # card that popped on every track change; with that chrome gone the
         # overlay must be dropped explicitly when a new track starts.
+        self._close_open_freeze()
         self._hide_overlay()
 
     def _hide_overlay(self) -> None:
@@ -963,17 +982,16 @@ class VideoCell(QWidget):
         if not sticky:
             self._overlay_show_timer.start(OVERLAY_SHOW_MS)
 
-    def _show_loading(self) -> None:
-        """Show a pulsing 'LOADING' card until the first frame arrives.
-
-        Unlike the title card this does not auto-fade — it stays (pulsing)
-        until play() swaps in the real title, so a slow-loading cell still
-        reads as busy rather than blank.
+    def _show_loading(self, text: str = "LOADING") -> None:
+        """Show a pulsing status card (LOADING at startup, BUFFERING during
+        a cache starvation). Does not auto-fade — it stays (pulsing) until
+        the condition clears, so a stalled cell reads as busy-with-reason
+        rather than silently frozen.
         """
         self._overlay_show_timer.stop()
         self._overlay_anim.stop()
         self._title_overlay.setStyleSheet(_LOADING_STYLE)
-        self._title_overlay.setText("LOADING")
+        self._title_overlay.setText(text)
         self._title_overlay.adjustSize()
         self._reposition_overlay()
         self._title_overlay.show()
@@ -1036,7 +1054,10 @@ class VideoCell(QWidget):
     def _seek_release(self) -> None:
         if self._mpv is not None and self._duration_s > 0:
             try:
-                frac = min(self.seek_slider.value() / 1000.0, 0.90)
+                # 0.98, not 0.90: the property-driven EOF advance makes the
+                # clip tail safe to seek into; 10% of every video was
+                # unreachable for no remaining reason.
+                frac = min(self.seek_slider.value() / 1000.0, 0.98)
                 target = frac * self._duration_s
                 self._mpv.seek(target, "absolute")
                 # Restore the PRE-DRAG pause state instead of always
@@ -1203,6 +1224,55 @@ class VideoCell(QWidget):
         self.controller.update_favorite(self.current_item["Id"], new)
 
     # ── EOF / error handling ──────────────────────────────────────────────
+
+    def _handle_buffering(self, gen: int, buffering: bool) -> None:
+        """GUI-thread side of the paused-for-cache observer.
+
+        Turns invisible network-starvation freezes into: a pulsing
+        BUFFERING card on the cell, a WARNING log with the measured
+        duration, and per-cell counters that ride the stats dump.
+        """
+        if gen != self._mpv_gen or self._mpv is None:
+            return
+        if buffering:
+            if not self._played_anything:
+                return  # startup fill, not a mid-playback freeze
+            if self._freeze_t0 == 0.0:
+                self._freeze_t0 = _time.monotonic()
+                self._freeze_count += 1
+            # Replace whatever card is up (stale title / loading): during a
+            # freeze the buffering state is the most relevant thing on the
+            # cell. Parked/error cells never reach here (not playing).
+            self._buffering_card = True
+            self._show_loading("BUFFERING")
+        else:
+            if self._freeze_t0:
+                dur = _time.monotonic() - self._freeze_t0
+                self._freeze_total_s += dur
+                self._freeze_t0 = 0.0
+                try:
+                    state = self._mpv.cache_buffering_state
+                except Exception:
+                    state = "?"
+                logger.warning(
+                    "FREEZE: %.1fs cache starvation on '%s' "
+                    "(buffering-state=%s)", dur,
+                    (self.current_item or {}).get("Name", "?"), state,
+                )
+            if self._buffering_card:
+                self._buffering_card = False
+                self._hide_overlay()
+
+    def _close_open_freeze(self) -> None:
+        """Bank a freeze still open when the track changes underneath it."""
+        if self._freeze_t0:
+            dur = _time.monotonic() - self._freeze_t0
+            self._freeze_total_s += dur
+            self._freeze_t0 = 0.0
+            logger.warning(
+                "FREEZE: %.1fs cache starvation (ended by track change)", dur,
+            )
+        self._buffering_card = False
 
     @traced("cell._handle_track_done")
     def _handle_track_done(self, gen: int) -> None:

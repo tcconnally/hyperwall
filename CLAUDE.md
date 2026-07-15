@@ -93,6 +93,16 @@ check the rule. Before claiming one of these is fixed, run the probe.
   clears `_parked` so the next failure runs the retry chain (it used to be
   swallowed by the parked-guard). The parked card is sticky (no auto-fade).
 
+## Freeze visibility
+
+- The freeze class users actually see is **paused-for-cache** (network
+  starvation): invisible to the frame-drop counters and shorter than the
+  20s stall watchdog. It is observed per-cell (BUFFERING card + WARNING
+  log with duration + freezes/freeze_seconds in the stats dump). If a
+  freeze report arrives with clean drop counters, check the FREEZE lines
+  first. `cache-pause-wait=3` makes mpv resume only with 3s of buffer —
+  one longer pause instead of a freeze-flicker loop.
+
 ## Process / repo
 
 - The exe at repo root is the **shortcut artifact** and G-Sync isolation
