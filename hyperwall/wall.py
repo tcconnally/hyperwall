@@ -37,6 +37,8 @@ from PyQt6.QtWidgets import (
 from .cell import VideoCell
 from .perftrace import traced
 from .constants import (
+    MAX_DIRECT_FPS,
+    effective_bitrate_budget_mbps,
     OUTAGE_MIN_CELLS,
     OUTAGE_WINDOW_S,
     STREAM_START_STAGGER_MS,
@@ -48,7 +50,8 @@ from .constants import (
     MPV_OPTS,
     SCRIPT_DIR,
 )
-from .emby import EmbyClient, ContentLoader, needs_transcode
+from .emby import EmbyClient, ContentLoader
+from .urls import needs_transcode as _needs_transcode_pure
 from .reliability import is_systemic_outage
 from .urls import build_stream_url
 from .playlist import PlaylistManager, DEFAULT_GROUP
@@ -184,9 +187,17 @@ class WallController:
         budgeted = apply_cache_budget(apply_env_overrides(MPV_OPTS), n_cells)
         for cell in self.cells:
             cell._mpv_opts = budgeted
+        # Burst-aware budgets (2026-07-14): 80% of freeze episodes began
+        # within 8s of a stream-open — the wall was starving itself with
+        # its own fill-bursts at 8 cells. Readahead depth is scaled inside
+        # apply_cache_budget; the direct-play bitrate cap scales here.
+        self._bitrate_budget_mbps = effective_bitrate_budget_mbps(n_cells)
         logger.info(
-            "MPV cache budget: %d cells → demuxer_max_bytes=%s each",
+            "MPV cache budget: %d cells → demuxer_max_bytes=%s, "
+            "readahead=%ss, direct-play bitrate cap=%s Mbps",
             n_cells, budgeted.get("demuxer_max_bytes"),
+            budgeted.get("demuxer_readahead_secs"),
+            self._bitrate_budget_mbps,
         )
 
         for win in self.windows:
@@ -282,7 +293,13 @@ class WallController:
         base = self.client.server_url
         sid = uuid.uuid4().hex
 
-        auto_transcode = needs_transcode(item)
+        auto_transcode = _needs_transcode_pure(
+            item,
+            auto_transcode=os.environ.get(
+                "HYPERWALL_AUTO_TRANSCODE", "1") == "1",
+            max_fps=MAX_DIRECT_FPS,
+            max_bitrate_mbps=self._bitrate_budget_mbps,
+        )
         transcode = bool(force_transcode or auto_transcode)
         url = build_stream_url(
             base=base, item_id=iid, api_key=key,
