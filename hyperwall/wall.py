@@ -53,7 +53,7 @@ from .constants import (
 from .emby import EmbyClient, ContentLoader
 from .urls import needs_transcode as _needs_transcode_pure
 from .reliability import is_systemic_outage
-from .urls import build_stream_url
+from .urls import build_stream_url, tag_names
 from .playlist import PlaylistManager, DEFAULT_GROUP
 
 logger = logging.getLogger("HyperWall")
@@ -525,12 +525,8 @@ class WallController:
     def update_tags(self, item: dict[str, Any]) -> None:
         iid = item["Id"]
         name = item.get("Name", "Unknown")
-        raw = item.get("Tags", [])
-        tags = (
-            [t.get("Name", "") for t in raw]
-            if raw and isinstance(raw[0], dict)
-            else list(raw)
-        )
+        # Read via the helper (Emby serves tags under TagItems, Tags is null).
+        tags = tag_names(item)
 
         def _worker() -> None:
             try:

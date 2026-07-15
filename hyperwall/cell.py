@@ -78,6 +78,7 @@ from .reliability import (
 )
 from . import theme
 from .perftrace import traced
+from .urls import tag_names
 
 logger = logging.getLogger("HyperWall")
 
@@ -625,14 +626,10 @@ class VideoCell(QWidget):
 
         self.lbl_title.setText(item.get("Name", "Unknown"))
 
-        # Update tag/fav buttons
-        raw = item.get("Tags", [])
-        tag_names = (
-            [t.get("Name", "") for t in raw]
-            if raw and isinstance(raw[0], dict)
-            else list(raw)
-        )
-        self.btn_tag.setChecked("ToDelete" in tag_names)
+        # Update tag/fav buttons. Emby serves applied tags under TagItems and
+        # leaves Tags null, so read via the shared helper (item["Tags"] alone
+        # shows an already-tagged clip as untagged).
+        self.btn_tag.setChecked("ToDelete" in tag_names(item))
         self.btn_fav.setChecked(
             item.get("UserData", {}).get("IsFavorite", False)
         )
@@ -1203,17 +1200,17 @@ class VideoCell(QWidget):
         if not self.current_item:
             return
         self._nudge_pill()
-        raw = self.current_item.setdefault("Tags", [])
-        tags = (
-            [t.get("Name", "") for t in raw]
-            if raw and isinstance(raw[0], dict)
-            else list(raw)
-        )
+        # Read via the helper (Emby puts tags in TagItems, leaves Tags null —
+        # the old item["Tags"] read hit list(None) on a library-loaded clip).
+        tags = tag_names(self.current_item)
         if "ToDelete" in tags:
             tags.remove("ToDelete")
         else:
             tags.append("ToDelete")
+        # Keep BOTH shapes in the local dict in sync so the helper (which
+        # prefers TagItems) reflects the new state on the next read.
         self.current_item["Tags"] = tags
+        self.current_item["TagItems"] = [{"Name": t} for t in tags]
         self.btn_tag.setChecked("ToDelete" in tags)  # :checked tints the glyph red
         self.controller.update_tags(self.current_item)
 

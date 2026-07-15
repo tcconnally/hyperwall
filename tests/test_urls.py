@@ -21,6 +21,7 @@ from hyperwall.urls import (  # noqa: E402
     exceeds_1080p,
     exceeds_direct_budget,
     needs_transcode,
+    tag_names,
 )
 
 
@@ -201,6 +202,43 @@ def test_urls_carry_item_and_key():
         )
         assert "abc123" in url
         assert "api_key=tok" in url
+
+
+# ── tag_names (Emby TagItems vs Tags shape) ───────────────────────────────────
+
+def test_tag_names_reads_tagitems_when_tags_null():
+    # The exact shape greg's Emby returns for a tagged item (probed 2026-07-15):
+    # Tags is null, the applied tag lives in TagItems. The old item["Tags"]
+    # read saw this as untagged → wrong ToDelete indicator + list(None) crash.
+    item = {"Id": "x", "Tags": None,
+            "TagItems": [{"Name": "ToDelete", "Id": 21516}]}
+    assert tag_names(item) == ["ToDelete"]
+
+
+def test_tag_names_tagitems_takes_precedence_over_tags():
+    item = {"TagItems": [{"Name": "ToDelete"}], "Tags": ["stale"]}
+    assert tag_names(item) == ["ToDelete"]
+
+
+def test_tag_names_falls_back_to_string_list():
+    assert tag_names({"Tags": ["ToDelete", "keep"]}) == ["ToDelete", "keep"]
+
+
+def test_tag_names_falls_back_to_dict_list_tags():
+    assert tag_names({"Tags": [{"Name": "ToDelete"}]}) == ["ToDelete"]
+
+
+def test_tag_names_empty_and_missing_safe():
+    assert tag_names({}) == []
+    assert tag_names({"Tags": None, "TagItems": None}) == []
+    assert tag_names({"Tags": [], "TagItems": []}) == []
+
+
+def test_tag_names_untagged_item_not_checked():
+    # The bug's user-visible symptom: an untagged item must compute False, a
+    # ToDelete-tagged one True — regardless of which field Emby populates.
+    assert "ToDelete" not in tag_names({"Tags": None, "TagItems": []})
+    assert "ToDelete" in tag_names({"TagItems": [{"Name": "ToDelete"}]})
 
 
 def run_all() -> int:
