@@ -595,6 +595,7 @@ class WallController:
                 "info": {k: v for k, v in c._stats_info.items()},
                 "freezes": c._freeze_count,
                 "freeze_seconds": round(c._freeze_total_s, 1),
+                "postseek_refills": c._freeze_postseek_count,
                 "last_item": (c.current_item or {}).get("Name"),
             })
         payload = {
@@ -627,13 +628,13 @@ class WallController:
             i = s["info"]
             logger.info(
                 "STATS cell %d  drop=%g  mistimed=%g  vo-delayed=%g  "
-                "dec-drop=%g  freezes=%d(%ss)  hwdec=%s  fps=%s  bitrate=%s",
+                "dec-drop=%g  freezes=%d(%ss)  postseek=%d  hwdec=%s  fps=%s  bitrate=%s",
                 s["cell"],
                 t.get("frame-drop-count", 0),
                 t.get("mistimed-frame-count", 0),
                 t.get("vo-delayed-frame-count", 0),
                 t.get("decoder-frame-drop-count", 0),
-                s["freezes"], s["freeze_seconds"],
+                s["freezes"], s["freeze_seconds"], s["postseek_refills"],
                 i.get("hwdec-current"),
                 i.get("estimated-vf-fps") or i.get("container-fps"),
                 i.get("video-bitrate"),

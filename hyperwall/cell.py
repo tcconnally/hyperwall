@@ -228,6 +228,8 @@ class VideoCell(QWidget):
         self._freeze_t0 = 0.0
         self._freeze_count = 0
         self._freeze_total_s = 0.0
+        self._freeze_postseek_count = 0
+        self._last_seek_ts = 0.0
         self._buffering_card = False
         self._retry_count = 0
         self._force_transcode = False
@@ -1063,6 +1065,7 @@ class VideoCell(QWidget):
                 # Restore the PRE-DRAG pause state instead of always
                 # resuming — a paused cell stays paused after a seek.
                 resume_paused = getattr(self, "_paused_before_seek", False)
+                self._last_seek_ts = _time.monotonic()
                 self._mpv["pause"] = resume_paused
                 self._paused = resume_paused
                 self.btn_play.setText(_G_PLAY if resume_paused else _G_PAUSE)
@@ -1238,8 +1241,16 @@ class VideoCell(QWidget):
             if not self._played_anything:
                 return  # startup fill, not a mid-playback freeze
             if self._freeze_t0 == 0.0:
-                self._freeze_t0 = _time.monotonic()
-                self._freeze_count += 1
+                now = _time.monotonic()
+                self._freeze_t0 = now
+                # A refill right after a seek is expected demuxer behavior,
+                # not a spontaneous starvation — count it separately so soak
+                # numbers stop conflating the two (2026-07-14 soak: 43 random
+                # seeks inflated the freeze count).
+                if now - self._last_seek_ts < 5.0:
+                    self._freeze_postseek_count += 1
+                else:
+                    self._freeze_count += 1
             # Replace whatever card is up (stale title / loading): during a
             # freeze the buffering state is the most relevant thing on the
             # cell. Parked/error cells never reach here (not playing).
@@ -1254,9 +1265,15 @@ class VideoCell(QWidget):
                     state = self._mpv.cache_buffering_state
                 except Exception:
                     state = "?"
+                tag = (
+                    "post-seek refill"
+                    if self._last_seek_ts > 0
+                    and _time.monotonic() - self._last_seek_ts < 5.0 + dur
+                    else "cache starvation"
+                )
                 logger.warning(
-                    "FREEZE: %.1fs cache starvation on '%s' "
-                    "(buffering-state=%s)", dur,
+                    "FREEZE: %.1fs %s on '%s' (buffering-state=%s)",
+                    dur, tag,
                     (self.current_item or {}).get("Name", "?"), state,
                 )
             if self._buffering_card:

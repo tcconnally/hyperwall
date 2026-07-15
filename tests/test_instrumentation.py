@@ -71,6 +71,36 @@ def test_resource_snapshot_returns_real_values():
     assert "user" in snap and "gdi" in snap
 
 
+def test_traced_slot_survives_qt_signal_payload_args():
+    """Regression for the 2026-07-14 soak finding: Qt's clicked signal
+    carries a `checked` bool; the @traced wrapper's *args defeated PyQt's
+    arity inspection, the bool got through, and EVERY traced click handler
+    crashed with TypeError whenever tracing was enabled — silently drifting
+    button state from cached state (caught by the exerciser invariants)."""
+    from hyperwall import perftrace
+    from PyQt6.QtWidgets import QPushButton
+
+    calls = []
+
+    class _Obj:
+        def handler(self):     # 1-arg method, like _toggle_mute
+            calls.append(1)
+
+    # Force a real wrapper regardless of the env var.
+    orig = perftrace.PERFTRACE_ENABLED
+    perftrace.PERFTRACE_ENABLED = True
+    try:
+        _Obj.handler = perftrace.traced("test.handler")(_Obj.handler)
+    finally:
+        perftrace.PERFTRACE_ENABLED = orig
+
+    obj = _Obj()
+    btn = QPushButton()
+    btn.clicked.connect(obj.handler)
+    btn.click()   # emits clicked(False) — must not raise, must run
+    assert calls == [1], "traced slot swallowed or crashed on the payload arg"
+
+
 def test_soak_function_exerciser_drives_real_cell():
     """Every soak action runs against a real VideoCell through the real
     handlers, and the state invariants hold after each one."""
