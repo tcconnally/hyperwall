@@ -87,11 +87,20 @@ def traced(name: str) -> Callable:
         if not PERFTRACE_ENABLED:
             return fn
 
+        # Qt signals append payload args (clicked emits a `checked` bool);
+        # PyQt6 normally drops extras by inspecting the slot's arity, but a
+        # bare *args wrapper defeats that inspection and the payload gets
+        # through — under tracing, EVERY traced click handler crashed with
+        # TypeError and the state machine drifted (caught live by the soak
+        # exerciser's invariant checks, 2026-07-14). Cap positional args to
+        # the wrapped function's true arity.
+        max_pos = fn.__code__.co_argcount
+
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             t0 = time.perf_counter()
             try:
-                return fn(*args, **kwargs)
+                return fn(*args[:max_pos], **kwargs)
             finally:
                 dt = (time.perf_counter() - t0) * 1000
                 if dt > _SLOW_SLOT_MS:
