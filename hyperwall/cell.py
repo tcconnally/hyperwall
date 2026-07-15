@@ -234,6 +234,11 @@ class VideoCell(QWidget):
         self._buffering_card = False
         self._retry_count = 0
         self._force_transcode = False
+        # True while this cell's CURRENT stream is a server transcode (HLS).
+        # Read by the controller's transcode-concurrency gate. Kept drift-free
+        # by re-deriving it from the URL at every stream commit (play +
+        # advance_to_prefetched); a transcode URL carries an .m3u8 playlist.
+        self._is_transcoding = False
         self._played_anything = False
         self._paused = False  # main-thread cache; safe to read cross-thread
         self._last_next_request_ts = 0.0
@@ -662,6 +667,7 @@ class VideoCell(QWidget):
         # loadfile (replace) clears the mpv playlist tail, so any queued
         # prefetch entry is gone with it (probed live 2026-07-13).
         self._prefetched = None
+        self._is_transcoding = ".m3u8" in url  # transcode = HLS playlist URL
         self._begin_track(item)
 
         # Determine if we need to recreate mpv
@@ -766,6 +772,7 @@ class VideoCell(QWidget):
             return False
         item, _url, sid = self._prefetched
         self._prefetched = None
+        self._is_transcoding = ".m3u8" in _url  # transcode = HLS playlist URL
         if STATS_ENABLED:
             self._flush_stats()
         if self.muted and self._audio_started:

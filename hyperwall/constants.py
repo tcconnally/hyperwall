@@ -111,18 +111,24 @@ MAX_DIRECT_BITRATE_MBPS = _int_env("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", 60, 0, 1
 # changes — e.g. 2.5 GbE ≈ 2000, 10 GbE ≈ 8000.
 LINK_MBPS = _int_env("HYPERWALL_LINK_MBPS", 800, 50, 100_000)
 
+# Max cells that may transcode simultaneously. greg's Arc A310 media engine
+# handles a few concurrent 1080p transcodes fine, but 6-8 cold starts at once
+# (8-cell startup) stampede it → HTTP 500s + partial/pixelated segments
+# (2026-07-15). Over this ceiling, heavy clips direct-play instead. 0 = no gate.
+MAX_CONCURRENT_TRANSCODES = _int_env("HYPERWALL_MAX_CONCURRENT_TRANSCODES", 4, 0, 64)
+
 
 def effective_bitrate_budget_mbps(n_cells: int) -> int:
     """Cell-count-aware direct-play bitrate cap.
 
     An explicit HYPERWALL_MAX_DIRECT_BITRATE_MBPS wins verbatim. Otherwise
-    the default 60 is scaled down as cells go up (8 cells → ~33 Mbps): the
+    the default 60 is scaled down as cells go up (8 cells → ~50 Mbps): the
     graduated middle ground between transcode-everything and
     direct-everything. The cap divides LINK_MBPS across cells with burst
-    headroom, so the aggregate steady-state stays well inside the link (8
-    cells × 33 Mbps ≈ 264 Mbps of an 800 Mbps budget). High-bitrate outliers
-    transcode server-side, where Emby throttles delivery to ~realtime —
-    smooth by construction — while the bulk of the library stays direct.
+    headroom, so the aggregate steady-state stays inside the link (8
+    cells × 50 Mbps ≈ 400 Mbps of an 800 Mbps budget). Heavy outliers
+    transcode server-side (capped in count by MAX_CONCURRENT_TRANSCODES);
+    the bulk of the library stays direct — the reliable path on this setup.
     ≤4 cells resolve to the base (measured clean at 4 cells).
     """
     if os.environ.get("HYPERWALL_MAX_DIRECT_BITRATE_MBPS"):

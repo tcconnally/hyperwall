@@ -98,18 +98,42 @@ def scale_bitrate_budget_mbps(
     """Cell-count-aware direct-play bitrate cap (the graduated middle
     ground between transcode-everything and direct-everything).
 
-    Items above the cap transcode server-side, where Emby throttles
-    delivery to ~realtime — smooth by construction. The cap divides the
-    usable link (`link_mbps`) across cells with 3x burst headroom; at
-    <=4 cells it resolves to the configured base (measured clean), at
-    8 cells ~33 Mbps so the rare 40-60+ Mbps outliers transcode while the
-    bulk of the library stays direct.
+    Items above the cap transcode server-side. The cap divides the usable
+    link (`link_mbps`) across cells with 2x burst headroom; at <=4 cells it
+    resolves to the configured base (measured clean), at 8 cells ~50 Mbps so
+    only genuinely heavy 50-60+ Mbps outliers transcode while the bulk of the
+    library stays direct.
 
-    `link_mbps` defaults to 800 (greg→skyhawk 1 GbE usable goodput);
+    The headroom was relaxed 3x->2x (33->50 Mbps at 8 cells, 2026-07-15):
+    the original 33 sent ~6 of 8 startup cells to transcode at once and
+    stampeded greg's media engine (HTTP 500s + partial, pixelated segments).
+    Fewer files now transcode, and a concurrency gate (see gate_auto_transcode)
+    caps how many run at once — direct-play is the reliable path on this setup.
+
+    `link_mbps` defaults to 800 (greg->skyhawk 1 GbE usable goodput);
     callers pass constants.LINK_MBPS so it retunes with the real link.
     """
     n = max(1, int(n_cells))
-    return min(base_mbps, max(8, link_mbps // (3 * n)))
+    return min(base_mbps, max(8, link_mbps // (2 * n)))
+
+
+def gate_auto_transcode(
+    want_auto: bool, active_transcodes: int, max_concurrent: int,
+) -> bool:
+    """Whether an AUTO transcode should proceed given how many cells are
+    already transcoding.
+
+    Forced retries (a file that failed direct play and MUST transcode) bypass
+    this in the caller. Protects greg's Arc A310 / QuickSync media engine from
+    a cold-start stampede — 8 cells escalating at once produced HTTP 500s and
+    partial, pixelated HLS segments (2026-07-15). Over the cap, the heavy clip
+    direct-plays instead (reliable). max_concurrent <= 0 disables the gate.
+    """
+    if not want_auto:
+        return False
+    if max_concurrent <= 0:
+        return True
+    return active_transcodes < max_concurrent
 
 
 def apply_jitter(delay_s: float, rand: float) -> float:

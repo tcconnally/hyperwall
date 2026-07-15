@@ -38,6 +38,7 @@ from .cell import VideoCell
 from .perftrace import traced
 from .constants import (
     MAX_DIRECT_FPS,
+    MAX_CONCURRENT_TRANSCODES,
     effective_bitrate_budget_mbps,
     OUTAGE_MIN_CELLS,
     OUTAGE_WINDOW_S,
@@ -52,7 +53,7 @@ from .constants import (
 )
 from .emby import EmbyClient, ContentLoader
 from .urls import needs_transcode as _needs_transcode_pure
-from .reliability import is_systemic_outage
+from .reliability import is_systemic_outage, gate_auto_transcode
 from .urls import build_stream_url, tag_names
 from .playlist import PlaylistManager, DEFAULT_GROUP
 
@@ -286,7 +287,7 @@ class WallController:
 
     def _build_url(
         self, item: dict[str, Any], force_transcode: bool = False,
-        prefetch: bool = False,
+        prefetch: bool = False, cell: "VideoCell | None" = None,
     ) -> tuple[str, str]:
         iid = item["Id"]
         key = self.client.access_token
@@ -300,7 +301,21 @@ class WallController:
             max_fps=MAX_DIRECT_FPS,
             max_bitrate_mbps=self._bitrate_budget_mbps,
         )
-        transcode = bool(force_transcode or auto_transcode)
+        # Concurrency gate: a forced retry (failed direct) must transcode, but
+        # an AUTO escalation defers to direct-play when the transcode engine is
+        # already busy — never stampede greg's media engine (2026-07-15).
+        gated = False
+        if force_transcode:
+            transcode = True
+        else:
+            active = sum(
+                1 for c in self.cells
+                if c is not cell and getattr(c, "_is_transcoding", False)
+            )
+            transcode = gate_auto_transcode(
+                auto_transcode, active, MAX_CONCURRENT_TRANSCODES,
+            )
+            gated = auto_transcode and not transcode
         url = build_stream_url(
             base=base, item_id=iid, api_key=key,
             session_id=sid, transcode=transcode,
@@ -309,7 +324,7 @@ class WallController:
         if transcode:
             tag = "TRANSCODE/retry" if force_transcode else "TRANSCODE/auto"
         else:
-            tag = "DIRECT"
+            tag = "DIRECT/gated" if gated else "DIRECT"
         if prefetch:
             tag += "/prefetch"
         logger.info("[%s] %s", tag, item.get("Name"))
@@ -369,7 +384,7 @@ class WallController:
         # with the new stream creation, and Emby can kill both when it sees
         # a session-stop from the same device. Sessions are cleaned up on
         # wall shutdown via _cleanup().
-        url, sid = self._build_url(item, force_transcode)
+        url, sid = self._build_url(item, force_transcode, cell=cell)
         cell._emby_session_id = sid
         cell._emby_item_id = item["Id"]
         cell.play(item, url)
@@ -384,7 +399,7 @@ class WallController:
         item = self.playlists.next(self._cell_group(cell))
         if item is None:
             return
-        url, sid = self._build_url(item, prefetch=True)
+        url, sid = self._build_url(item, prefetch=True, cell=cell)
         if not cell.prefetch(item, url, sid):
             logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
 
