@@ -99,11 +99,14 @@ def scale_bitrate_budget_mbps(
     ground between transcode-everything and direct-everything).
 
     Items above the cap transcode server-side, where Emby throttles
-    delivery to ~realtime — smooth by construction. The cap divides a
-    conservative share of the link across cells with 3x burst headroom;
-    at <=4 cells it resolves to the configured base (measured clean), at
+    delivery to ~realtime — smooth by construction. The cap divides the
+    usable link (`link_mbps`) across cells with 3x burst headroom; at
+    <=4 cells it resolves to the configured base (measured clean), at
     8 cells ~33 Mbps so the rare 40-60+ Mbps outliers transcode while the
     bulk of the library stays direct.
+
+    `link_mbps` defaults to 800 (greg→skyhawk 1 GbE usable goodput);
+    callers pass constants.LINK_MBPS so it retunes with the real link.
     """
     n = max(1, int(n_cells))
     return min(base_mbps, max(8, link_mbps // (3 * n)))
