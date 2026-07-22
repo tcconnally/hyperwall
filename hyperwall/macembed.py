@@ -90,11 +90,18 @@ class MpvGLWidget(QOpenGLWidget):
         import mpv as _mpv
 
         def _resolve(_ctx: int, name: bytes) -> int:
-            glctx = QOpenGLContext.currentContext()
-            if glctx is None:
+            # NEVER raise in here: an exception inside a ctypes callback is
+            # swallowed by the FFI, libmpv then calls the garbage pointer it
+            # got back → bus error (shipped once, M5 Air 2026-07-21).
+            # PyQt6 getProcAddress wants bytes/QByteArray, NOT str.
+            try:
+                glctx = QOpenGLContext.currentContext()
+                if glctx is None:
+                    return 0
+                addr = glctx.getProcAddress(name)
+                return int(addr) if addr else 0
+            except Exception:
                 return 0
-            addr = glctx.getProcAddress(name.decode("utf-8", "replace"))
-            return int(addr) if addr else 0
 
         # libmpv stores the raw function pointer for the render context's
         # lifetime and may resolve lazily — keep the CFUNCTYPE alive on self.

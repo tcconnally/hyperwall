@@ -30,6 +30,10 @@ check the rule. Before claiming one of these is fixed, run the probe.
   `setlocale(LC_NUMERIC, "C")` early; launch.sh exports it too. If a
   libmpv embed segfaults at 0x48 (NULL handle), check the locale first.
 - ru_maxrss units differ: bytes on macOS, KiB on Linux (soak sampler).
+- PyQt6 `QOpenGLContext.getProcAddress` wants bytes/QByteArray, not str —
+  and ANY exception inside a ctypes callback is swallowed by the FFI, so
+  libmpv gets a garbage GL function pointer and bus-errors when it calls
+  it. The macembed `_resolve` callback must be total (try/except → 0).
 
 ## python-mpv API
 
