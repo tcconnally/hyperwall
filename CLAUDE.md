@@ -49,6 +49,14 @@ check the rule. Before claiming one of these is fixed, run the probe.
   `_accepting_frames` flag set False FIRST at release; never store a raw
   `signal.emit` as `MpvRenderContext.update_cb`; clear `update_cb = None`
   before freeing the context.
+- render.h ordering vs the bounded-terminate pool is a structural
+  conflict: the pool terminates cores while the GUI thread blocks in
+  `concurrent.futures.wait`, so a free QUEUED from a pool thread to the
+  GUI thread can never run before terminate → core destroyed with a live
+  render context → SIGABRT. Resolution: `wall._cleanup` frees ALL render
+  contexts synchronously on the GUI thread (native windows still alive)
+  BEFORE submitting cell releases to the pool. Queued-free remains only
+  as the fallback for hypothetical off-GUI callers.
 
 ## python-mpv API
 
