@@ -66,9 +66,11 @@ fi
 # python-mpv at first use, so verify it HERE, not at first playback).
 if ./.venv/bin/python - <<'EOF' 2>/tmp/hyperwall_mpv_err
 import mpv
+# Creation alone is the probe (mpv_create NULL → python-mpv segfault).
+# Don't query properties here: names differ across mpv versions.
 m = mpv.MPV(vo="null", vid="no", aid="no", idle="yes")
-print(f"[OK] mpv player created: {m.version}")
 m.terminate()
+print("[OK] mpv player created and terminated cleanly")
 EOF
 then
     :
