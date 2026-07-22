@@ -173,12 +173,24 @@ def main() -> None:
     try:
         import mpv  # noqa: F401
     except Exception as e:
+        if sys.platform == "darwin":
+            hint = (
+                "Install libmpv via Homebrew:\n  brew install mpv\n\n"
+                "Then launch via ./launch.sh — it exports\n"
+                "DYLD_FALLBACK_LIBRARY_PATH so python-mpv finds\n"
+                "/opt/homebrew/lib/libmpv.dylib on Apple Silicon."
+            )
+        elif os.name == "nt":
+            hint = (
+                f"And place mpv-2.dll next to this script:\n  {SCRIPT_DIR}\n\n"
+                f"Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\n"
+                f"  (shinchiro build — extract libmpv-2.dll, place in script dir)"
+            )
+        else:
+            hint = "Install libmpv via your distro (mpv-libs / libmpv-dev)."
         msg = (
             f"python-mpv failed to load: {e}\n\n"
-            f"Install:\n  pip install python-mpv\n\n"
-            f"And place mpv-2.dll next to this script:\n  {SCRIPT_DIR}\n\n"
-            f"Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\n"
-            f"  (shinchiro build — extract libmpv-2.dll, place in script dir)"
+            f"Install:\n  pip install python-mpv\n\n{hint}"
         )
         try:
             QApplication(sys.argv)
@@ -213,6 +225,17 @@ def main() -> None:
                 )
         except Exception as e:
             logger.warning("Kernel: priority change failed: %s", e)
+
+    if sys.platform == "darwin":
+        # macOS cells render through QOpenGLWidget (macembed.py): default a
+        # 3.2 core-profile context (resolves to 4.1 on Apple Silicon) before
+        # any GL context can be created.
+        from PyQt6.QtGui import QSurfaceFormat
+        _fmt = QSurfaceFormat()
+        _fmt.setVersion(3, 2)
+        _fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+        _fmt.setDepthBufferSize(0)  # 2D video only
+        QSurfaceFormat.setDefaultFormat(_fmt)
 
     app = QApplication(sys.argv)
     theme.apply(app)

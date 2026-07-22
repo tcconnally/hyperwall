@@ -4,6 +4,26 @@ Bug classes that have each bitten this codebase at least once (2026-07-13
 audit campaign, v10.2→v10.9). Before writing code that touches these areas,
 check the rule. Before claiming one of these is fixed, run the probe.
 
+## Platforms
+
+- **macOS has no `--wid` embed.** mpv's Swift backend doesn't support it
+  (mpv-examples#29, maintainer-confirmed; IPTVnator hit the black-surface
+  failure). macOS cells render via the libmpv render API (`vo=libmpv`) into
+  `macembed.MpvGLWidget` (QOpenGLWidget) — the platform opts in
+  `constants.mpv_opts_for_platform()` pick this; never pass `wid=` on darwin.
+- Render API threading (render.h): the update callback fires on an mpv
+  thread — bare signal emit only; all `mpv_render_*` calls run on the GUI
+  thread with the widget's GL context current; free the render context
+  BEFORE `mpv.terminate()` (`VideoCell._destroy_mpv` order is load-bearing).
+- Never let `mpv_render_context_render` block the GUI thread on the audio
+  clock: `block_for_target_time=False` + `video-timing-offset=0` on darwin.
+- The `& 0xFFFFFFFF` HWND mask is Windows-only (`constants.native_wid`) —
+  it would truncate the 64-bit NSView pointer on macOS.
+- libmpv discovery on macOS: `DYLD_FALLBACK_LIBRARY_PATH` must include the
+  Homebrew prefix lib dir BEFORE python starts (launch.sh) — setting it
+  from inside Python is a no-op.
+- ru_maxrss units differ: bytes on macOS, KiB on Linux (soak sampler).
+
 ## python-mpv API
 
 - `m["name"]` reads/writes **options/**`name`, NOT the property. Property-only

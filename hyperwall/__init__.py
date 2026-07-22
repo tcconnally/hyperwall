@@ -12,12 +12,18 @@ __version__ = "10.14.0"
 # window titles so a version bump touches exactly ONE line (this file).
 VERSION_SHORT = ".".join(__version__.split(".")[:2])
 APP_NAME = "Hyperwall"
-PACKAGE_LABEL = "d3d11-native-embed"
 
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+# Embed architecture label for the runtime banner — d3d11 wid-embed on
+# Windows, libmpv render API (QOpenGLWidget) on macOS.
+PACKAGE_LABEL = (
+    "videotoolbox-libmpv-render" if sys.platform == "darwin"
+    else "d3d11-native-embed"
+)
 
 
 def _repo_root() -> Path:

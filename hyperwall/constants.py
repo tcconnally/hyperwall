@@ -145,7 +145,7 @@ DEMUXER_PER_CELL_MB = _int_env("HYPERWALL_DEMUXER_PER_CELL_MB", 1_024, 32, 4_096
 CACHE_BUDGET_MB = _int_env("HYPERWALL_CACHE_BUDGET_MB", 8_192, 128, 65_536)
 
 # ── MPV Options ──────────────────────────────────────────────────────────────
-MPV_OPTS: dict[str, object] = dict(
+_MPV_OPTS_BASE: dict[str, object] = dict(
     vo="gpu-next",
     gpu_api="d3d11",
     # d3d11va decodes straight into D3D11 textures that the gpu-next/d3d11
@@ -199,6 +199,59 @@ MPV_OPTS: dict[str, object] = dict(
     audio_buffer=2.0,
     msg_level="all=warn,cplayer=info,ao=error,ao/wasapi=fatal",
 )
+
+# ── Platform adaptation ──────────────────────────────────────────────────────
+IS_WINDOWS = os.name == "nt"
+IS_MACOS = sys.platform == "darwin"
+
+
+def mpv_opts_for_platform(platform: str | None = None) -> dict[str, object]:
+    """Return the base MPV options adjusted for the given platform.
+
+    The base opts target Windows + NVIDIA (d3d11 embed). macOS can't use
+    any of that: mpv's Swift macOS backend does not support --wid window
+    embedding at all (mpv maintainer, mpv-examples#29; independently
+    confirmed by IPTVnator — black video surface), so cells render through
+    the libmpv render API (vo=libmpv) into QOpenGLWidgets — see
+    macembed.py. Decode goes through VideoToolbox, audio through CoreAudio.
+
+    Pure function of its argument so the platform matrix is testable
+    headlessly (tests/test_platform.py).
+    """
+    plat = sys.platform if platform is None else platform
+    out = dict(_MPV_OPTS_BASE)
+    if plat == "darwin":
+        out["vo"] = "libmpv"           # render API — --wid unsupported on macOS
+        out.pop("gpu_api", None)       # d3d11 is Windows-only
+        out["hwdec"] = "videotoolbox"  # Apple Silicon hardware decode
+        out["ao"] = "coreaudio,null"
+        # With the render API the host drives frame swaps from the single
+        # GUI thread; never let mpv block the render call waiting for the
+        # audio clock — 8 cells × up to 50ms blocks would serialize into
+        # wall-wide jank. A/V drift on the one audible cell is acceptable.
+        out["video_timing_offset"] = 0
+    elif plat.startswith("linux"):
+        out.pop("gpu_api", None)       # let mpv auto-select (vulkan/opengl)
+        out["hwdec"] = "auto-safe"
+        out.pop("ao", None)            # mpv default (pipewire/pulse/alsa)
+    return out
+
+
+MPV_OPTS: dict[str, object] = mpv_opts_for_platform()
+
+
+def native_wid(win_id: int, platform: str | None = None) -> int:
+    """winId() → value to hand to mpv's wid option.
+
+    Windows HWNDs need the 32-bit mask (sign-extension fix); elsewhere
+    winId() is a full 64-bit pointer (NSView*/Window) that the mask would
+    corrupt. (macOS embeds via the render API instead of wid — this stays
+    correct for the Windows path and any future X11 path.)
+    """
+    plat = sys.platform if platform is None else platform
+    if plat.startswith("win"):
+        return win_id & 0xFFFFFFFF
+    return win_id
 
 STATS_ENABLED = os.environ.get("HYPERWALL_STATS") == "1"
 
