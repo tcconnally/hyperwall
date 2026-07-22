@@ -11,6 +11,11 @@ cd "$(dirname "$0")"
 BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
 export DYLD_FALLBACK_LIBRARY_PATH="$BREW_PREFIX/lib:/usr/local/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 
+# libmpv refuses to create a player under a non-C LC_NUMERIC locale
+# (mpv check_locale); Python sets it from the environment at startup.
+# app.py also forces it in-process — this is defense-in-depth.
+export LC_NUMERIC=C
+
 PY="./.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 

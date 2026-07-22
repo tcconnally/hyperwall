@@ -203,6 +203,19 @@ def main() -> None:
     _setup_logging()
     logger.info("Runtime: %s", runtime_banner())
 
+    # 3b. libmpv hard-fails mpv_create() (returns NULL → python-mpv then
+    # segfaults dereferencing it in mpv_set_option) when LC_NUMERIC is not
+    # "C"/"C.UTF-8" (mpv player/main.c check_locale). CPython calls
+    # setlocale(LC_ALL, "") at startup on POSIX, so a normal en_US.UTF-8
+    # macOS shell kills every libmpv embed at first MPV() — the Windows CRT
+    # keeps LC_NUMERIC=C, which is why this only bites POSIX.
+    if os.name != "nt":
+        import locale as _locale
+        try:
+            _locale.setlocale(_locale.LC_NUMERIC, "C")
+        except _locale.Error as e:
+            logger.warning("Could not force LC_NUMERIC=C: %s", e)
+
     # 4. Process priority (HIGH)
     if os.name == "nt" and not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
         try:

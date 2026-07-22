@@ -51,12 +51,30 @@ fi
 
 # ── 6. verify libmpv binding (same env as launch.sh) ─────────────────
 export DYLD_FALLBACK_LIBRARY_PATH="$BREW_PREFIX/lib:/usr/local/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+export LC_NUMERIC=C  # libmpv's check_locale rejects non-C LC_NUMERIC
 if ./.venv/bin/python -c "import mpv" 2>/tmp/hyperwall_mpv_err; then
     echo "[OK] python-mpv bound to libmpv"
 else
     echo "[FAIL] python-mpv could not load libmpv:"
     cat /tmp/hyperwall_mpv_err
     echo "  Check that 'brew install mpv' succeeded and re-run ./bootstrap.sh"
+    exit 1
+fi
+
+# Headless probe: actually create a player (catches locale/ABI failures
+# that a bare import can't — mpv_create() returning NULL segfaults
+# python-mpv at first use, so verify it HERE, not at first playback).
+if ./.venv/bin/python - <<'EOF' 2>/tmp/hyperwall_mpv_err
+import mpv
+m = mpv.MPV(vo="null", vid="no", aid="no", idle="yes")
+print(f"[OK] mpv player created: {m.version}")
+m.terminate()
+EOF
+then
+    :
+else
+    echo "[FAIL] libmpv loaded but mpv_create() failed:"
+    cat /tmp/hyperwall_mpv_err
     exit 1
 fi
 

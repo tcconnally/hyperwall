@@ -22,6 +22,13 @@ check the rule. Before claiming one of these is fixed, run the probe.
 - libmpv discovery on macOS: `DYLD_FALLBACK_LIBRARY_PATH` must include the
   Homebrew prefix lib dir BEFORE python starts (launch.sh) — setting it
   from inside Python is a no-op.
+- **libmpv refuses non-C LC_NUMERIC.** `mpv_create()` returns NULL under
+  e.g. en_US.UTF-8 (mpv player/main.c check_locale) and python-mpv then
+  SEGFAULTS in mpv_set_option — the crash surfaces at first MPV(), not at
+  import. POSIX Python sets LC_ALL from the env at startup; the Windows
+  CRT keeps LC_NUMERIC=C, which is why Windows never hit it. app.py forces
+  `setlocale(LC_NUMERIC, "C")` early; launch.sh exports it too. If a
+  libmpv embed segfaults at 0x48 (NULL handle), check the locale first.
 - ru_maxrss units differ: bytes on macOS, KiB on Linux (soak sampler).
 
 ## python-mpv API
