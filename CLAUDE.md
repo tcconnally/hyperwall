@@ -39,6 +39,16 @@ check the rule. Before claiming one of these is fixed, run the probe.
   `MpvGLWidget.release()` must only free synchronously on the widget's own
   thread; off-GUI callers queue the free (best-effort at exit). Mid-session
   destroys are GUI-thread, so only shutdown ever hits this.
+- The whole teardown chain is only as strong as its weakest raise: a
+  TypeError in `release()` (bad `QTimer.singleShot` overload — PyQt6 has
+  NO (msec, receiver, slot) form; use a queued pyqtSignal for
+  cross-thread hops) aborted cell teardown, mpv.terminate never ran, and
+  the live vo thread fired the update callback into a dying widget →
+  segfault in `pyqtBoundSignal_emit`. Rules: `release()` NEVER raises;
+  the mpv update callback is a total function gated by an
+  `_accepting_frames` flag set False FIRST at release; never store a raw
+  `signal.emit` as `MpvRenderContext.update_cb`; clear `update_cb = None`
+  before freeing the context.
 
 ## python-mpv API
 

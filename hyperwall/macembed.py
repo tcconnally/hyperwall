@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QOpenGLContext, QPainter
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 
@@ -34,17 +34,21 @@ class MpvGLWidget(QOpenGLWidget):
 
     # mpv thread → GUI thread "frame available" hop. Bare emit only.
     sig_frame_ready = pyqtSignal()
+    # pool thread → GUI thread "free the render ctx" hop (queued).
+    _sig_free = pyqtSignal()
 
     def __init__(self, parent: Any = None) -> None:
         super().__init__(parent)
         self._mpv: Any = None            # python-mpv MPV (vo=libmpv)
         self._ctx: Any = None            # mpv.MpvRenderContext
         self._gl_ready = False
+        self._accepting_frames = True    # shutdown silences the update cb
         self._get_proc_address: Any = None  # CFUNCTYPE — must stay alive
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.sig_frame_ready.connect(
             self.update, Qt.ConnectionType.QueuedConnection
         )
+        self._sig_free.connect(self._free_ctx, Qt.ConnectionType.QueuedConnection)
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -67,18 +71,33 @@ class MpvGLWidget(QOpenGLWidget):
     def release(self) -> None:
         """Free the render context (before the mpv core is terminated).
 
+        NEVER raises: cell.release() aborts the whole teardown chain (mpv
+        terminate never runs) if this throws — then the live vo thread
+        keeps firing the update callback into a dying widget → segfault
+        in pyqtBoundSignal_emit (shipped once, M5 Air 2026-07-21).
+
         Qt qFatals (SIGABRT) on a cross-thread makeCurrent, and the wall's
-        shutdown terminates cells on a ThreadPoolExecutor — the first macOS
-        exit crashed exactly there. Free synchronously on the widget's own
-        (GUI) thread; off-GUI callers get a queued best-effort free — if
-        the loop is already dead, process exit reclaims the context.
+        shutdown terminates cells on a ThreadPoolExecutor — so: silence
+        the callback FIRST (synchronous, any thread), free synchronously
+        on the widget's own (GUI) thread, queue a best-effort free for
+        off-GUI callers. If the loop is already dead, process exit
+        reclaims the context.
         """
-        if self._ctx is None:
-            return
-        if QThread.currentThread() is self.thread():
-            self._free_ctx()
-        else:
-            QTimer.singleShot(0, self, self._free_ctx)
+        try:
+            self._accepting_frames = False
+            if self._ctx is not None:
+                # Stop libmpv from invoking the callback at all. After this,
+                # no path from the vo thread touches this widget.
+                try:
+                    self._ctx.update_cb = None
+                except Exception:
+                    pass
+                if QThread.currentThread() is self.thread():
+                    self._free_ctx()
+                else:
+                    self._sig_free.emit()
+        except Exception as e:
+            logger.debug("video frame release raised: %s", e)
 
     def _free_ctx(self) -> None:
         """Free the render context. GUI thread only."""
@@ -131,9 +150,24 @@ class MpvGLWidget(QOpenGLWidget):
             "opengl",
             opengl_init_params={"get_proc_address": self._get_proc_address},
         )
-        # Bare emit — this fires on an mpv thread (observer rules).
-        self._ctx.update_cb = self.sig_frame_ready.emit
+        self._accepting_frames = True
+        self._ctx.update_cb = self._on_mpv_frame
         logger.debug("mpv render context created (opengl).")
+
+    def _on_mpv_frame(self) -> None:
+        """mpv vo thread → frame available. NEVER raise (ctypes callback).
+
+        Do NOT store `self.sig_frame_ready.emit` here directly: during
+        interpreter/shutdown teardown the callback can fire while the
+        widget is being destroyed, and pyqtBoundSignal_emit on a dying
+        object segfaults (crash 303B40DE, thread 'vo'). The flag goes
+        False synchronously at release() — before anything that can fail.
+        """
+        try:
+            if self._accepting_frames:
+                self.sig_frame_ready.emit()
+        except Exception:
+            pass
 
     # ── painting ──────────────────────────────────────────────────────
 
