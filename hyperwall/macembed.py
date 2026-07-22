@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QOpenGLContext, QPainter
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 
@@ -65,19 +65,39 @@ class MpvGLWidget(QOpenGLWidget):
                 self.doneCurrent()
 
     def release(self) -> None:
-        """Free the render context (GUI thread, before mpv terminate)."""
+        """Free the render context (before the mpv core is terminated).
+
+        Qt qFatals (SIGABRT) on a cross-thread makeCurrent, and the wall's
+        shutdown terminates cells on a ThreadPoolExecutor — the first macOS
+        exit crashed exactly there. Free synchronously on the widget's own
+        (GUI) thread; off-GUI callers get a queued best-effort free — if
+        the loop is already dead, process exit reclaims the context.
+        """
         if self._ctx is None:
             return
-        if self._gl_ready:
-            self.makeCurrent()
+        if QThread.currentThread() is self.thread():
+            self._free_ctx()
+        else:
+            QTimer.singleShot(0, self, self._free_ctx)
+
+    def _free_ctx(self) -> None:
+        """Free the render context. GUI thread only."""
+        if self._ctx is None:
+            return
+        self.makeCurrent()
+        if QOpenGLContext.currentContext() is None:
+            # Native window already torn down (shutdown) — freeing with no
+            # current context is UB. Leak it; the process is exiting.
+            logger.debug("GL gone at release — abandoning render ctx.")
+            self._ctx = None
+            return
         try:
             ctx, self._ctx = self._ctx, None
             ctx.free()
         except Exception as e:
             logger.debug("mpv render ctx free raised: %s", e)
         finally:
-            if self._gl_ready:
-                self.doneCurrent()
+            self.doneCurrent()
 
     # ── GL plumbing ───────────────────────────────────────────────────
 

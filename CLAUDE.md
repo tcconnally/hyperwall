@@ -34,6 +34,11 @@ check the rule. Before claiming one of these is fixed, run the probe.
   and ANY exception inside a ctypes callback is swallowed by the FFI, so
   libmpv gets a garbage GL function pointer and bus-errors when it calls
   it. The macembed `_resolve` callback must be total (try/except → 0).
+- Qt **qFatals (SIGABRT) on a cross-thread `QOpenGLWidget.makeCurrent`** —
+  and the wall's shutdown terminates cells on a ThreadPoolExecutor, so
+  `MpvGLWidget.release()` must only free synchronously on the widget's own
+  thread; off-GUI callers queue the free (best-effort at exit). Mid-session
+  destroys are GUI-thread, so only shutdown ever hits this.
 
 ## python-mpv API
 
