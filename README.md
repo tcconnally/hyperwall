@@ -18,6 +18,41 @@ hardware-accelerated video cells powered by libmpv.
 - **G-Sync isolation** — per-app NVIDIA Profile Inspector profile
   disables VRR for Hyperwall only, avoiding mixed-FPS jitter
 
+## Quick Start (macOS — Apple Silicon / Intel, experimental)
+
+macOS support uses a different video path: mpv's Swift backend does **not**
+support `--wid` window embedding, so each cell renders through the libmpv
+render API (`vo=libmpv`) into a QOpenGLWidget — the same architecture as
+IINA/IPTVnator — with VideoToolbox hardware decode.
+
+```
+# 1. Clone
+git clone https://github.com/tcconnally/hyperwall.git
+cd hyperwall
+
+# 2. Bootstrap (brew install mpv, creates .venv, installs deps, verifies libmpv)
+./bootstrap.sh
+
+# 3. Configure
+cp config.example.ini config.ini   # bootstrap does this if missing
+open -e config.ini                 # fill in server_url, username, password
+
+# 4. Run
+./launch.sh
+```
+
+macOS notes:
+
+- Requires Homebrew; `brew install mpv` provides `libmpv.dylib`.
+  `launch.sh` exports `DYLD_FALLBACK_LIBRARY_PATH` so python-mpv finds it
+  (must be set before Python starts — don't skip launch.sh).
+- Multi-monitor fullscreen works best with *System Settings → Desktop &
+  Dock → Displays have separate Spaces* enabled (default).
+- G-Sync isolation and the .exe build are Windows-only; macOS runs script
+  mode with CoreAudio + VideoToolbox.
+- If cells show software decode or black frames, try
+  `HYPERWALL_HWDEC=videotoolbox-copy ./launch.sh`.
+
 ## Quick Start (Windows)
 
 ```powershell
@@ -40,11 +75,13 @@ notepad config.ini    # fill in server_url, username, password
 
 ## Requirements
 
-- Windows 10/11 with PowerShell 7+
+- Windows 10/11 with PowerShell 7+ — or — macOS (Apple Silicon/Intel) with
+  Homebrew (experimental)
 - Python 3.12+
-- NVIDIA GPU with driver 551+ (for nvdec hardware decode)
+- NVIDIA GPU with driver 551+ (Windows nvdec hardware decode); Apple
+  Silicon uses VideoToolbox
 - Emby server on local network
-- NVIDIA Profile Inspector (optional — for G-Sync isolation)
+- NVIDIA Profile Inspector (optional — for G-Sync isolation, Windows only)
 
 ## Keyboard Shortcuts
 

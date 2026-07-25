@@ -217,6 +217,8 @@ def maybe_relaunch_in_isolation() -> None:
     When running as 'python hyperwall.py', relaunch via the bundled exe
     so the NVIDIA driver matches the per-app G-Sync profile.
     """
+    if not _IS_WINDOWS:
+        return  # no bundled exe / G-Sync profile off Windows
     if _is_isolated_launch():
         return
     if not os.path.exists(LAUNCHER_EXE):

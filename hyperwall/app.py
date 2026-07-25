@@ -173,12 +173,24 @@ def main() -> None:
     try:
         import mpv  # noqa: F401
     except Exception as e:
+        if sys.platform == "darwin":
+            hint = (
+                "Install libmpv via Homebrew:\n  brew install mpv\n\n"
+                "Then launch via ./launch.sh — it exports\n"
+                "DYLD_FALLBACK_LIBRARY_PATH so python-mpv finds\n"
+                "/opt/homebrew/lib/libmpv.dylib on Apple Silicon."
+            )
+        elif os.name == "nt":
+            hint = (
+                f"And place mpv-2.dll next to this script:\n  {SCRIPT_DIR}\n\n"
+                f"Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\n"
+                f"  (shinchiro build — extract libmpv-2.dll, place in script dir)"
+            )
+        else:
+            hint = "Install libmpv via your distro (mpv-libs / libmpv-dev)."
         msg = (
             f"python-mpv failed to load: {e}\n\n"
-            f"Install:\n  pip install python-mpv\n\n"
-            f"And place mpv-2.dll next to this script:\n  {SCRIPT_DIR}\n\n"
-            f"Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\n"
-            f"  (shinchiro build — extract libmpv-2.dll, place in script dir)"
+            f"Install:\n  pip install python-mpv\n\n{hint}"
         )
         try:
             QApplication(sys.argv)
@@ -190,6 +202,19 @@ def main() -> None:
     # 3. Logging
     _setup_logging()
     logger.info("Runtime: %s", runtime_banner())
+
+    # 3b. libmpv hard-fails mpv_create() (returns NULL → python-mpv then
+    # segfaults dereferencing it in mpv_set_option) when LC_NUMERIC is not
+    # "C"/"C.UTF-8" (mpv player/main.c check_locale). CPython calls
+    # setlocale(LC_ALL, "") at startup on POSIX, so a normal en_US.UTF-8
+    # macOS shell kills every libmpv embed at first MPV() — the Windows CRT
+    # keeps LC_NUMERIC=C, which is why this only bites POSIX.
+    if os.name != "nt":
+        import locale as _locale
+        try:
+            _locale.setlocale(_locale.LC_NUMERIC, "C")
+        except _locale.Error as e:
+            logger.warning("Could not force LC_NUMERIC=C: %s", e)
 
     # 4. Process priority (HIGH)
     if os.name == "nt" and not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
@@ -213,6 +238,17 @@ def main() -> None:
                 )
         except Exception as e:
             logger.warning("Kernel: priority change failed: %s", e)
+
+    if sys.platform == "darwin":
+        # macOS cells render through QOpenGLWidget (macembed.py): default a
+        # 3.2 core-profile context (resolves to 4.1 on Apple Silicon) before
+        # any GL context can be created.
+        from PyQt6.QtGui import QSurfaceFormat
+        _fmt = QSurfaceFormat()
+        _fmt.setVersion(3, 2)
+        _fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+        _fmt.setDepthBufferSize(0)  # 2D video only
+        QSurfaceFormat.setDefaultFormat(_fmt)
 
     app = QApplication(sys.argv)
     theme.apply(app)

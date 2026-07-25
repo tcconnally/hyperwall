@@ -68,6 +68,7 @@ from .constants import (
     WATCHDOG_INTERVAL_MS,
     _s,
     apply_env_overrides,
+    native_wid,
 )
 from .reliability import (
     apply_jitter,
@@ -279,12 +280,19 @@ class VideoCell(QWidget):
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
 
-        self.video_frame = QFrame(self)
-        self.video_frame.setStyleSheet("background: black;")
-        self.video_frame.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.video_frame.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
-        self.video_frame.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
-        self.video_frame.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        # Video surface. macOS: --wid embedding is unsupported by mpv's
+        # Swift backend, so cells render through the libmpv render API into
+        # a QOpenGLWidget (macembed.py). Windows: native HWND embed below.
+        if sys.platform == "darwin":
+            from .macembed import MpvGLWidget
+            self.video_frame = MpvGLWidget(self)
+        else:
+            self.video_frame = QFrame(self)
+            self.video_frame.setStyleSheet("background: black;")
+            self.video_frame.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self.video_frame.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+            self.video_frame.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
+            self.video_frame.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         vbox.addWidget(self.video_frame, 1)
 
         self._build_controls()
@@ -370,26 +378,43 @@ class VideoCell(QWidget):
             logger.warning("video_frame not visible — deferring mpv creation.")
             return
 
-        # HWND sign-extension fix: mask to 32-bit
-        wid = int(self.video_frame.winId()) & 0xFFFFFFFF
-        if wid == 0:
-            logger.warning("video_frame.winId() == 0 — widget not realized yet.")
-            return
+        _opts = self._mpv_opts or apply_env_overrides(MPV_OPTS)
+        if sys.platform != "darwin":
+            # HWND sign-extension fix: mask to 32-bit (Windows only — the
+            # mask would corrupt a 64-bit pointer elsewhere).
+            wid = native_wid(int(self.video_frame.winId()))
+            if wid == 0:
+                logger.warning("video_frame.winId() == 0 — widget not realized yet.")
+                return
 
         # Suppress FFmpeg C-level stdout/stderr during creation
         _std_saved = (sys.stdout, sys.stderr)
         _devnull = open(os.devnull, "w")
         try:
             sys.stdout = sys.stderr = _devnull
-            _opts = self._mpv_opts or apply_env_overrides(MPV_OPTS)
-            m = _mpv.MPV(
-                wid=str(wid),
-                log_handler=self._mpv_log,
-                **_opts,
-            )
+            if sys.platform == "darwin":
+                # No --wid on macOS (unsupported by mpv's Swift backend):
+                # vo=libmpv (from the platform opts) renders through the
+                # MpvGLWidget's GL framebuffer.
+                m = _mpv.MPV(
+                    log_handler=self._mpv_log,
+                    **_opts,
+                )
+            else:
+                m = _mpv.MPV(
+                    wid=str(wid),
+                    log_handler=self._mpv_log,
+                    **_opts,
+                )
         finally:
             sys.stdout, sys.stderr = _std_saved
             _devnull.close()
+
+        if sys.platform == "darwin":
+            # Render context must exist before the first loadfile hits the
+            # VO (render.h); attach_mpv creates it now if GL is up, else at
+            # initializeGL — which precedes the staggered first play().
+            self.video_frame.attach_mpv(m)
 
         # Apply initial state
         try:
@@ -498,6 +523,10 @@ class VideoCell(QWidget):
             return
         if STATS_ENABLED:
             self._flush_stats()
+        if sys.platform == "darwin":
+            # render.h: the render context must be freed BEFORE the mpv core
+            # is destroyed, with the GL context current (GUI thread here).
+            self.video_frame.release()
         # Silence the handle BEFORE terminate: a wedged teardown gets
         # abandoned on a daemon thread below, and an abandoned-but-alive
         # instance that was audible would keep playing sound that no
@@ -570,7 +599,11 @@ class VideoCell(QWidget):
 
     def showEvent(self, event: Any) -> None:
         super().showEvent(event)
-        self.video_frame.winId()  # force native window creation
+        if sys.platform != "darwin":
+            # Windows: force native window creation for the wid embed.
+            # QOpenGLWidget needs no winId (and native-windowing it would
+            # change compositing), so skip on macOS.
+            self.video_frame.winId()
         if not self._played_anything and self.current_item is None:
             # Visual feedback while staggered startup loads content.
             self._show_loading()

@@ -4,6 +4,60 @@ Bug classes that have each bitten this codebase at least once (2026-07-13
 audit campaign, v10.2→v10.9). Before writing code that touches these areas,
 check the rule. Before claiming one of these is fixed, run the probe.
 
+## Platforms
+
+- **macOS has no `--wid` embed.** mpv's Swift backend doesn't support it
+  (mpv-examples#29, maintainer-confirmed; IPTVnator hit the black-surface
+  failure). macOS cells render via the libmpv render API (`vo=libmpv`) into
+  `macembed.MpvGLWidget` (QOpenGLWidget) — the platform opts in
+  `constants.mpv_opts_for_platform()` pick this; never pass `wid=` on darwin.
+- Render API threading (render.h): the update callback fires on an mpv
+  thread — bare signal emit only; all `mpv_render_*` calls run on the GUI
+  thread with the widget's GL context current; free the render context
+  BEFORE `mpv.terminate()` (`VideoCell._destroy_mpv` order is load-bearing).
+- Never let `mpv_render_context_render` block the GUI thread on the audio
+  clock: `block_for_target_time=False` + `video-timing-offset=0` on darwin.
+- The `& 0xFFFFFFFF` HWND mask is Windows-only (`constants.native_wid`) —
+  it would truncate the 64-bit NSView pointer on macOS.
+- libmpv discovery on macOS: `DYLD_FALLBACK_LIBRARY_PATH` must include the
+  Homebrew prefix lib dir BEFORE python starts (launch.sh) — setting it
+  from inside Python is a no-op.
+- **libmpv refuses non-C LC_NUMERIC.** `mpv_create()` returns NULL under
+  e.g. en_US.UTF-8 (mpv player/main.c check_locale) and python-mpv then
+  SEGFAULTS in mpv_set_option — the crash surfaces at first MPV(), not at
+  import. POSIX Python sets LC_ALL from the env at startup; the Windows
+  CRT keeps LC_NUMERIC=C, which is why Windows never hit it. app.py forces
+  `setlocale(LC_NUMERIC, "C")` early; launch.sh exports it too. If a
+  libmpv embed segfaults at 0x48 (NULL handle), check the locale first.
+- ru_maxrss units differ: bytes on macOS, KiB on Linux (soak sampler).
+- PyQt6 `QOpenGLContext.getProcAddress` wants bytes/QByteArray, not str —
+  and ANY exception inside a ctypes callback is swallowed by the FFI, so
+  libmpv gets a garbage GL function pointer and bus-errors when it calls
+  it. The macembed `_resolve` callback must be total (try/except → 0).
+- Qt **qFatals (SIGABRT) on a cross-thread `QOpenGLWidget.makeCurrent`** —
+  and the wall's shutdown terminates cells on a ThreadPoolExecutor, so
+  `MpvGLWidget.release()` must only free synchronously on the widget's own
+  thread; off-GUI callers queue the free (best-effort at exit). Mid-session
+  destroys are GUI-thread, so only shutdown ever hits this.
+- The whole teardown chain is only as strong as its weakest raise: a
+  TypeError in `release()` (bad `QTimer.singleShot` overload — PyQt6 has
+  NO (msec, receiver, slot) form; use a queued pyqtSignal for
+  cross-thread hops) aborted cell teardown, mpv.terminate never ran, and
+  the live vo thread fired the update callback into a dying widget →
+  segfault in `pyqtBoundSignal_emit`. Rules: `release()` NEVER raises;
+  the mpv update callback is a total function gated by an
+  `_accepting_frames` flag set False FIRST at release; never store a raw
+  `signal.emit` as `MpvRenderContext.update_cb`; clear `update_cb = None`
+  before freeing the context.
+- render.h ordering vs the bounded-terminate pool is a structural
+  conflict: the pool terminates cores while the GUI thread blocks in
+  `concurrent.futures.wait`, so a free QUEUED from a pool thread to the
+  GUI thread can never run before terminate → core destroyed with a live
+  render context → SIGABRT. Resolution: `wall._cleanup` frees ALL render
+  contexts synchronously on the GUI thread (native windows still alive)
+  BEFORE submitting cell releases to the pool. Queued-free remains only
+  as the fallback for hypothetical off-GUI callers.
+
 ## python-mpv API
 
 - `m["name"]` reads/writes **options/**`name`, NOT the property. Property-only

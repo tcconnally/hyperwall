@@ -683,6 +683,21 @@ class WallController:
             return
         self._cleaned_up = True
 
+        # darwin: free each cell's mpv render context HERE — synchronously,
+        # on the GUI thread, while the native windows still exist — BEFORE
+        # the pool below terminates the mpv cores. render.h: freeing after
+        # core destruction is UB. The old design queued the free onto the
+        # GUI thread from the pool, but the GUI thread was blocked waiting
+        # ON the pool → terminate ran with a live render context → SIGABRT
+        # at exit (M5 Air 2026-07-21, third exit crash).
+        import sys as _sys
+        if _sys.platform == "darwin":
+            for c in self.cells:
+                try:
+                    c.video_frame.release()
+                except Exception as e:
+                    logger.debug("GL pre-release failed: %s", e)
+
         # Hide all windows immediately
         for w in self.windows:
             try:

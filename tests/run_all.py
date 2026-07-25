@@ -31,6 +31,7 @@ SUITES = [
     "test_mute_volume",
     "test_audit_regressions",
     "test_freeze_visibility",
+    "test_platform",
 ]
 
 

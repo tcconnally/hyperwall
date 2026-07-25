@@ -27,11 +27,14 @@ PERF lines (loop lag over time), [PREFETCH→]/[DIRECT]/stall/error lines
 from __future__ import annotations
 
 import ctypes
-import ctypes.wintypes as wt
 import logging
 import os
 import random
+import sys
 import time
+
+if os.name == "nt":
+    import ctypes.wintypes as wt
 
 from PyQt6.QtCore import QObject, QTimer
 
@@ -59,12 +62,31 @@ class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
         ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
         ("PagefileUsage", ctypes.c_size_t),
         ("PeakPagefileUsage", ctypes.c_size_t),
-    ]
+    ] if os.name == "nt" else []
 
 
 def _resource_snapshot() -> dict[str, int]:
-    """Working set / private bytes / GDI / USER / threads for this process."""
+    """Working set / private bytes / GDI / USER / threads for this process.
+
+    GDI/USER counts are Windows-only; POSIX gets RSS from getrusage.
+    """
     out: dict[str, int] = {}
+    if os.name != "nt":
+        try:
+            import resource
+            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # ru_maxrss units: KiB on Linux, BYTES on macOS.
+            out["ws_mb"] = int(
+                rss // (1024 * 1024) if sys.platform == "darwin" else rss // 1024
+            )
+        except Exception as e:
+            logger.debug("SOAK resource snapshot failed: %s", e)
+        try:
+            import threading
+            out["threads"] = threading.active_count()
+        except Exception:
+            pass
+        return out
     try:
         k32 = ctypes.windll.kernel32
         u32 = ctypes.windll.user32
