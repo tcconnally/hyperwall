@@ -14,6 +14,16 @@ from dataclasses import dataclass, field
 from .constants import CONFIG_FILE
 
 
+def effective_server_url(configured: str, override: str | None = None) -> str:
+    """Return a per-launch endpoint override without changing config.ini.
+
+    This supports controlled LAN-vs-public delivery tests while leaving the
+    user's normal configured endpoint and credentials untouched.
+    """
+    candidate = (override or "").strip()
+    return candidate or configured
+
+
 @dataclass(frozen=True)
 class HyperwallConfig:
     """Immutable configuration loaded from config.ini."""

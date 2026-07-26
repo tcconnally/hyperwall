@@ -34,6 +34,7 @@ SUITES = [
     "test_platform",
     "test_soak_telemetry",
     "test_macos_playback_performance",
+    "test_endpoint_override",
 ]
 
 
