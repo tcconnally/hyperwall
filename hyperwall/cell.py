@@ -1161,11 +1161,25 @@ class VideoCell(QWidget):
         if self._audio_started or self._mpv is None:
             return
         try:
+            t0 = _time.perf_counter()
             self._mpv["aid"] = "auto"
+            aid_ms = (_time.perf_counter() - t0) * 1000
             self._audio_started = True
-            pos = self._mpv.time_pos  # property-only; m[...] would raise
+            # time-pos is maintained by the observer on the mpv event thread.
+            # Reading m.time_pos here is synchronous libmpv IPC and was part
+            # of the 210ms GUI click stall caught on the M5 soak.  The cached
+            # value is fresh at video-frame cadence and a keyframe relock is
+            # tolerant of a slightly stale position.
+            pos = self._play_pos if self._play_pos > 0 else None
+            seek_ms = 0.0
             if pos is not None:
+                t0 = _time.perf_counter()
                 self._mpv.seek(pos, "absolute+keyframes")
+                seek_ms = (_time.perf_counter() - t0) * 1000
+            logger.info(
+                "AUDIO arm: aid=%.0fms seek=%.0fms cached-pos=%s",
+                aid_ms, seek_ms, "yes" if pos is not None else "no",
+            )
         except Exception as e:
             # WARNING, not debug: _apply_mute proceeds to show the audible
             # glow, so a swallowed failure here = a "live" cell with no

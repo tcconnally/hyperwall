@@ -153,8 +153,30 @@ Environment variables:
 | `HYPERWALL_CRASHLOOP_THRESHOLD` | Failures within the window before a cell is parked (default 5) |
 | `HYPERWALL_CRASHLOOP_WINDOW_S` | Rolling window for the crash-loop guard (default 60) |
 | `HYPERWALL_CRASHLOOP_COOLDOWN_S` | How long a parked cell waits before resuming (default 120) |
-| `HYPERWALL_CACHE_BUDGET_MB` | Aggregate demuxer cache ceiling across all cells (default 3072) |
-| `HYPERWALL_DEMUXER_PER_CELL_MB` | Desired per-cell demuxer cache before budget scaling (default 512) |
+| `HYPERWALL_CACHE_BUDGET_MB` | Aggregate demuxer cache ceiling across all cells (default 8192) |
+| `HYPERWALL_DEMUXER_PER_CELL_MB` | Desired per-cell demuxer cache before budget scaling (default 1024) |
+| `HYPERWALL_PERFTRACE=1` | Emit GUI loop-lag and slow-slot telemetry |
+| `HYPERWALL_SOAK_MINUTES` | Run a self-terminating randomized soak for N minutes |
+| `HYPERWALL_SOAK_PROFILE` | Soak mix: `mixed` (default), `audio` (mute/unmute focus), or `advance` |
+| `HYPERWALL_SOAK_REPORT_DIR` | Write JSONL run events (start/sample/finish) to this directory |
+
+### macOS playback soak
+
+For the reported mute/unmute jank, use the audio-focused launcher on the M5:
+
+```bash
+chmod +x soak_wall.sh
+./soak_wall.sh 60
+```
+
+It runs a 60-minute self-terminating wall session, keeps at most one cell
+unmuted, and biases actions toward lazy-audio arm/relock transitions. Each run
+creates `soak_reports/<timestamp>/` with `hyperwall.log`, JSONL events,
+`vm_stat.log`, `nettop.log`, and (where permitted) `powermetrics.log`. The
+final `hyperwall_stats_*.json` records VideoToolbox/decode/drop/freeze totals.
+To test a different hardware-decoder path, run a separate, otherwise identical
+session, e.g. `HYPERWALL_HWDEC=videotoolbox-copy ./soak_wall.sh 60`; do not mix
+profiles in one run.
 
 ## Building
 

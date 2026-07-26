@@ -27,11 +27,13 @@ PERF lines (loop lag over time), [PREFETCH→]/[DIRECT]/stall/error lines
 from __future__ import annotations
 
 import ctypes
+import json
 import logging
 import os
 import random
 import sys
 import time
+from pathlib import Path
 
 if os.name == "nt":
     import ctypes.wintypes as wt
@@ -42,6 +44,8 @@ logger = logging.getLogger("HyperWall")
 
 SOAK_MINUTES = int(os.environ.get("HYPERWALL_SOAK_MINUTES", "0") or 0)
 SOAK_DWELL_S = int(os.environ.get("HYPERWALL_SOAK_DWELL_S", "75") or 0)
+SOAK_PROFILE = os.environ.get("HYPERWALL_SOAK_PROFILE", "mixed").strip().lower()
+SOAK_REPORT_DIR = os.environ.get("HYPERWALL_SOAK_REPORT_DIR", "").strip()
 # Function exerciser: each churn tick drives a random USER ACTION through
 # the same handlers a real click takes (advance/prev/seek/mute/volume/
 # pause/loop/favorite), then verifies state invariants. 0 = advances only.
@@ -133,6 +137,10 @@ class SoakController(QObject):
         self._unmuted_cell = None   # at most one audible cell during a soak
         self._paused_cell = None    # at most one paused cell during a soak
         self._baseline = _resource_snapshot()
+        self._profile = SOAK_PROFILE if SOAK_PROFILE in {"mixed", "audio", "advance"} else "mixed"
+        if self._profile != SOAK_PROFILE:
+            logger.warning("SOAK unknown profile %r; using mixed.", SOAK_PROFILE)
+        self._report_path = self._init_report()
 
         self._res_timer = QTimer(self)
         self._res_timer.setInterval(_RES_SAMPLE_S * 1000)
@@ -151,9 +159,42 @@ class SoakController(QObject):
         self._end_timer.start(SOAK_MINUTES * 60 * 1000)
 
         logger.info(
-            "SOAK start: %d min, dwell %ds (0=natural only), baseline %s",
-            SOAK_MINUTES, SOAK_DWELL_S, self._baseline,
+            "SOAK start: %d min, profile=%s, dwell %ds (0=natural only), baseline %s, report=%s",
+            SOAK_MINUTES, self._profile, SOAK_DWELL_S, self._baseline,
+            self._report_path or "disabled",
         )
+        self._write_report("start", baseline=self._baseline)
+
+    def _init_report(self) -> Path | None:
+        """Create a JSONL telemetry artifact for offline run correlation."""
+        if not SOAK_REPORT_DIR:
+            return None
+        try:
+            root = Path(SOAK_REPORT_DIR).expanduser()
+            root.mkdir(parents=True, exist_ok=True)
+            path = root / f"hyperwall_soak_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+            path.touch(exist_ok=False)
+            return path
+        except Exception as e:
+            logger.warning("SOAK report disabled: %s", e)
+            return None
+
+    def _write_report(self, event: str, **payload) -> None:
+        if self._report_path is None:
+            return
+        record = {
+            "event": event,
+            "wall_seconds": round(time.monotonic() - self._t0, 3),
+            "profile": self._profile,
+            "cells": len(self._wall.cells),
+            **payload,
+        }
+        try:
+            with self._report_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+        except Exception as e:
+            logger.warning("SOAK report write failed: %s", e)
+            self._report_path = None
 
     def _arm_churn(self) -> None:
         # Per-cell dwell: with N cells, one advance per DWELL/N keeps each
@@ -170,13 +211,21 @@ class SoakController(QObject):
         ("advance", 40), ("seek", 15), ("audio", 15), ("volume", 10),
         ("pause", 10), ("prev", 4), ("loop", 3), ("favorite", 3),
     )
+    # Stress the reported transition without unrelated seeks/pause actions
+    # dominating the signal.  One audible cell remains the safety invariant.
+    _AUDIO_ACTIONS = (("audio", 70), ("volume", 20), ("advance", 10))
+    _ADVANCE_ACTIONS = (("advance", 80), ("prev", 10), ("seek", 10))
 
     def _churn(self) -> None:
         try:
             cell = random.choice(self._wall.cells)
             if SOAK_ACTIONS:
-                names = [a for a, _ in self._ACTIONS]
-                weights = [w for _, w in self._ACTIONS]
+                actions = {
+                    "audio": self._AUDIO_ACTIONS,
+                    "advance": self._ADVANCE_ACTIONS,
+                }.get(self._profile, self._ACTIONS)
+                names = [a for a, _ in actions]
+                weights = [w for _, w in actions]
                 action = random.choices(names, weights=weights, k=1)[0]
             else:
                 action = "advance"
@@ -272,6 +321,10 @@ class SoakController(QObject):
             dict(sorted(self._action_counts.items())),
             self._invariant_violations,
         )
+        self._write_report(
+            "sample", resources=snap, actions=dict(sorted(self._action_counts.items())),
+            invariant_violations=self._invariant_violations,
+        )
 
     def _finish(self) -> None:
         snap = _resource_snapshot()
@@ -280,6 +333,11 @@ class SoakController(QObject):
             "baseline %s → final %s",
             SOAK_MINUTES, dict(sorted(self._action_counts.items())),
             self._invariant_violations, self._baseline, snap,
+        )
+        self._write_report(
+            "finish", baseline=self._baseline, resources=snap,
+            actions=dict(sorted(self._action_counts.items())),
+            invariant_violations=self._invariant_violations,
         )
         self._res_timer.stop()
         self._churn_timer.stop()
