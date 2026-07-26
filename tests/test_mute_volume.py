@@ -61,6 +61,9 @@ def _make_cell():
     cell.show()
     _app.processEvents()
     cell._mpv = _FakeMpv()
+    # Real playback keeps this cache fresh via the time-pos observer. The
+    # audio relock deliberately consumes it instead of synchronous libmpv IPC.
+    cell._play_pos = 12.0
     return cell
 
 

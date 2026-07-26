@@ -392,16 +392,25 @@ class WallController:
 
     @traced("wall._arm_prefetch")
     def _arm_prefetch(self, cell: VideoCell) -> None:
-        """Draw the cell's next item now and queue it on the live mpv so
-        prefetch-playlist warms its demuxer before the current track ends.
-        Skipped silently when the pool is empty or the cell has no live
-        player — the advance then just takes the cold path."""
-        item = self.playlists.next(self._cell_group(cell))
-        if item is None:
-            return
-        url, sid = self._build_url(item, prefetch=True, cell=cell)
-        if not cell.prefetch(item, url, sid):
-            logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
+        """Schedule a playlist warmup after the active GUI transition returns.
+
+        ``loadfile append`` has to execute on the cell's mpv/GUI ownership
+        path, but the M5 soak showed it can take 170–200ms.  Deferring one Qt
+        turn keeps the visible next/mute handler short while preserving the
+        existing in-order mpv playlist semantics.  The closure re-checks
+        liveness and consumes its item only when it actually runs.
+        """
+        def _queue() -> None:
+            if self._shutdown_requested or cell._mpv is None:
+                return
+            item = self.playlists.next(self._cell_group(cell))
+            if item is None:
+                return
+            url, sid = self._build_url(item, prefetch=True, cell=cell)
+            if not cell.prefetch(item, url, sid):
+                logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
+
+        QTimer.singleShot(0, _queue)
 
     def run_on_main(self, fn: Any) -> None:
         """Queue a callable onto the GUI thread (safe from any thread)."""

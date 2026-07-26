@@ -32,6 +32,8 @@ SUITES = [
     "test_audit_regressions",
     "test_freeze_visibility",
     "test_platform",
+    "test_soak_telemetry",
+    "test_macos_playback_performance",
 ]
 
 
