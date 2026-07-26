@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
 )
 
 from . import __version__, runtime_banner
-from .config import HyperwallConfig, ConfigMissingError
+from .config import HyperwallConfig, ConfigMissingError, effective_server_url
 from .constants import (
     CONFIG_FILE,
     LOG_FILE,
@@ -275,8 +275,13 @@ def main() -> None:
         sys.exit(1)
 
     # 7. Emby client
+    server_url = effective_server_url(
+        cfg.server_url, os.environ.get("HYPERWALL_SERVER_URL")
+    )
+    if server_url != cfg.server_url:
+        logger.info("Endpoint override active for this launch: %s", server_url)
     client = EmbyClient(
-        cfg.server_url, cfg.username, cfg.password, verify_ssl=cfg.verify_ssl,
+        server_url, cfg.username, cfg.password, verify_ssl=cfg.verify_ssl,
         backend=resolve_backend(cfg.backend),
     )
     if not cfg.verify_ssl:
@@ -289,7 +294,7 @@ def main() -> None:
     if not client.test_connection():
         _show_error_dialog(
             "Connection Error",
-            f"Cannot reach Emby server at:\n{cfg.server_url}",
+            f"Cannot reach Emby server at:\n{server_url}",
         )
         sys.exit(1)
 
