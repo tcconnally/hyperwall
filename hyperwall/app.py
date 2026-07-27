@@ -7,6 +7,7 @@ Emby authentication, wizard, wall launch, and web remote.
 
 from __future__ import annotations
 
+import argparse
 import ctypes
 import json
 import logging
@@ -43,7 +44,7 @@ from .nvidia import ensure_nvidia_profile, maybe_relaunch_in_isolation
 from . import theme
 from .wizard import SetupWizard
 from .wall import WallController, MouseIdleHider
-from .sync import SyncServer, SyncClient
+from .sync import SyncServer, SyncClient, DEFAULT_SYNC_PORT
 
 logger = logging.getLogger("HyperWall")
 
@@ -168,6 +169,31 @@ def _show_error_dialog(title: str, msg: str) -> None:
 
 def main() -> None:
     sys.excepthook = _handle_exception
+
+    # 0. Optional headless sync-relay mode (no Qt, no mpv).
+    parser = argparse.ArgumentParser(prog="hyperwall")
+    parser.add_argument(
+        "--sync-relay",
+        action="store_true",
+        help="Run only the headless sync relay (no GUI).",
+    )
+    parser.add_argument(
+        "--sync-host",
+        default="0.0.0.0",
+        help="Host to bind the sync relay to (default: 0.0.0.0).",
+    )
+    parser.add_argument(
+        "--sync-port",
+        type=int,
+        default=DEFAULT_SYNC_PORT,
+        help=f"Port for the sync relay (default: {DEFAULT_SYNC_PORT}).",
+    )
+    args = parser.parse_args()
+
+    if args.sync_relay:
+        from .sync import run_sync_relay
+        run_sync_relay(host=args.sync_host, port=args.sync_port)
+        return
 
     # 1. NVIDIA isolation: re-exec into bundled exe if needed
     maybe_relaunch_in_isolation()

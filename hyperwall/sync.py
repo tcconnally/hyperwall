@@ -25,8 +25,97 @@ import json
 import logging
 import socket
 import threading
+import time
 import uuid
 from typing import Any
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 logger = logging.getLogger("HyperWall")
 
@@ -208,22 +297,28 @@ class SyncServer:
         """Snapshot current playlist + cell state for new clients."""
         if self.controller is None:
             return {"type": SyncMsg.FULL_STATE}
-        cells = {}
-        for cell in getattr(self.controller, "cells", []):
-            cid = getattr(cell, "cell_id", None)
-            item = getattr(cell, "current_item", None) or {}
-            if cid:
-                cells[cid] = item.get("Id")
-        solo = {}
-        if getattr(self.controller, "_solo_cell", None) is not None:
-            sc = self.controller._solo_cell
-            sw = self.controller._solo_window
-            sid = getattr(sc, "cell_id", None)
-            did = None
-            if sw is not None:
-                did = self.controller._window_meta.get(id(sw), {}).get("display_id")
-            item_id = (sc.current_item or {}).get("Id")
-            solo = {"display_id": did, "cell_id": sid, "item_id": item_id}
+
+        # Headless relay stores state directly; GUI controller stores it on cells.
+        if hasattr(self.controller, "_cell_states"):
+            cells = dict(self.controller._cell_states)
+            solo = dict(getattr(self.controller, "_solo_state", {}))
+        else:
+            cells = {}
+            for cell in getattr(self.controller, "cells", []):
+                cid = getattr(cell, "cell_id", None)
+                item = getattr(cell, "current_item", None) or {}
+                if cid:
+                    cells[cid] = item.get("Id")
+            solo = {}
+            if getattr(self.controller, "_solo_cell", None) is not None:
+                sc = self.controller._solo_cell
+                sw = self.controller._solo_window
+                sid = getattr(sc, "cell_id", None)
+                did = None
+                if sw is not None:
+                    did = self.controller._window_meta.get(id(sw), {}).get("display_id")
+                item_id = (sc.current_item or {}).get("Id")
+                solo = {"display_id": did, "cell_id": sid, "item_id": item_id}
         return {
             "type": SyncMsg.FULL_STATE,
             "cells": cells,
@@ -385,3 +480,65 @@ class SyncClient:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except Exception as e:
                 logger.debug("Sync client loop stop failed: %s", e)
+
+
+# ── headless relay controller ──────────────────────────────────────────────────────────────────
+
+class RelayController:
+    """Minimal controller for running the sync server headlessly on a relay host.
+
+    The relay does not play video; it just remembers the last authoritative
+    state and forwards messages between Hyperwall peers.
+    """
+
+    def __init__(self):
+        self.cells: list[Any] = []
+        self.windows: list[Any] = []
+        self._window_meta: dict[int, dict] = {}
+        self.filter_mode = "all"
+        self._solo_cell = None
+        self._solo_window = None
+        self._cell_states: dict[str, str] = {}
+        self._solo_state: dict[str, Any] = {}
+
+    def run_on_main(self, fn: Any) -> None:
+        fn()
+
+    def sync_apply(self, msg: dict[str, Any]) -> None:
+        mtype = msg.get("type")
+        if mtype == SyncMsg.CELL_UPDATE:
+            cid = msg.get("cell_id")
+            iid = msg.get("item_id")
+            if cid and iid:
+                self._cell_states[cid] = iid
+        elif mtype == SyncMsg.SOLO:
+            self._solo_state = {
+                "display_id": msg.get("display_id"),
+                "cell_id": msg.get("cell_id"),
+                "item_id": msg.get("item_id"),
+            }
+        elif mtype == SyncMsg.EXIT_SOLO:
+            self._solo_state = {}
+        elif mtype == SyncMsg.FILTER:
+            mode = msg.get("mode")
+            if mode in ("all", "favorites"):
+                self.filter_mode = mode
+
+
+def run_sync_relay(host: str = "0.0.0.0", port: int = DEFAULT_SYNC_PORT) -> None:
+    """Run a headless sync relay. Blocks until interrupted."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    controller = RelayController()
+    server = SyncServer(controller, host=host, port=port)
+    server.start()
+    logger.info("Hyperwall sync relay listening on %s:%d", host, port)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Relay shutting down.")
+    finally:
+        server.stop()

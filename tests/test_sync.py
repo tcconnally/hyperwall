@@ -11,7 +11,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hyperwall.sync import SyncMsg, SyncPeer, SyncServer
+from hyperwall.sync import SyncMsg, SyncPeer, SyncServer, RelayController
 
 
 class _FakeController:
@@ -148,6 +148,30 @@ def test_sync_server_applies_local_and_broadcasts_filter():
         assert not any(b"favorites" in data for data in sender_writer.written)
         assert any(b"favorites" in data for data in peer_writer.written)
     _run(_test())
+
+
+def test_relay_controller_tracks_state():
+    ctrl = RelayController()
+    ctrl.sync_apply({"type": "cell_update", "cell_id": "c1", "item_id": "i1"})
+    ctrl.sync_apply({"type": "filter", "mode": "favorites"})
+    ctrl.sync_apply({"type": "solo", "display_id": "d1", "cell_id": "c1", "item_id": "i1"})
+
+    assert ctrl._cell_states == {"c1": "i1"}
+    assert ctrl.filter_mode == "favorites"
+    assert ctrl._solo_state["display_id"] == "d1"
+
+    full = SyncServer(ctrl, host="127.0.0.1", port=0)._build_full_state()
+    assert full["type"] == "full_state"
+    assert full["cells"] == {"c1": "i1"}
+    assert full["filter"] == "favorites"
+    assert full["solo"]["item_id"] == "i1"
+
+
+def test_relay_controller_exit_solo_clears_state():
+    ctrl = RelayController()
+    ctrl.sync_apply({"type": "solo", "display_id": "d1", "cell_id": "c1", "item_id": "i1"})
+    ctrl.sync_apply({"type": "exit_solo"})
+    assert ctrl._solo_state == {}
 
 
 # ── helpers ──
