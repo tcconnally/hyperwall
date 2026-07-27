@@ -8,6 +8,7 @@ No raw ConfigParser access anywhere else in the codebase.
 from __future__ import annotations
 
 import configparser
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -40,6 +41,9 @@ class HyperwallConfig:
     last_libraries: str = ""
     last_grid_rows: int = 2
     last_grid_cols: int = 2
+    last_preview_rows: int = 3
+    last_preview_cols: int = 4
+    last_display_roles: str = ""
     cleanup_on_startup: bool = False
 
     # ── Scenes ──
@@ -79,6 +83,15 @@ class HyperwallConfig:
             last_libraries=cfg.get("Settings", "last_libraries", fallback=""),
             last_grid_rows=cfg.getint("Settings", "last_grid_rows", fallback=2),
             last_grid_cols=cfg.getint("Settings", "last_grid_cols", fallback=2),
+            last_preview_rows=cfg.getint(
+                "Settings", "last_preview_rows", fallback=3
+            ),
+            last_preview_cols=cfg.getint(
+                "Settings", "last_preview_cols", fallback=4
+            ),
+            last_display_roles=cfg.get(
+                "Settings", "last_display_roles", fallback=""
+            ),
             cleanup_on_startup=cfg.getboolean(
                 "Settings", "cleanup_on_startup", fallback=False
             ),
@@ -101,6 +114,9 @@ class HyperwallConfig:
             "last_libraries": "",
             "last_grid_rows": "2",
             "last_grid_cols": "2",
+            "last_preview_rows": "3",
+            "last_preview_cols": "4",
+            "last_display_roles": "",
             "cleanup_on_startup": "false",
         }
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -124,12 +140,24 @@ class HyperwallConfig:
             "last_libraries": self.last_libraries,
             "last_grid_rows": str(self.last_grid_rows),
             "last_grid_cols": str(self.last_grid_cols),
+            "last_preview_rows": str(self.last_preview_rows),
+            "last_preview_cols": str(self.last_preview_cols),
+            "last_display_roles": self.last_display_roles,
             "cleanup_on_startup": str(self.cleanup_on_startup),
         }
         if self.scenes:
             cfg["Scenes"] = {name: val for name, val in self.scenes}
         with open(path, "w") as f:
             cfg.write(f)
+
+    def display_roles(self) -> dict[str, str]:
+        """Parse the JSON last_display_roles map; return {} if malformed."""
+        if not self.last_display_roles:
+            return {}
+        try:
+            return json.loads(self.last_display_roles)
+        except json.JSONDecodeError:
+            return {}
 
 
 class ConfigMissingError(Exception):

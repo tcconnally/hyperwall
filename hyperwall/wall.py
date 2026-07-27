@@ -39,7 +39,7 @@ from .perftrace import traced
 from .constants import (
     MAX_DIRECT_FPS,
     MAX_CONCURRENT_TRANSCODES,
-    effective_bitrate_budget_mbps,
+    DisplayRole,
     OUTAGE_MIN_CELLS,
     OUTAGE_WINDOW_S,
     STREAM_START_STAGGER_MS,
@@ -48,6 +48,7 @@ from .constants import (
     STATS_INFO_PROPS,
     apply_cache_budget,
     apply_env_overrides,
+    effective_bitrate_budget_mbps,
     MPV_OPTS,
     SCRIPT_DIR,
 )
@@ -60,18 +61,48 @@ from .playlist import PlaylistManager, DEFAULT_GROUP
 logger = logging.getLogger("HyperWall")
 
 
-class EmergencyKeyFilter(QObject):
-    """App-level escape handler — works even when mpv children steal focus."""
+class WallWindow(QMainWindow):
+    """Fullscreen window for one display; notifies controller on resize so a
+    soloed cell continues to fill the central widget."""
 
-    def __init__(self, shutdown_callback: callable):
+    def __init__(self, controller: "WallController"):
+        super().__init__()
+        self._controller = controller
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._controller._solo_window is self:
+            cell = self._controller._solo_cell
+            if cell is not None:
+                cell.setGeometry(self.centralWidget().rect())
+
+
+class EmergencyKeyFilter(QObject):
+    """App-level escape handler — works even when mpv children steal focus.
+
+    If a preview/wall cell is currently in solo full-screen mode, Escape
+    exits solo first; a second Escape shuts the wall down.
+    """
+
+    def __init__(
+        self,
+        shutdown_callback: callable,
+        solo_active_callback: callable | None = None,
+        exit_solo_callback: callable | None = None,
+    ):
         super().__init__()
         self._shutdown_callback = shutdown_callback
+        self._solo_active = solo_active_callback or (lambda: False)
+        self._exit_solo = exit_solo_callback or (lambda: None)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if (
             event.type() == QEvent.Type.KeyPress
             and event.key() == Qt.Key.Key_Escape
         ):
+            if self._solo_active():
+                self._exit_solo()
+                return True
             self._shutdown_callback()
             return True
         return False
@@ -136,15 +167,25 @@ class WallController:
         grid_rows: int,
         grid_cols: int,
         client: EmbyClient,
+        display_roles: dict[str, str] | None = None,
+        preview_rows: int = 3,
+        preview_cols: int = 4,
     ):
         self.client = client
         self.screens = screens
         self.libraries = libraries
         self.grid_rows = grid_rows
         self.grid_cols = grid_cols
+        self.preview_rows = preview_rows
+        self.preview_cols = preview_cols
+        self.display_roles = display_roles or {}
 
         self.cells: list[VideoCell] = []
         self.windows: list[QMainWindow] = []
+        # Per-window metadata: role, grid cells, solo state, layout, etc.
+        self._window_meta: dict[int, dict[str, Any]] = {}
+        self._solo_cell: VideoCell | None = None
+        self._solo_window: QMainWindow | None = None
         self._shortcuts: list[QShortcut] = []
         self.all_items: list[dict[str, Any]] = []
         self.filtered: list[dict[str, Any]] = []
@@ -177,7 +218,11 @@ class WallController:
         self._last_outage_log_ts = 0.0
 
         # Emergency escape
-        self._escape_filter = EmergencyKeyFilter(self._shutdown)
+        self._escape_filter = EmergencyKeyFilter(
+            self._shutdown,
+            solo_active_callback=lambda: self._solo_cell is not None,
+            exit_solo_callback=self._exit_solo,
+        )
         QApplication.instance().installEventFilter(self._escape_filter)
 
         self._build_displays()
@@ -207,13 +252,22 @@ class WallController:
 
         self._start_async_load()
 
-    # ── display construction ──────────────────────────────────────────────
+    # ── display construction ───────────────────────────────────────────────────────
 
     def _build_displays(self) -> None:
-        rows, cols = self.grid_rows, self.grid_cols
         for screen in self.screens:
-            win = QMainWindow()
-            win.setWindowTitle(f"HyperWall — {screen.name()}")
+            role = self.display_roles.get(
+                screen.name(), DisplayRole.WALL
+            )
+            if role not in DisplayRole._ALL:
+                role = DisplayRole.WALL
+            is_preview = role == DisplayRole.PREVIEW
+            rows = self.preview_rows if is_preview else self.grid_rows
+            cols = self.preview_cols if is_preview else self.grid_cols
+
+            win = WallWindow(self)
+            role_name = "Preview" if is_preview else "Wall"
+            win.setWindowTitle(f"HyperWall — {role_name} — {screen.name()}")
             win.setStyleSheet("background: black;")
 
             cw = QWidget()
@@ -222,13 +276,18 @@ class WallController:
             grid.setContentsMargins(0, 0, 0, 0)
             grid.setSpacing(0)
 
+            window_cells: list[VideoCell] = []
+            cell_positions: dict[int, tuple[int, int]] = {}
             for r in range(rows):
                 for c in range(cols):
                     cell = VideoCell(self)
                     cell.request_next.connect(self.next_video)
                     cell.request_prev.connect(self.prev_video)
+                    cell.request_solo.connect(self._toggle_solo)
                     grid.addWidget(cell, r, c)
                     self.cells.append(cell)
+                    window_cells.append(cell)
+                    cell_positions[id(cell)] = (r, c)
 
             # Keyboard shortcuts per window
             for key, fn in (
@@ -245,7 +304,95 @@ class WallController:
 
             win.setGeometry(screen.geometry())
             self.windows.append(win)
-            logger.info("Display built: %s", screen.name())
+            self._window_meta[id(win)] = {
+                "screen": screen,
+                "role": role,
+                "grid": grid,
+                "cells": window_cells,
+                "positions": cell_positions,
+                "solo": False,
+            }
+            logger.info(
+                "Display built: %s (%s, %dx%d)",
+                screen.name(), role_name, rows, cols,
+            )
+
+    def _window_for_cell(self, cell: VideoCell) -> QMainWindow | None:
+        """Return the QMainWindow that contains the given cell."""
+        parent = cell.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QMainWindow):
+                return parent
+            parent = parent.parentWidget()
+        return None
+
+    def _toggle_solo(self, cell: VideoCell) -> None:
+        """Double-click handler: enter or exit full-screen solo for a cell.
+
+        Solo is only enabled on PREVIEW displays so the public wall grid
+        stays intact; double-clicking a wall cell is ignored.
+        """
+        win = self._window_for_cell(cell)
+        if win is None:
+            return
+        meta = self._window_meta.get(id(win))
+        if meta is None or meta["role"] != DisplayRole.PREVIEW:
+            return
+        if self._solo_cell is cell:
+            self._exit_solo()
+            return
+        if self._solo_cell is not None:
+            self._exit_solo()
+        self._enter_solo(cell)
+
+    def _enter_solo(self, cell: VideoCell) -> None:
+        win = self._window_for_cell(cell)
+        if win is None:
+            return
+        meta = self._window_meta.get(id(win))
+        if meta is None or meta["solo"]:
+            return
+
+        grid: QGridLayout = meta["grid"]
+        # Remove the cell from the grid (keeps parent) and hide the rest.
+        grid.removeWidget(cell)
+        for other in meta["cells"]:
+            if other is not cell:
+                other.hide()
+        cell.setParent(win.centralWidget())
+        cell.setGeometry(win.centralWidget().rect())
+        cell.show()
+        cell.raise_()
+
+        meta["solo"] = True
+        self._solo_cell = cell
+        self._solo_window = win
+        logger.info("Solo: cell %d full-screen on %s", self.cells.index(cell), win.windowTitle())
+
+    def _exit_solo(self) -> None:
+        """Restore the soloed cell into its grid position."""
+        cell = self._solo_cell
+        win = self._solo_window
+        if cell is None or win is None:
+            return
+        meta = self._window_meta.get(id(win))
+        if meta is None:
+            return
+
+        grid: QGridLayout = meta["grid"]
+        pos = meta["positions"].get(id(cell))
+        if pos is None:
+            return
+
+        cell.setParent(win.centralWidget())
+        grid.addWidget(cell, pos[0], pos[1])
+        for other in meta["cells"]:
+            other.show()
+
+        meta["solo"] = False
+        self._solo_cell = None
+        self._solo_window = None
+        logger.info("Solo: exited")
 
     # ── content loading ───────────────────────────────────────────────────
 

@@ -205,6 +205,26 @@ IS_WINDOWS = os.name == "nt"
 IS_MACOS = sys.platform == "darwin"
 
 
+# ── Display roles ────────────────────────────────────────────────────────────
+class DisplayRole:
+    """Role assigned to each selected monitor at launch.
+
+    WALL      — the public video wall (e.g. 2×2 on an external display).
+    PREVIEW   — a larger operator grid (e.g. 3×4) for browsing; any cell can
+                be double-clicked to go full-screen on that laptop while the
+                wall grid keeps playing.
+    """
+
+    WALL = "wall"
+    PREVIEW = "preview"
+
+    _ALL = (WALL, PREVIEW)
+
+    @classmethod
+    def is_valid(cls, value: str | None) -> bool:
+        return value in cls._ALL
+
+
 def mpv_opts_for_platform(platform: str | None = None) -> dict[str, object]:
     """Return the base MPV options adjusted for the given platform.
 

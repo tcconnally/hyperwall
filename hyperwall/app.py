@@ -8,6 +8,7 @@ Emby authentication, wizard, wall launch, and web remote.
 from __future__ import annotations
 
 import ctypes
+import json
 import logging
 import os
 import sys
@@ -321,6 +322,9 @@ def main() -> None:
         last_libraries=cfg.last_libraries,
         last_rows=cfg.last_grid_rows,
         last_cols=cfg.last_grid_cols,
+        last_preview_rows=cfg.last_preview_rows,
+        last_preview_cols=cfg.last_preview_cols,
+        last_display_roles=cfg.display_roles(),
     )
     if wiz.exec() != QDialog.DialogCode.Accepted:
         client.close()
@@ -346,6 +350,9 @@ def main() -> None:
         last_libraries=",".join(settings["libraries"]),
         last_grid_rows=settings["grid_rows"],
         last_grid_cols=settings["grid_cols"],
+        last_preview_rows=settings["preview_rows"],
+        last_preview_cols=settings["preview_cols"],
+        last_display_roles=json.dumps(settings["display_roles"]),
         cleanup_on_startup=cfg.cleanup_on_startup,
         scenes=cfg.scenes,  # preserve saved scene presets across the rewrite
     )
@@ -370,6 +377,9 @@ def main() -> None:
         grid_rows=settings["grid_rows"],
         grid_cols=settings["grid_cols"],
         client=client,
+        display_roles=settings.get("display_roles"),
+        preview_rows=settings.get("preview_rows", 3),
+        preview_cols=settings.get("preview_cols", 4),
     )
 
     if _WEB_AVAILABLE:
