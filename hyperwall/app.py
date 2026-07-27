@@ -11,6 +11,7 @@ import ctypes
 import json
 import logging
 import os
+import socket
 import sys
 from logging.handlers import RotatingFileHandler
 
@@ -42,6 +43,7 @@ from .nvidia import ensure_nvidia_profile, maybe_relaunch_in_isolation
 from . import theme
 from .wizard import SetupWizard
 from .wall import WallController, MouseIdleHider
+from .sync import SyncServer, SyncClient
 
 logger = logging.getLogger("HyperWall")
 
@@ -381,6 +383,29 @@ def main() -> None:
         preview_rows=settings.get("preview_rows", 3),
         preview_cols=settings.get("preview_cols", 4),
     )
+
+    # Optional network sync layer for multi-machine walls.
+    if cfg.sync_enabled:
+        if cfg.sync_server:
+            sync = SyncServer(wall, host=cfg.sync_host, port=cfg.sync_port)
+        else:
+            # For clients, connect to the server's IP (not 0.0.0.0).
+            host = cfg.sync_host if cfg.sync_host != "0.0.0.0" else "127.0.0.1"
+            sync = SyncClient(
+                wall,
+                host=host,
+                port=cfg.sync_port,
+                display_name=cfg.sync_display_name or socket.gethostname(),
+            )
+        sync.start()
+        wall.set_sync_adapter(sync)
+        logger.info(
+            "Sync %s started (%s:%d) as %s",
+            "server" if cfg.sync_server else "client",
+            cfg.sync_host,
+            cfg.sync_port,
+            cfg.sync_display_name or socket.gethostname(),
+        )
 
     if _WEB_AVAILABLE:
         _web.start(wall)

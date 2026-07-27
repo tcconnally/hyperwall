@@ -46,6 +46,13 @@ class HyperwallConfig:
     last_display_roles: str = ""
     cleanup_on_startup: bool = False
 
+    # ── Network sync ──
+    sync_enabled: bool = False
+    sync_server: bool = False
+    sync_host: str = "0.0.0.0"
+    sync_port: int = 9876
+    sync_display_name: str = ""
+
     # ── Scenes ──
     # Named wall presets persisted in a [Scenes] section as name=JSON. Stored
     # as a tuple of (name, json_str) pairs to keep the dataclass hashable/frozen.
@@ -95,6 +102,17 @@ class HyperwallConfig:
             cleanup_on_startup=cfg.getboolean(
                 "Settings", "cleanup_on_startup", fallback=False
             ),
+            sync_enabled=cfg.getboolean(
+                "Settings", "sync_enabled", fallback=False
+            ),
+            sync_server=cfg.getboolean(
+                "Settings", "sync_server", fallback=False
+            ),
+            sync_host=cfg.get("Settings", "sync_host", fallback="0.0.0.0"),
+            sync_port=cfg.getint("Settings", "sync_port", fallback=9876),
+            sync_display_name=cfg.get(
+                "Settings", "sync_display_name", fallback=""
+            ),
             scenes=scenes,
         )
 
@@ -118,6 +136,11 @@ class HyperwallConfig:
             "last_preview_cols": "4",
             "last_display_roles": "",
             "cleanup_on_startup": "false",
+            "sync_enabled": "false",
+            "sync_server": "false",
+            "sync_host": "0.0.0.0",
+            "sync_port": "9876",
+            "sync_display_name": "",
         }
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
@@ -144,6 +167,11 @@ class HyperwallConfig:
             "last_preview_cols": str(self.last_preview_cols),
             "last_display_roles": self.last_display_roles,
             "cleanup_on_startup": str(self.cleanup_on_startup),
+            "sync_enabled": str(self.sync_enabled),
+            "sync_server": str(self.sync_server),
+            "sync_host": self.sync_host,
+            "sync_port": str(self.sync_port),
+            "sync_display_name": self.sync_display_name,
         }
         if self.scenes:
             cfg["Scenes"] = {name: val for name, val in self.scenes}

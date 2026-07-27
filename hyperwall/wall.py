@@ -186,6 +186,8 @@ class WallController:
         self._window_meta: dict[int, dict[str, Any]] = {}
         self._solo_cell: VideoCell | None = None
         self._solo_window: QMainWindow | None = None
+        self._sync: Any | None = None
+        self._sync_enabled = False
         self._shortcuts: list[QShortcut] = []
         self.all_items: list[dict[str, Any]] = []
         self.filtered: list[dict[str, Any]] = []
@@ -278,12 +280,15 @@ class WallController:
 
             window_cells: list[VideoCell] = []
             cell_positions: dict[int, tuple[int, int]] = {}
+            display_id = uuid.uuid4().hex
             for r in range(rows):
                 for c in range(cols):
                     cell = VideoCell(self)
+                    cell.cell_id = uuid.uuid4().hex
                     cell.request_next.connect(self.next_video)
                     cell.request_prev.connect(self.prev_video)
                     cell.request_solo.connect(self._toggle_solo)
+                    cell.request_remote_solo.connect(self._remote_solo)
                     grid.addWidget(cell, r, c)
                     self.cells.append(cell)
                     window_cells.append(cell)
@@ -307,6 +312,7 @@ class WallController:
             self._window_meta[id(win)] = {
                 "screen": screen,
                 "role": role,
+                "display_id": display_id,
                 "grid": grid,
                 "cells": window_cells,
                 "positions": cell_positions,
@@ -345,6 +351,17 @@ class WallController:
             self._exit_solo()
         self._enter_solo(cell)
 
+    def _remote_solo(self, cell: VideoCell) -> None:
+        """Ctrl+double-click handler: ask the sync server to solo this item
+        on all other peers' displays."""
+        if not self._sync_enabled or self._sync is None:
+            return
+        item_id = (cell.current_item or {}).get("Id")
+        if not item_id:
+            return
+        self.sync_broadcast({"type": "remote_solo", "item_id": item_id})
+        logger.info("Remote solo requested for item %s", item_id)
+
     def _enter_solo(self, cell: VideoCell) -> None:
         win = self._window_for_cell(cell)
         if win is None:
@@ -367,6 +384,10 @@ class WallController:
         meta["solo"] = True
         self._solo_cell = cell
         self._solo_window = win
+        did = meta.get("display_id")
+        cid = getattr(cell, "cell_id", None)
+        if did and cid:
+            self.sync_broadcast_solo(did, cid)
         logger.info("Solo: cell %d full-screen on %s", self.cells.index(cell), win.windowTitle())
 
     def _exit_solo(self) -> None:
@@ -389,12 +410,168 @@ class WallController:
         for other in meta["cells"]:
             other.show()
 
+        did = meta.get("display_id")
         meta["solo"] = False
         self._solo_cell = None
         self._solo_window = None
+        if did:
+            self.sync_broadcast_exit_solo(did)
         logger.info("Solo: exited")
 
-    # ── content loading ───────────────────────────────────────────────────
+    # ── network sync ──────────────────────────────────────────────────────────────────
+
+    def set_sync_adapter(self, sync: Any) -> None:
+        """Attach a SyncServer or SyncClient after construction."""
+        self._sync = sync
+        self._sync_enabled = sync is not None
+
+    def sync_broadcast(self, msg: dict[str, Any]) -> None:
+        """Send a state change to peers if sync is active."""
+        if not self._sync_enabled or self._sync is None:
+            return
+        try:
+            self._sync.broadcast(msg)
+        except Exception as e:
+            logger.debug("Sync broadcast failed: %s", e)
+
+    def sync_broadcast_cell_update(self, cell: VideoCell) -> None:
+        if not self._sync_enabled:
+            return
+        cid = getattr(cell, "cell_id", None)
+        iid = (cell.current_item or {}).get("Id")
+        if cid and iid:
+            self.sync_broadcast({
+                "type": "cell_update",
+                "cell_id": cid,
+                "item_id": iid,
+            })
+
+    def sync_broadcast_solo(self, display_id: str, cell_id: str) -> None:
+        if not self._sync_enabled:
+            return
+        self.sync_broadcast({
+            "type": "solo",
+            "display_id": display_id,
+            "cell_id": cell_id,
+        })
+
+    def sync_broadcast_exit_solo(self, display_id: str) -> None:
+        if not self._sync_enabled:
+            return
+        self.sync_broadcast({
+            "type": "exit_solo",
+            "display_id": display_id,
+        })
+
+    def sync_broadcast_filter(self) -> None:
+        if not self._sync_enabled:
+            return
+        self.sync_broadcast({
+            "type": "filter",
+            "mode": self.filter_mode,
+        })
+
+    def sync_apply(self, msg: dict[str, Any]) -> None:
+        """Apply a remote sync message on the GUI thread."""
+        mtype = msg.get("type")
+        if mtype == "cell_update":
+            self._sync_apply_cell_update(msg)
+        elif mtype == "solo":
+            self._sync_apply_solo(msg)
+        elif mtype == "exit_solo":
+            self._sync_apply_exit_solo(msg)
+        elif mtype == "filter":
+            self._sync_apply_filter(msg)
+        elif mtype == "full_state":
+            self._sync_apply_full_state(msg)
+
+    def _sync_find_cell(self, cell_id: str) -> VideoCell | None:
+        for cell in self.cells:
+            if getattr(cell, "cell_id", None) == cell_id:
+                return cell
+        return None
+
+    def _sync_find_display(self, display_id: str) -> QMainWindow | None:
+        for win in self.windows:
+            meta = self._window_meta.get(id(win))
+            if meta and meta.get("display_id") == display_id:
+                return win
+        return None
+
+    def _sync_apply_cell_update(self, msg: dict[str, Any]) -> None:
+        cid = msg.get("cell_id")
+        iid = msg.get("item_id")
+        if not cid or not iid:
+            return
+        cell = self._sync_find_cell(cid)
+        if cell is None:
+            return
+        # Avoid re-applying our own broadcasts.
+        current_iid = (cell.current_item or {}).get("Id")
+        if current_iid == iid:
+            return
+        item = next((i for i in self.all_items if i.get("Id") == iid), None)
+        if item is None:
+            # Item not in our local library yet; load may still be in progress.
+            logger.debug("Sync cell_update for unknown item %s", iid)
+            return
+        self._hand_off(cell, item)
+
+    def _sync_apply_solo(self, msg: dict[str, Any]) -> None:
+        did = msg.get("display_id")
+        cid = msg.get("cell_id")
+        iid = msg.get("item_id")
+        if not did:
+            return
+        win = self._sync_find_display(did)
+        if win is None:
+            return
+        cell = None
+        if cid:
+            cell = self._sync_find_cell(cid)
+        # If the message carried an item_id instead of (or in addition to) a
+        # cell_id, load that item into the target display's first cell.
+        if cell is None and iid:
+            meta = self._window_meta.get(id(win))
+            if meta and meta["cells"]:
+                target = meta["cells"][0]
+                item = next((i for i in self.all_items if i.get("Id") == iid), None)
+                if item is not None:
+                    self._hand_off(target, item)
+                    cell = target
+        if cell is None:
+            return
+        if self._solo_cell is not None:
+            self._exit_solo()
+        self._enter_solo(cell)
+
+    def _sync_apply_exit_solo(self, msg: dict[str, Any]) -> None:
+        did = msg.get("display_id")
+        if not did:
+            return
+        if self._solo_window is None:
+            return
+        meta = self._window_meta.get(id(self._solo_window))
+        if meta and meta.get("display_id") == did:
+            self._exit_solo()
+
+    def _sync_apply_filter(self, msg: dict[str, Any]) -> None:
+        mode = msg.get("mode")
+        if mode in ("all", "favorites") and mode != self.filter_mode:
+            self._set_filter(mode)
+
+    def _sync_apply_full_state(self, msg: dict[str, Any]) -> None:
+        cells = msg.get("cells", {})
+        for cid, iid in cells.items():
+            self._sync_apply_cell_update({"cell_id": cid, "item_id": iid})
+        solo = msg.get("solo", {})
+        if solo.get("display_id"):
+            self._sync_apply_solo(solo)
+        mode = msg.get("filter")
+        if mode:
+            self._sync_apply_filter({"mode": mode})
+
+    # ── content loading ─────────────────────────────────────────────────────────────
 
     def _start_async_load(self) -> None:
         self.loader = ContentLoader(self.client, self.libraries)
@@ -608,6 +785,7 @@ class WallController:
                 "[PREFETCH→] %s", (cell.current_item or {}).get("Name"),
             )
             self._arm_prefetch(cell)
+            self.sync_broadcast_cell_update(cell)
             return
         item = self.playlists.next(self._cell_group(cell))
         if item is None:
@@ -615,14 +793,16 @@ class WallController:
         if prev:
             cell.history.append(prev)
         self._hand_off(cell, item)
+        self.sync_broadcast_cell_update(cell)
 
     @traced("wall.prev_video")
     def prev_video(self, cell: VideoCell) -> None:
         if cell.history:
             item = cell.history.pop()
             self._hand_off(cell, item)
+            self.sync_broadcast_cell_update(cell)
 
-    # ── global controls ───────────────────────────────────────────────────
+    # ── global controls ───────────────────────────────────────────────────────────────────
 
     def _global_toggle_controls(self) -> None:
         self.controls_visible = not self.controls_visible
@@ -690,6 +870,7 @@ class WallController:
                 i * STREAM_START_STAGGER_MS,
                 lambda cell=c: self.next_video(cell, False),
             )
+        self.sync_broadcast_filter()
 
     # ── tag / favorite mutations ──────────────────────────────────────────
 
@@ -917,6 +1098,12 @@ class WallController:
             QApplication.instance().removeEventFilter(self._escape_filter)
         except Exception as e:
             logger.debug("removeEventFilter failed: %s", e)
+
+        if self._sync is not None:
+            try:
+                self._sync.stop()
+            except Exception as e:
+                logger.debug("Sync stop failed: %s", e)
 
         self.client.close()
         logger.info("Cleanup complete.")
