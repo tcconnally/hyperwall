@@ -193,9 +193,9 @@ def test_wall_controller_builds_wall_and_preview_windows():
         preview_cols=4,
     )
 
-    # One wall window (2x2 = 4 cells) + one preview window (3x4 = 12 cells)
+    # One wall window (3x2 = 6 cells) + one preview window (2x3 = 6 cells)
     assert len(wall.windows) == 2
-    assert len(wall.cells) == 16
+    assert len(wall.cells) == 12
     meta = wall._window_meta
     roles = {m["role"] for m in meta.values()}
     assert roles == {DisplayRole.WALL, DisplayRole.PREVIEW}
