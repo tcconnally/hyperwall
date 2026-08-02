@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from PyQt6.QtCore import QRect
     from PyQt6.QtWidgets import QApplication
 
     _app = QApplication.instance() or QApplication([])
@@ -129,10 +130,7 @@ def test_wall_controller_builds_wall_and_preview_windows():
     class _FakeScreen:
         def __init__(self, name, x, y, w, h):
             self._name = name
-            self._geo = type("G", (), {
-                "x": lambda: x, "y": lambda: y,
-                "width": lambda: w, "height": lambda: h,
-            })()
+            self._geo = QRect(x, y, w, h)
 
         def name(self):
             return self._name
@@ -211,10 +209,7 @@ def test_solo_mode_round_trip():
     class _FakeScreen:
         def __init__(self, name, x, y, w, h):
             self._name = name
-            self._geo = type("G", (), {
-                "x": lambda: x, "y": lambda: y,
-                "width": lambda: w, "height": lambda: h,
-            })()
+            self._geo = QRect(x, y, w, h)
 
         def name(self):
             return self._name
