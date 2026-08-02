@@ -1,0 +1,25 @@
+; Copy this file to config.ini and fill in your Emby credentials.
+; Use this on every Hyperwall client (including the wall-driving laptop).
+; The sync relay runs separately on mb.perseus.observer.
+
+[Settings]
+server_url = https://mb.perseus.observer
+username = YOUR_EMBY_USERNAME
+password = YOUR_EMBY_PASSWORD
+
+; --- sync client settings ---
+sync_enabled = true
+sync_server = false
+sync_host = mb.perseus.observer
+sync_port = 9876
+
+; Change this per machine (e.g. thomas-laptop, mark-laptop)
+sync_display_name = YOUR_NAME-laptop
+
+; --- preview grid on the laptop screen ---
+last_preview_rows = 3
+last_preview_cols = 4
+
+; Display roles are set in the Setup Wizard on first run:
+;   External/wall display -> Wall
+;   Built-in laptop display -> Preview

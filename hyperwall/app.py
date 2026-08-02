@@ -7,9 +7,12 @@ Emby authentication, wizard, wall launch, and web remote.
 
 from __future__ import annotations
 
+import argparse
 import ctypes
+import json
 import logging
 import os
+import socket
 import sys
 from logging.handlers import RotatingFileHandler
 
@@ -41,6 +44,7 @@ from .nvidia import ensure_nvidia_profile, maybe_relaunch_in_isolation
 from . import theme
 from .wizard import SetupWizard
 from .wall import WallController, MouseIdleHider
+from .sync import SyncServer, SyncClient, DEFAULT_SYNC_PORT
 
 logger = logging.getLogger("HyperWall")
 
@@ -165,6 +169,31 @@ def _show_error_dialog(title: str, msg: str) -> None:
 
 def main() -> None:
     sys.excepthook = _handle_exception
+
+    # 0. Optional headless sync-relay mode (no Qt, no mpv).
+    parser = argparse.ArgumentParser(prog="hyperwall")
+    parser.add_argument(
+        "--sync-relay",
+        action="store_true",
+        help="Run only the headless sync relay (no GUI).",
+    )
+    parser.add_argument(
+        "--sync-host",
+        default="0.0.0.0",
+        help="Host to bind the sync relay to (default: 0.0.0.0).",
+    )
+    parser.add_argument(
+        "--sync-port",
+        type=int,
+        default=DEFAULT_SYNC_PORT,
+        help=f"Port for the sync relay (default: {DEFAULT_SYNC_PORT}).",
+    )
+    args = parser.parse_args()
+
+    if args.sync_relay:
+        from .sync import run_sync_relay
+        run_sync_relay(host=args.sync_host, port=args.sync_port)
+        return
 
     # 1. NVIDIA isolation: re-exec into bundled exe if needed
     maybe_relaunch_in_isolation()
@@ -321,6 +350,10 @@ def main() -> None:
         last_libraries=cfg.last_libraries,
         last_rows=cfg.last_grid_rows,
         last_cols=cfg.last_grid_cols,
+        last_preview_rows=cfg.last_preview_rows,
+        last_preview_cols=cfg.last_preview_cols,
+        last_display_roles=cfg.display_roles(),
+        last_display_layouts=cfg.display_layouts(),
     )
     if wiz.exec() != QDialog.DialogCode.Accepted:
         client.close()
@@ -346,6 +379,12 @@ def main() -> None:
         last_libraries=",".join(settings["libraries"]),
         last_grid_rows=settings["grid_rows"],
         last_grid_cols=settings["grid_cols"],
+        last_preview_rows=settings["preview_rows"],
+        last_preview_cols=settings["preview_cols"],
+        last_display_roles=json.dumps(settings["display_roles"]),
+        last_display_layouts=json.dumps(
+            settings.get("display_layouts", {}), sort_keys=True
+        ),
         cleanup_on_startup=cfg.cleanup_on_startup,
         scenes=cfg.scenes,  # preserve saved scene presets across the rewrite
     )
@@ -370,7 +409,34 @@ def main() -> None:
         grid_rows=settings["grid_rows"],
         grid_cols=settings["grid_cols"],
         client=client,
+        display_roles=settings.get("display_roles"),
+        display_layouts=settings.get("display_layouts"),
+        preview_rows=settings.get("preview_rows", 3),
+        preview_cols=settings.get("preview_cols", 4),
     )
+
+    # Optional network sync layer for multi-machine walls.
+    if cfg.sync_enabled:
+        if cfg.sync_server:
+            sync = SyncServer(wall, host=cfg.sync_host, port=cfg.sync_port)
+        else:
+            # For clients, connect to the server's IP (not 0.0.0.0).
+            host = cfg.sync_host if cfg.sync_host != "0.0.0.0" else "127.0.0.1"
+            sync = SyncClient(
+                wall,
+                host=host,
+                port=cfg.sync_port,
+                display_name=cfg.sync_display_name or socket.gethostname(),
+            )
+        sync.start()
+        wall.set_sync_adapter(sync)
+        logger.info(
+            "Sync %s started (%s:%d) as %s",
+            "server" if cfg.sync_server else "client",
+            cfg.sync_host,
+            cfg.sync_port,
+            cfg.sync_display_name or socket.gethostname(),
+        )
 
     if _WEB_AVAILABLE:
         _web.start(wall)

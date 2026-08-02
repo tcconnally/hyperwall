@@ -200,6 +200,8 @@ class VideoCell(QWidget):
 
     request_next = pyqtSignal(object, bool)
     request_prev = pyqtSignal(object)
+    request_solo = pyqtSignal(object)
+    request_remote_solo = pyqtSignal(object)
     _sig_eof = pyqtSignal(int, str)
     _sig_track_done = pyqtSignal(int)
     _sig_buffering = pyqtSignal(int, bool)
@@ -1575,3 +1577,19 @@ class VideoCell(QWidget):
             logger.error("Max retries reached — skipping.")
             self._force_transcode = False
             self._request_next_throttled(False)
+
+    # ── input handling ──────────────────────────────────────────────────────────────────
+
+    def mouseDoubleClickEvent(self, event: Any) -> None:
+        """Double-click a cell to toggle full-screen solo in its window.
+
+        Ctrl+double-click requests a remote solo on other synced displays.
+        """
+        if event.button() == Qt.MouseButton.LeftButton:
+            if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+                self.request_remote_solo.emit(self)
+            else:
+                self.request_solo.emit(self)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)

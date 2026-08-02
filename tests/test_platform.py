@@ -23,6 +23,9 @@ def test_01_macos_opts_use_render_api():
     assert opts["hwdec"] == "videotoolbox", opts["hwdec"]
     assert "gpu_api" not in opts, "d3d11 gpu_api leaked into macOS opts"
     assert str(opts["ao"]).startswith("coreaudio"), opts["ao"]
+    # Fill every cell edge-to-edge. panscan preserves aspect ratio and crops
+    # overflow instead of introducing black bars in portrait/narrow grids.
+    assert opts["panscan"] == 1.0
     # The render call must never block the single GUI thread on the audio
     # clock (8 cells x 50ms would serialize into wall-wide jank).
     assert opts["video_timing_offset"] == 0
@@ -36,6 +39,7 @@ def test_02_windows_opts_unchanged():
     assert opts["gpu_api"] == "d3d11"
     assert opts["hwdec"] == "d3d11va"
     assert str(opts["ao"]).startswith("wasapi")
+    assert opts["panscan"] == 1.0
     # HQ downscaling is load-bearing on every platform.
     assert opts["dscale"] == "mitchell"
     assert opts["correct_downscaling"] == "yes"

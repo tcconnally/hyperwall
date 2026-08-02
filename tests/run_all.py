@@ -23,6 +23,8 @@ SUITES = [
     "test_reliability",
     "test_urls",
     "test_config",
+    "test_preview_displays",
+    "test_sync",
     "test_playlist",
     "test_scenes",
     "test_backends",

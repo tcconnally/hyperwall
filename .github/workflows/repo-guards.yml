@@ -32,7 +32,7 @@ jobs:
       - name: Install build deps
         run: python -m pip install pyqt6 requests flask pyinstaller
       - name: Run test suites on Windows
-        run: python tests/run_all.py
+        run: python -u tests/run_all.py
       - name: Test stale-binary detector (check_stale.ps1)
         shell: pwsh
         run: ./tests/test_check_stale.ps1

@@ -7,6 +7,7 @@ No PyQt / mpv / Emby. Uses a temp dir. Run: python tests/test_config.py
 from __future__ import annotations
 
 import os
+import json
 import sys
 import tempfile
 
@@ -96,6 +97,39 @@ def test_defaults_applied_for_absent_settings():
         assert loaded.last_grid_cols == 2
         assert loaded.cleanup_on_startup is False
         assert loaded.scenes == ()          # no [Scenes] section → empty
+
+
+def test_display_layouts_round_trip():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "config.ini")
+        layouts = {
+            "External": {"rotation": "90", "rows": 3, "cols": 2},
+            "Laptop": {"rotation": "auto", "rows": 3, "cols": 4},
+        }
+        cfg = HyperwallConfig(
+            server_url="http://h", username="u", password="p",
+            last_display_layouts=json.dumps(layouts),
+        )
+        cfg.save(path)
+        loaded = HyperwallConfig.load(path)
+        assert loaded.display_layouts() == layouts
+
+
+def test_display_layouts_reject_malformed_entries():
+    cfg = HyperwallConfig(
+        server_url="http://h", username="u", password="p",
+        last_display_layouts=json.dumps({
+            "Good": {"rotation": "270", "rows": 6, "cols": 1},
+            "BadShape": "not-a-layout",
+            "BadRotation": {"rotation": "diagonal", "rows": 2, "cols": 2},
+            "BadGrid": {"rotation": "0", "rows": 99, "cols": 0},
+        }),
+    )
+    assert cfg.display_layouts() == {
+        "Good": {"rotation": "270", "rows": 6, "cols": 1},
+        "BadRotation": {"rotation": "auto", "rows": 2, "cols": 2},
+        "BadGrid": {"rotation": "0", "rows": 6, "cols": 1},
+    }
 
 
 def test_scenes_round_trip():
