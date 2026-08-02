@@ -167,6 +167,9 @@ _MPV_OPTS_BASE: dict[str, object] = dict(
     linear_downscaling="yes",
     scale="ewa_lanczossharp",
     deband="yes",
+    # Cover each cell edge-to-edge. Keep the source aspect ratio, but crop
+    # overflow rather than leaving black bars in portrait/narrow grids.
+    panscan=1.0,
     video_sync="audio",
     video_sync_max_video_change=5,
     interpolation="no",
