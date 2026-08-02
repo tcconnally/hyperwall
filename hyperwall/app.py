@@ -353,6 +353,7 @@ def main() -> None:
         last_preview_rows=cfg.last_preview_rows,
         last_preview_cols=cfg.last_preview_cols,
         last_display_roles=cfg.display_roles(),
+        last_display_layouts=cfg.display_layouts(),
     )
     if wiz.exec() != QDialog.DialogCode.Accepted:
         client.close()
@@ -381,6 +382,9 @@ def main() -> None:
         last_preview_rows=settings["preview_rows"],
         last_preview_cols=settings["preview_cols"],
         last_display_roles=json.dumps(settings["display_roles"]),
+        last_display_layouts=json.dumps(
+            settings.get("display_layouts", {}), sort_keys=True
+        ),
         cleanup_on_startup=cfg.cleanup_on_startup,
         scenes=cfg.scenes,  # preserve saved scene presets across the rewrite
     )
@@ -406,6 +410,7 @@ def main() -> None:
         grid_cols=settings["grid_cols"],
         client=client,
         display_roles=settings.get("display_roles"),
+        display_layouts=settings.get("display_layouts"),
         preview_rows=settings.get("preview_rows", 3),
         preview_cols=settings.get("preview_cols", 4),
     )

@@ -225,6 +225,55 @@ class DisplayRole:
         return value in cls._ALL
 
 
+class DisplayRotation:
+    """Per-display orientation preference captured by the setup wizard.
+
+    ``AUTO`` follows the physical orientation reported by the operating
+    system. The explicit degree values describe the monitor's intended
+    clockwise rotation and are persisted as strings so the config remains
+    stable across JSON/config-parser round trips.
+    """
+
+    AUTO = "auto"
+    DEG_0 = "0"
+    DEG_90 = "90"
+    DEG_180 = "180"
+    DEG_270 = "270"
+
+    _ALL = (AUTO, DEG_0, DEG_90, DEG_180, DEG_270)
+
+    @classmethod
+    def is_valid(cls, value: str | None) -> bool:
+        return value in cls._ALL
+
+
+def normalize_display_layout(raw: object | None) -> dict[str, object]:
+    """Return a safe, typed per-display rotation + grid configuration.
+
+    Config files are user-editable, so malformed entries must not prevent the
+    wall from starting. Grid dimensions are constrained to the same 1..6
+    range exposed by the wizard; an invalid rotation falls back to AUTO.
+    """
+    data = raw if isinstance(raw, dict) else {}
+
+    rotation = str(data.get("rotation", DisplayRotation.AUTO)).strip().lower()
+    if not DisplayRotation.is_valid(rotation):
+        rotation = DisplayRotation.AUTO
+
+    def _dimension(key: str) -> int:
+        try:
+            value = int(data.get(key, 2))
+        except (TypeError, ValueError):
+            value = 2
+        return max(1, min(6, value))
+
+    return {
+        "rotation": rotation,
+        "rows": _dimension("rows"),
+        "cols": _dimension("cols"),
+    }
+
+
 def mpv_opts_for_platform(platform: str | None = None) -> dict[str, object]:
     """Return the base MPV options adjusted for the given platform.
 

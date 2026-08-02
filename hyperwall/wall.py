@@ -50,6 +50,7 @@ from .constants import (
     apply_env_overrides,
     effective_bitrate_budget_mbps,
     MPV_OPTS,
+    normalize_display_layout,
     SCRIPT_DIR,
 )
 from .emby import EmbyClient, ContentLoader
@@ -168,6 +169,7 @@ class WallController:
         grid_cols: int,
         client: EmbyClient,
         display_roles: dict[str, str] | None = None,
+        display_layouts: dict[str, dict[str, Any]] | None = None,
         preview_rows: int = 3,
         preview_cols: int = 4,
     ):
@@ -179,6 +181,7 @@ class WallController:
         self.preview_rows = preview_rows
         self.preview_cols = preview_cols
         self.display_roles = display_roles or {}
+        self.display_layouts = display_layouts or {}
 
         self.cells: list[VideoCell] = []
         self.windows: list[QMainWindow] = []
@@ -264,8 +267,19 @@ class WallController:
             if role not in DisplayRole._ALL:
                 role = DisplayRole.WALL
             is_preview = role == DisplayRole.PREVIEW
-            rows = self.preview_rows if is_preview else self.grid_rows
-            cols = self.preview_cols if is_preview else self.grid_cols
+            default_rows = self.preview_rows if is_preview else self.grid_rows
+            default_cols = self.preview_cols if is_preview else self.grid_cols
+            raw_layout = self.display_layouts.get(screen.name(), {})
+            if not isinstance(raw_layout, dict):
+                raw_layout = {}
+            layout = normalize_display_layout({
+                "rotation": raw_layout.get("rotation", "auto"),
+                "rows": raw_layout.get("rows", default_rows),
+                "cols": raw_layout.get("cols", default_cols),
+            })
+            rotation = str(layout["rotation"])
+            rows = int(layout["rows"])
+            cols = int(layout["cols"])
 
             win = WallWindow(self)
             role_name = "Preview" if is_preview else "Wall"
@@ -312,6 +326,9 @@ class WallController:
             self._window_meta[id(win)] = {
                 "screen": screen,
                 "role": role,
+                "rotation": rotation,
+                "rows": rows,
+                "cols": cols,
                 "display_id": display_id,
                 "grid": grid,
                 "cells": window_cells,
@@ -319,8 +336,8 @@ class WallController:
                 "solo": False,
             }
             logger.info(
-                "Display built: %s (%s, %dx%d)",
-                screen.name(), role_name, rows, cols,
+                "Display built: %s (%s, rotation=%s, %dx%d)",
+                screen.name(), role_name, rotation, rows, cols,
             )
 
     def _window_for_cell(self, cell: VideoCell) -> QMainWindow | None:

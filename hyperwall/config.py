@@ -12,7 +12,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
-from .constants import CONFIG_FILE
+from .constants import CONFIG_FILE, normalize_display_layout
 
 
 def effective_server_url(configured: str, override: str | None = None) -> str:
@@ -44,6 +44,7 @@ class HyperwallConfig:
     last_preview_rows: int = 3
     last_preview_cols: int = 4
     last_display_roles: str = ""
+    last_display_layouts: str = ""
     cleanup_on_startup: bool = False
 
     # ── Network sync ──
@@ -99,6 +100,9 @@ class HyperwallConfig:
             last_display_roles=cfg.get(
                 "Settings", "last_display_roles", fallback=""
             ),
+            last_display_layouts=cfg.get(
+                "Settings", "last_display_layouts", fallback=""
+            ),
             cleanup_on_startup=cfg.getboolean(
                 "Settings", "cleanup_on_startup", fallback=False
             ),
@@ -135,6 +139,7 @@ class HyperwallConfig:
             "last_preview_rows": "3",
             "last_preview_cols": "4",
             "last_display_roles": "",
+            "last_display_layouts": "",
             "cleanup_on_startup": "false",
             "sync_enabled": "false",
             "sync_server": "false",
@@ -166,6 +171,7 @@ class HyperwallConfig:
             "last_preview_rows": str(self.last_preview_rows),
             "last_preview_cols": str(self.last_preview_cols),
             "last_display_roles": self.last_display_roles,
+            "last_display_layouts": self.last_display_layouts,
             "cleanup_on_startup": str(self.cleanup_on_startup),
             "sync_enabled": str(self.sync_enabled),
             "sync_server": str(self.sync_server),
@@ -186,6 +192,22 @@ class HyperwallConfig:
             return json.loads(self.last_display_roles)
         except json.JSONDecodeError:
             return {}
+
+    def display_layouts(self) -> dict[str, dict[str, object]]:
+        """Parse and normalize the JSON per-display layout map."""
+        if not self.last_display_layouts:
+            return {}
+        try:
+            raw = json.loads(self.last_display_layouts)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(name): normalize_display_layout(layout)
+            for name, layout in raw.items()
+            if isinstance(layout, dict)
+        }
 
 
 class ConfigMissingError(Exception):

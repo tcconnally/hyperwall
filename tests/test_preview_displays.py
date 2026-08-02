@@ -60,6 +60,20 @@ def test_config_malformed_display_roles_returns_empty():
     assert cfg.display_roles() == {}
 
 
+def test_display_layout_defaults_and_rotation_values():
+    from hyperwall.constants import DisplayRotation, normalize_display_layout
+
+    assert DisplayRotation.AUTO == "auto"
+    assert DisplayRotation.DEG_90 == "90"
+    assert DisplayRotation.DEG_270 == "270"
+    assert normalize_display_layout({}) == {
+        "rotation": "auto", "rows": 2, "cols": 2,
+    }
+    assert normalize_display_layout(
+        {"rotation": "90", "rows": 4, "cols": 3}
+    ) == {"rotation": "90", "rows": 4, "cols": 3}
+
+
 def test_config_save_load_preview_fields():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "config.ini")
@@ -131,6 +145,10 @@ def test_wall_controller_builds_wall_and_preview_windows():
         _FakeScreen("Laptop", 2560, 0, 1920, 1080),
     ]
     display_roles = {"External": DisplayRole.WALL, "Laptop": DisplayRole.PREVIEW}
+    display_layouts = {
+        "External": {"rotation": "90", "rows": 3, "cols": 2},
+        "Laptop": {"rotation": "0", "rows": 2, "cols": 3},
+    }
 
     wall = WallController(
         screens=screens,
@@ -139,6 +157,7 @@ def test_wall_controller_builds_wall_and_preview_windows():
         grid_cols=2,
         client=_FakeClient(),
         display_roles=display_roles,
+        display_layouts=display_layouts,
         preview_rows=3,
         preview_cols=4,
     )
@@ -149,6 +168,12 @@ def test_wall_controller_builds_wall_and_preview_windows():
     meta = wall._window_meta
     roles = {m["role"] for m in meta.values()}
     assert roles == {DisplayRole.WALL, DisplayRole.PREVIEW}
+    by_name = {
+        meta["screen"].name(): meta for meta in meta.values()
+    }
+    assert (by_name["External"]["rows"], by_name["External"]["cols"]) == (3, 2)
+    assert by_name["External"]["rotation"] == "90"
+    assert (by_name["Laptop"]["rows"], by_name["Laptop"]["cols"]) == (2, 3)
 
     wall._cleanup()
 

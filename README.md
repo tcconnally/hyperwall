@@ -8,6 +8,9 @@ hardware-accelerated video cells powered by libmpv.
 
 - **Multi-monitor** — each monitor gets its own fullscreen window with a
   configurable grid of video cells (1x1 to 6x6)
+- **Per-monitor layout** — the setup wizard independently assigns each
+  selected display a Wall/Preview role, physical rotation (Auto/0°/90°/180°/
+  270°), and rows × columns video grid
 - **libmpv backend** — hardware-accelerated decode via nvdec/d3d11
   (NVIDIA Blackwell), 240 Hz G-Sync compatible, HDR hinting
 - **Emby integration** — streams directly from your Emby server with
@@ -114,7 +117,7 @@ All endpoints under `/api/`:
 
 ```
 hyperwall.py → hyperwall/app.py → WallController
-                                    ├── SetupWizard (monitor + library picker)
+                                    ├── SetupWizard (per-monitor role/rotation/grid + library picker)
                                     ├── Per-monitor QMainWindow (fullscreen)
                                     │   └── Grid of VideoCell widgets
                                     │       └── mpv.MPV embedded via wid=
@@ -134,6 +137,11 @@ username = your_username
 password = your_password
 
 [Settings]
+# These are fallback defaults; the wizard stores per-monitor overrides.
+last_grid_rows = 2
+last_grid_cols = 2
+last_display_roles =
+last_display_layouts =
 cleanup_on_startup = false
 ```
 

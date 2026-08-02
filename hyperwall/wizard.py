@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -26,7 +26,12 @@ from PyQt6.QtWidgets import (
 
 from . import VERSION_SHORT
 from . import theme
-from .constants import DisplayRole, _s
+from .constants import (
+    DisplayRole,
+    DisplayRotation,
+    _s,
+    normalize_display_layout,
+)
 
 
 class _GridPreview(QWidget):
@@ -64,6 +69,22 @@ class _GridPreview(QWidget):
         p.end()
 
 
+class _DisplayRow(QWidget):
+    """Interactive row used inside the display list.
+
+    The row itself selects the monitor, while child combo boxes retain normal
+    mouse handling. Making the whole row transparent would also make those
+    child controls transparent in Qt, so selection is explicit instead.
+    """
+
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event: Any) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class SetupWizard(QDialog):
     """Pre-launch configuration dialog: select monitors, libraries, grid."""
 
@@ -78,16 +99,20 @@ class SetupWizard(QDialog):
         last_preview_rows: int = 3,
         last_preview_cols: int = 4,
         last_display_roles: dict[str, str] | None = None,
+        last_display_layouts: dict[str, dict[str, object]] | None = None,
     ):
         super().__init__()
         self.setWindowTitle(f"HyperWall {VERSION_SHORT}")
-        self.resize(_s(820), _s(620))
+        self.resize(_s(1_020), _s(620))
         self.setStyleSheet(theme.dialog_qss())
 
         self._screen_map: dict[str, Any] = {}
         self._screen_items: dict[str, QListWidgetItem] = {}
         self._role_boxes: dict[str, QComboBox] = {}
+        self._rotation_boxes: dict[str, QComboBox] = {}
+        self._grid_boxes: dict[str, QComboBox] = {}
         last_display_roles = last_display_roles or {}
+        last_display_layouts = last_display_layouts or {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(_s(26), _s(22), _s(26), _s(22))
@@ -114,7 +139,7 @@ class SetupWizard(QDialog):
         panels.setSpacing(_s(14))
 
         # ── Displays ──
-        grp_disp = QGroupBox("DISPLAYS")
+        grp_disp = QGroupBox("DISPLAYS · ROLE / ROTATION / VIDEO GRID")
         ld = QVBoxLayout(grp_disp)
         self.list_disp = QListWidget()
         self.list_disp.setSelectionMode(QListWidgetItem.SelectionMode.MultiSelection)
@@ -130,13 +155,11 @@ class SetupWizard(QDialog):
             self._screen_map[label_text] = s
             self._screen_items[label_text] = item
 
-            row = QWidget()
+            row = _DisplayRow()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(_s(6), _s(2), _s(6), _s(2))
             row_layout.setSpacing(_s(8))
-            # Let clicks on the row background pass through to the list item;
-            # interactive children (the role combo) keep their own mouse handling.
-            row.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            row.clicked.connect(lambda item=item: item.setSelected(True))
             lbl = QLabel(label_text)
             lbl.setStyleSheet(
                 f"color: {theme.TEXT}; font-size: {_s(11)}px; background: transparent;"
@@ -147,12 +170,65 @@ class SetupWizard(QDialog):
             role_box = QComboBox()
             role_box.addItem("Wall", DisplayRole.WALL)
             role_box.addItem("Preview", DisplayRole.PREVIEW)
+            role_box.setMinimumWidth(_s(78))
             role = last_display_roles.get(s.name(), DisplayRole.WALL)
             role_box.setCurrentIndex(
                 0 if role == DisplayRole.WALL else 1
             )
             self._role_boxes[label_text] = role_box
+            role_box.currentIndexChanged.connect(
+                lambda _index, item=item: item.setSelected(True)
+            )
             row_layout.addWidget(role_box)
+
+            rotation_box = QComboBox()
+            for label, value in (
+                ("Auto", DisplayRotation.AUTO),
+                ("0°", DisplayRotation.DEG_0),
+                ("90°", DisplayRotation.DEG_90),
+                ("180°", DisplayRotation.DEG_180),
+                ("270°", DisplayRotation.DEG_270),
+            ):
+                rotation_box.addItem(label, value)
+            rotation_box.setToolTip(
+                "Physical monitor rotation; Auto follows the OS display orientation."
+            )
+            rotation_box.setMinimumWidth(_s(72))
+
+            default_rows = last_preview_rows if role == DisplayRole.PREVIEW else last_rows
+            default_cols = last_preview_cols if role == DisplayRole.PREVIEW else last_cols
+            saved_layout = last_display_layouts.get(s.name(), {})
+            display_layout = normalize_display_layout({
+                "rotation": saved_layout.get("rotation", DisplayRotation.AUTO),
+                "rows": saved_layout.get("rows", default_rows),
+                "cols": saved_layout.get("cols", default_cols),
+            })
+            rotation_index = rotation_box.findData(display_layout["rotation"])
+            rotation_box.setCurrentIndex(max(0, rotation_index))
+            self._rotation_boxes[label_text] = rotation_box
+            rotation_box.currentIndexChanged.connect(
+                lambda _index, item=item: item.setSelected(True)
+            )
+            row_layout.addWidget(rotation_box)
+
+            grid_box = QComboBox()
+            for grid_rows in range(1, 7):
+                for grid_cols in range(1, 7):
+                    grid_box.addItem(
+                        f"{grid_rows} × {grid_cols}",
+                        (grid_rows, grid_cols),
+                    )
+            grid_box.setToolTip("Videos per display: rows × columns.")
+            grid_box.setMinimumWidth(_s(74))
+            grid_index = grid_box.findData(
+                (display_layout["rows"], display_layout["cols"])
+            )
+            grid_box.setCurrentIndex(max(0, grid_index))
+            self._grid_boxes[label_text] = grid_box
+            grid_box.currentIndexChanged.connect(
+                lambda _index, item=item: item.setSelected(True)
+            )
+            row_layout.addWidget(grid_box)
             self.list_disp.setItemWidget(item, row)
 
             # Match selection state to the underlying item
@@ -183,7 +259,7 @@ class SetupWizard(QDialog):
         layout.addLayout(panels)
 
         # ── Wall grid + live preview ──
-        grp_wall = QGroupBox("WALL GRID (external display)")
+        grp_wall = QGroupBox("FALLBACK WALL GRID (new displays)")
         lg = QHBoxLayout(grp_wall)
         lg.setSpacing(_s(12))
         self.rows = QSpinBox()
@@ -210,7 +286,7 @@ class SetupWizard(QDialog):
         layout.addWidget(grp_wall)
 
         # ── Preview grid ──
-        grp_preview = QGroupBox("PREVIEW GRID (laptops)")
+        grp_preview = QGroupBox("FALLBACK PREVIEW GRID (new displays)")
         pg = QHBoxLayout(grp_preview)
         pg.setSpacing(_s(12))
         self.preview_rows = QSpinBox()
@@ -275,5 +351,13 @@ class SetupWizard(QDialog):
             "display_roles": {
                 self._screen_map[l].name(): self._role_boxes[l].currentData()
                 for l in selected_labels
+            },
+            "display_layouts": {
+                self._screen_map[l].name(): {
+                    "rotation": self._rotation_boxes[l].currentData(),
+                    "rows": self._grid_boxes[l].currentData()[0],
+                    "cols": self._grid_boxes[l].currentData()[1],
+                }
+                for l in self._screen_map
             },
         }
