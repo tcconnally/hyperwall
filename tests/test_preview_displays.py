@@ -156,17 +156,20 @@ def test_wall_controller_builds_wall_and_preview_windows():
         "Laptop": {"rotation": "0", "rows": 2, "cols": 3},
     }
 
-    wall = WallController(
-        screens=screens,
-        libraries=["Movies"],
-        grid_rows=2,
-        grid_cols=2,
-        client=_FakeClient(),
-        display_roles=display_roles,
-        display_layouts=display_layouts,
-        preview_rows=3,
-        preview_cols=4,
-    )
+    from unittest.mock import patch
+
+    with patch("PyQt6.QtWidgets.QMainWindow.showFullScreen"):
+        wall = WallController(
+            screens=screens,
+            libraries=["Movies"],
+            grid_rows=2,
+            grid_cols=2,
+            client=_FakeClient(),
+            display_roles=display_roles,
+            display_layouts=display_layouts,
+            preview_rows=3,
+            preview_cols=4,
+        )
 
     # One wall window (2x2 = 4 cells) + one preview window (3x4 = 12 cells)
     assert len(wall.windows) == 2
@@ -226,23 +229,29 @@ def test_solo_mode_round_trip():
         def geometry(self):
             return self._geo
 
-    wall = WallController(
-        screens=[_FakeScreen("Preview", 0, 0, 1920, 1080)],
-        libraries=["Movies"],
-        grid_rows=2,
-        grid_cols=2,
-        client=_FakeClient(),
-        display_roles={"Preview": DisplayRole.PREVIEW},
-    )
+    from unittest.mock import patch
 
-    cell = wall.cells[0]
-    assert wall._solo_cell is None
-    wall._enter_solo(cell)
-    assert wall._solo_cell is cell
-    assert wall._window_meta[id(wall.windows[0])]["solo"] is True
-    wall._exit_solo()
-    assert wall._solo_cell is None
-    assert wall._window_meta[id(wall.windows[0])]["solo"] is False
+    with (
+        patch("PyQt6.QtWidgets.QMainWindow.showFullScreen"),
+        patch("PyQt6.QtWidgets.QWidget.show"),
+    ):
+        wall = WallController(
+            screens=[_FakeScreen("Preview", 0, 0, 1920, 1080)],
+            libraries=["Movies"],
+            grid_rows=2,
+            grid_cols=2,
+            client=_FakeClient(),
+            display_roles={"Preview": DisplayRole.PREVIEW},
+        )
+
+        cell = wall.cells[0]
+        assert wall._solo_cell is None
+        wall._enter_solo(cell)
+        assert wall._solo_cell is cell
+        assert wall._window_meta[id(wall.windows[0])]["solo"] is True
+        wall._exit_solo()
+        assert wall._solo_cell is None
+        assert wall._window_meta[id(wall.windows[0])]["solo"] is False
 
     wall._cleanup()
 
