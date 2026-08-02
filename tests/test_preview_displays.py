@@ -102,12 +102,40 @@ def test_config_save_load_preview_fields():
 
 # ── WallController construction (Windows/Qt only) ──
 
+def _build_bare_wall(
+    screens, client, display_roles, display_layouts=None,
+    preview_rows=3, preview_cols=4,
+):
+    """Build display widgets without async loading or fullscreen side effects."""
+    from hyperwall.wall import WallController
+
+    wall = WallController.__new__(WallController)
+    wall.client = client
+    wall.screens = screens
+    wall.libraries = ["Movies"]
+    wall.grid_rows = 2
+    wall.grid_cols = 2
+    wall.preview_rows = preview_rows
+    wall.preview_cols = preview_cols
+    wall.display_roles = display_roles
+    wall.display_layouts = display_layouts or {}
+    wall.cells = []
+    wall.windows = []
+    wall._window_meta = {}
+    wall._solo_cell = None
+    wall._solo_window = None
+    wall._sync = None
+    wall._sync_enabled = False
+    wall._shortcuts = []
+    wall.controls_visible = False
+    wall._build_displays()
+    return wall
+
 def test_wall_controller_builds_wall_and_preview_windows():
     if not _PYQT:
         raise AssertionError("SKIP")
 
     from PyQt6.QtCore import QRect
-    from hyperwall.wall import WallController
     from hyperwall.emby import EmbyClient
 
     class _FakeClient:
@@ -156,20 +184,14 @@ def test_wall_controller_builds_wall_and_preview_windows():
         "Laptop": {"rotation": "0", "rows": 2, "cols": 3},
     }
 
-    from unittest.mock import patch
-
-    with patch("PyQt6.QtWidgets.QMainWindow.showFullScreen"):
-        wall = WallController(
-            screens=screens,
-            libraries=["Movies"],
-            grid_rows=2,
-            grid_cols=2,
-            client=_FakeClient(),
-            display_roles=display_roles,
-            display_layouts=display_layouts,
-            preview_rows=3,
-            preview_cols=4,
-        )
+    wall = _build_bare_wall(
+        screens,
+        _FakeClient(),
+        display_roles,
+        display_layouts,
+        preview_rows=3,
+        preview_cols=4,
+    )
 
     # One wall window (2x2 = 4 cells) + one preview window (3x4 = 12 cells)
     assert len(wall.windows) == 2
@@ -184,7 +206,8 @@ def test_wall_controller_builds_wall_and_preview_windows():
     assert by_name["External"]["rotation"] == "90"
     assert (by_name["Laptop"]["rows"], by_name["Laptop"]["cols"]) == (2, 3)
 
-    wall._cleanup()
+    for win in wall.windows:
+        win.close()
 
 
 def test_solo_mode_round_trip():
@@ -192,7 +215,6 @@ def test_solo_mode_round_trip():
         raise AssertionError("SKIP")
 
     from PyQt6.QtCore import QRect
-    from hyperwall.wall import WallController
 
     class _FakeClient:
         access_token = "token"
@@ -229,31 +251,25 @@ def test_solo_mode_round_trip():
         def geometry(self):
             return self._geo
 
+    wall = _build_bare_wall(
+        [_FakeScreen("Preview", 0, 0, 1920, 1080)],
+        _FakeClient(),
+        {"Preview": DisplayRole.PREVIEW},
+    )
+
+    cell = wall.cells[0]
+    assert wall._solo_cell is None
     from unittest.mock import patch
-
-    with (
-        patch("PyQt6.QtWidgets.QMainWindow.showFullScreen"),
-        patch("PyQt6.QtWidgets.QWidget.show"),
-    ):
-        wall = WallController(
-            screens=[_FakeScreen("Preview", 0, 0, 1920, 1080)],
-            libraries=["Movies"],
-            grid_rows=2,
-            grid_cols=2,
-            client=_FakeClient(),
-            display_roles={"Preview": DisplayRole.PREVIEW},
-        )
-
-        cell = wall.cells[0]
-        assert wall._solo_cell is None
+    with patch("PyQt6.QtWidgets.QWidget.show"):
         wall._enter_solo(cell)
-        assert wall._solo_cell is cell
-        assert wall._window_meta[id(wall.windows[0])]["solo"] is True
-        wall._exit_solo()
-        assert wall._solo_cell is None
-        assert wall._window_meta[id(wall.windows[0])]["solo"] is False
+    assert wall._solo_cell is cell
+    assert wall._window_meta[id(wall.windows[0])]["solo"] is True
+    wall._exit_solo()
+    assert wall._solo_cell is None
+    assert wall._window_meta[id(wall.windows[0])]["solo"] is False
 
-    wall._cleanup()
+    for win in wall.windows:
+        win.close()
 
 
 # ── runner ──
