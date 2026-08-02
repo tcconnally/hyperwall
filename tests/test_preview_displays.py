@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PyQt6.QtCore import QRect
     from PyQt6.QtWidgets import QApplication
 
     _app = QApplication.instance() or QApplication([])
@@ -99,6 +98,7 @@ def test_wall_controller_builds_wall_and_preview_windows():
     if not _PYQT:
         raise AssertionError("SKIP")
 
+    from PyQt6.QtCore import QRect
     from hyperwall.wall import WallController
     from hyperwall.emby import EmbyClient
 
@@ -180,6 +180,7 @@ def test_solo_mode_round_trip():
     if not _PYQT:
         raise AssertionError("SKIP")
 
+    from PyQt6.QtCore import QRect
     from hyperwall.wall import WallController
 
     class _FakeClient:
