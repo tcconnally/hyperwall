@@ -11,6 +11,7 @@ from typing import Any
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDialog,
     QGroupBox,
@@ -142,7 +143,9 @@ class SetupWizard(QDialog):
         grp_disp = QGroupBox("DISPLAYS · ROLE / ROTATION / VIDEO GRID")
         ld = QVBoxLayout(grp_disp)
         self.list_disp = QListWidget()
-        self.list_disp.setSelectionMode(QListWidgetItem.SelectionMode.MultiSelection)
+        self.list_disp.setSelectionMode(
+            QAbstractItemView.SelectionMode.MultiSelection
+        )
         prev_screens = last_screens.split(",") if last_screens else []
 
         for idx, s in enumerate(screens, 1):
@@ -244,7 +247,9 @@ class SetupWizard(QDialog):
         grp_lib = QGroupBox("SOURCES")
         ll = QVBoxLayout(grp_lib)
         self.list_lib = QListWidget()
-        self.list_lib.setSelectionMode(QListWidgetItem.SelectionMode.MultiSelection)
+        self.list_lib.setSelectionMode(
+            QAbstractItemView.SelectionMode.MultiSelection
+        )
         prev_libs = last_libraries.split(",") if last_libraries else []
 
         for lib in libraries:

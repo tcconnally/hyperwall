@@ -5,6 +5,7 @@ convention and only run on Windows (where PyQt6 + offscreen are available).
 """
 import json
 import os
+from pathlib import Path
 import sys
 import tempfile
 
@@ -24,6 +25,13 @@ from hyperwall.constants import DisplayRole
 
 
 # ── constants / config ──
+
+def test_wizard_uses_qt_item_view_selection_enum():
+    wizard_source = (
+        Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    ).read_text(encoding="utf-8")
+    assert "QAbstractItemView.SelectionMode.MultiSelection" in wizard_source
+    assert "QListWidgetItem.SelectionMode" not in wizard_source
 
 def test_display_role_values():
     assert DisplayRole.WALL == "wall"
