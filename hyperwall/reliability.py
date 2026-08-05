@@ -141,19 +141,34 @@ def is_transcode_stream(url: str | None) -> bool:
     return bool(url) and "/master.m3u8" in url.lower()
 
 
+def transcode_load_count(
+    streams: Iterable[tuple[str | None, bool]],
+) -> int:
+    """Count current and queued server-transcode HLS streams."""
+    return sum(1 for url, _is_prefetch in streams if is_transcode_stream(url))
+
+
 def active_transcode_count(
     streams: Iterable[tuple[str | None, bool]],
 ) -> int:
     """Count currently playing HLS transcodes, excluding queued prefetches."""
-    return sum(
-        1 for url, is_prefetch in streams
-        if not is_prefetch and is_transcode_stream(url)
+    return transcode_load_count(
+        (url, is_prefetch)
+        for url, is_prefetch in streams
+        if not is_prefetch
     )
 
 
-def allow_transcode_prefetch(active_transcodes: int, max_concurrent: int) -> bool:
+def allow_transcode_prefetch(
+    active_transcodes: int,
+    max_concurrent: int,
+    pending_transcodes: int = 0,
+) -> bool:
     """Whether warming another server-transcode playlist is safe."""
-    return max_concurrent <= 0 or active_transcodes < max_concurrent
+    return (
+        max_concurrent <= 0
+        or active_transcodes + pending_transcodes < max_concurrent
+    )
 
 
 def apply_jitter(delay_s: float, rand: float) -> float:

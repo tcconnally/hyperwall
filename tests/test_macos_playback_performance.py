@@ -39,10 +39,23 @@ def test_prefetch_is_deferred_after_transition():
 def test_prefetch_hls_is_not_used_for_playback_concurrency_accounting():
     reliability = _source("hyperwall/reliability.py")
     wall = _source("hyperwall/wall.py")
-    assert "active_transcode_count" in reliability
-    assert "active_transcode_count(" in wall
+    assert "transcode_load_count" in reliability
+    assert "_transcode_load_count" in wall
     assert "allow_transcode_prefetch" in wall
     assert "_prefetched_stream_url" in _source("hyperwall/cell.py")
+
+    start = wall.index("    def _transcode_load_count")
+    end = wall.index("    def _build_url", start)
+    accounting = wall[start:end]
+    assert "_stream_url" in accounting
+    assert "_prefetched_stream_url" in accounting
+    assert "transcode_load_count(streams)" in accounting
+
+    start = wall.index("    def _build_url")
+    end = wall.index("\n    # ── session management", start)
+    build_url = wall[start:end]
+    assert "include_cell=prefetch" in build_url
+    assert "occupied" in build_url
 
 
 def run_all() -> int:

@@ -409,6 +409,34 @@ def test_transcode_prefetch_is_disabled_when_server_budget_is_exhausted():
     assert allow_transcode_prefetch(active_transcodes=4, max_concurrent=0)
 
 
+def test_transcode_prefetch_counts_pending_transcodes_against_budget():
+    from hyperwall.reliability import allow_transcode_prefetch
+
+    assert not allow_transcode_prefetch(
+        active_transcodes=3,
+        pending_transcodes=1,
+        max_concurrent=4,
+    )
+    assert allow_transcode_prefetch(
+        active_transcodes=3,
+        pending_transcodes=0,
+        max_concurrent=4,
+    )
+
+
+def test_transcode_load_count_includes_pending_hls_streams():
+    from hyperwall.reliability import transcode_load_count
+
+    streams = [
+        (f"/Videos/active-{i}/master.m3u8", False)
+        for i in range(3)
+    ] + [
+        (f"/Videos/pending-{i}/master.m3u8", True)
+        for i in range(5)
+    ]
+    assert transcode_load_count(streams) == 8
+
+
 def test_max_concurrent_transcodes_constant():
     from hyperwall import constants as c
     assert c.MAX_CONCURRENT_TRANSCODES == 4
