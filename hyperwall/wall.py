@@ -651,6 +651,16 @@ class WallController:
             streams.append((getattr(other, "_prefetched_stream_url", None), True))
         return transcode_load_count(streams)
 
+    def _auto_transcode_requested(self, item: dict[str, Any]) -> bool:
+        """Return whether the item exceeds the configured direct-play budget."""
+        return _needs_transcode_pure(
+            item,
+            auto_transcode=os.environ.get(
+                "HYPERWALL_AUTO_TRANSCODE", "1") == "1",
+            max_fps=MAX_DIRECT_FPS,
+            max_bitrate_mbps=self._bitrate_budget_mbps,
+        )
+
     def _build_url(
         self, item: dict[str, Any], force_transcode: bool = False,
         prefetch: bool = False, cell: "VideoCell | None" = None,
@@ -660,13 +670,7 @@ class WallController:
         base = self.client.server_url
         sid = uuid.uuid4().hex
 
-        auto_transcode = _needs_transcode_pure(
-            item,
-            auto_transcode=os.environ.get(
-                "HYPERWALL_AUTO_TRANSCODE", "1") == "1",
-            max_fps=MAX_DIRECT_FPS,
-            max_bitrate_mbps=self._bitrate_budget_mbps,
-        )
+        auto_transcode = self._auto_transcode_requested(item)
         # Concurrency gate: a forced retry (failed direct) must transcode, but
         # an AUTO escalation defers to direct-play when the transcode engine is
         # already busy — never stampede greg's media engine (2026-07-15).
@@ -772,24 +776,27 @@ class WallController:
             item = self.playlists.next(self._cell_group(cell))
             if item is None:
                 return
-            url, sid = self._build_url(item, prefetch=True, cell=cell)
-            if "/master.m3u8" in url:
-                occupied = self._transcode_load_count(
-                    cell=cell,
-                    include_cell=True,
-                )
-                if not allow_transcode_prefetch(
+            # Decide admission before building the URL. _build_url intentionally
+            # demotes an over-budget AUTO transcode to DIRECT for active
+            # playback; a prefetch must instead remain queued so it does not
+            # consume an item while bypassing the transcode ceiling.
+            occupied = self._transcode_load_count(
+                cell=cell,
+                include_cell=True,
+            )
+            if self._auto_transcode_requested(item) and not allow_transcode_prefetch(
+                occupied, MAX_CONCURRENT_TRANSCODES,
+            ):
+                logger.info(
+                    "Skipping transcoded prefetch while %d/%d "
+                    "transcode slots are active.",
                     occupied, MAX_CONCURRENT_TRANSCODES,
-                ):
-                    logger.info(
-                        "Skipping transcoded prefetch while %d/%d "
-                        "transcode slots are active.",
-                        occupied, MAX_CONCURRENT_TRANSCODES,
-                    )
-                    self.playlists.push_front(
-                        self._cell_group(cell), item,
-                    )
-                    return
+                )
+                self.playlists.push_front(
+                    self._cell_group(cell), item,
+                )
+                return
+            url, sid = self._build_url(item, prefetch=True, cell=cell)
             if not cell.prefetch(item, url, sid):
                 logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
             else:

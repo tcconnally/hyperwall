@@ -58,6 +58,17 @@ def test_prefetch_hls_is_not_used_for_playback_concurrency_accounting():
     assert "occupied" in build_url
 
 
+def test_prefetch_admission_does_not_demote_heavy_candidate_to_direct():
+    wall = _source("hyperwall/wall.py")
+    start = wall.index("    def _arm_prefetch")
+    end = wall.index("\n    def run_on_main", start)
+    body = wall[start:end]
+    admission = body.index("if self._auto_transcode_requested(item)")
+    build = body.index("url, sid = self._build_url", admission)
+    assert admission < build
+    assert body.index("self.playlists.push_front", admission) < build
+
+
 def run_all() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0
