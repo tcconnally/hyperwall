@@ -374,6 +374,41 @@ def test_gate_auto_transcode_passthrough_and_disable():
     assert gate_auto_transcode(True, active_transcodes=99, max_concurrent=0)
 
 
+def test_prefetch_transcode_is_not_counted_as_active_playback():
+    from hyperwall.reliability import active_transcode_count
+
+    streams = [
+        ("https://emby/Videos/a/stream?static=true", False),
+        ("https://emby/Videos/b/master.m3u8?PlaySessionId=b", True),
+        ("https://emby/Videos/c/master.m3u8?PlaySessionId=c", False),
+    ]
+    assert active_transcode_count(streams) == 1
+
+
+def test_prefetch_transcode_detection_requires_hls_playlist():
+    from hyperwall.reliability import is_transcode_stream
+
+    assert is_transcode_stream("https://emby/Videos/a/master.m3u8?x=1")
+    assert not is_transcode_stream("https://emby/Videos/a/stream.m3u8?static=true")
+    assert not is_transcode_stream("https://emby/Videos/a/stream?static=true")
+
+
+def test_active_transcode_count_ignores_stale_or_empty_streams():
+    from hyperwall.reliability import active_transcode_count
+
+    assert active_transcode_count(
+        [("", False), (None, False), ("/Videos/a/master.m3u8", False)]
+    ) == 1
+
+
+def test_transcode_prefetch_is_disabled_when_server_budget_is_exhausted():
+    from hyperwall.reliability import allow_transcode_prefetch
+
+    assert allow_transcode_prefetch(active_transcodes=0, max_concurrent=4)
+    assert not allow_transcode_prefetch(active_transcodes=4, max_concurrent=4)
+    assert allow_transcode_prefetch(active_transcodes=4, max_concurrent=0)
+
+
 def test_max_concurrent_transcodes_constant():
     from hyperwall import constants as c
     assert c.MAX_CONCURRENT_TRANSCODES == 4

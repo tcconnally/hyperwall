@@ -75,6 +75,17 @@ def test_unknown_group_returns_none():
     assert pm.next("does-not-exist") is None
 
 
+def test_push_front_returns_reserved_item_without_dropping_it():
+    pm = PlaylistManager(shuffle=_noshuffle)
+    pm.set_source(_items(2))
+    item = pm.next()
+    assert item is not None
+    pm.push_front(DEFAULT_GROUP, item)
+    returned = pm.next()
+    assert returned is not None
+    assert returned["Id"] == item["Id"]
+
+
 def test_clear_group_preserves_pool():
     pm = PlaylistManager(shuffle=_noshuffle)
     pm.set_source(_items(3), group="a")

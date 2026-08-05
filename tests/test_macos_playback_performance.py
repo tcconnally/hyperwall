@@ -36,6 +36,15 @@ def test_prefetch_is_deferred_after_transition():
     assert "def _queue" in body
 
 
+def test_prefetch_hls_is_not_used_for_playback_concurrency_accounting():
+    reliability = _source("hyperwall/reliability.py")
+    wall = _source("hyperwall/wall.py")
+    assert "active_transcode_count" in reliability
+    assert "active_transcode_count(" in wall
+    assert "allow_transcode_prefetch" in wall
+    assert "_prefetched_stream_url" in _source("hyperwall/cell.py")
+
+
 def run_all() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0

@@ -136,6 +136,26 @@ def gate_auto_transcode(
     return active_transcodes < max_concurrent
 
 
+def is_transcode_stream(url: str | None) -> bool:
+    """Return whether ``url`` is an Emby server-transcode HLS master."""
+    return bool(url) and "/master.m3u8" in url.lower()
+
+
+def active_transcode_count(
+    streams: Iterable[tuple[str | None, bool]],
+) -> int:
+    """Count currently playing HLS transcodes, excluding queued prefetches."""
+    return sum(
+        1 for url, is_prefetch in streams
+        if not is_prefetch and is_transcode_stream(url)
+    )
+
+
+def allow_transcode_prefetch(active_transcodes: int, max_concurrent: int) -> bool:
+    """Whether warming another server-transcode playlist is safe."""
+    return max_concurrent <= 0 or active_transcodes < max_concurrent
+
+
 def apply_jitter(delay_s: float, rand: float) -> float:
     """Spread a retry delay over [0.75x, 1.25x] to desynchronize cells.
 
