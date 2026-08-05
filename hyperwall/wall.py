@@ -56,10 +56,10 @@ from .constants import (
 from .emby import EmbyClient, ContentLoader
 from .urls import needs_transcode as _needs_transcode_pure
 from .reliability import (
-    active_transcode_count,
     allow_transcode_prefetch,
     gate_auto_transcode,
     is_systemic_outage,
+    transcode_load_count,
 )
 from .urls import build_stream_url, tag_names
 from .playlist import PlaylistManager, DEFAULT_GROUP
@@ -631,6 +631,26 @@ class WallController:
 
     # ── URL construction ──────────────────────────────────────────────────
 
+    def _transcode_load_count(
+        self,
+        cell: "VideoCell | None" = None,
+        include_cell: bool = False,
+    ) -> int:
+        """Count current and queued HLS loads consuming server capacity.
+
+        A pending mpv playlist entry can already have opened its HLS demuxer,
+        so it must count against the transcode ceiling even before playback
+        advances to it.  A replacement load excludes its own old cell state;
+        a prefetch includes the target cell's current and queued state.
+        """
+        streams = []
+        for other in self.cells:
+            if other is cell and not include_cell:
+                continue
+            streams.append((getattr(other, "_stream_url", None), False))
+            streams.append((getattr(other, "_prefetched_stream_url", None), True))
+        return transcode_load_count(streams)
+
     def _build_url(
         self, item: dict[str, Any], force_transcode: bool = False,
         prefetch: bool = False, cell: "VideoCell | None" = None,
@@ -654,16 +674,12 @@ class WallController:
         if force_transcode:
             transcode = True
         else:
-            active = active_transcode_count(
-                (
-                    getattr(c, "_stream_url", None),
-                    False,
-                )
-                for c in self.cells
-                if c is not cell
+            occupied = self._transcode_load_count(
+                cell=cell,
+                include_cell=prefetch,
             )
             transcode = gate_auto_transcode(
-                auto_transcode, active, MAX_CONCURRENT_TRANSCODES,
+                auto_transcode, occupied, MAX_CONCURRENT_TRANSCODES,
             )
             gated = auto_transcode and not transcode
         url = build_stream_url(
@@ -758,21 +774,17 @@ class WallController:
                 return
             url, sid = self._build_url(item, prefetch=True, cell=cell)
             if "/master.m3u8" in url:
-                active = active_transcode_count(
-                    (
-                        getattr(other, "_stream_url", None),
-                        False,
-                    )
-                    for other in self.cells
-                    if other is not cell
+                occupied = self._transcode_load_count(
+                    cell=cell,
+                    include_cell=True,
                 )
                 if not allow_transcode_prefetch(
-                    active, MAX_CONCURRENT_TRANSCODES,
+                    occupied, MAX_CONCURRENT_TRANSCODES,
                 ):
                     logger.info(
                         "Skipping transcoded prefetch while %d/%d "
                         "transcode slots are active.",
-                        active, MAX_CONCURRENT_TRANSCODES,
+                        occupied, MAX_CONCURRENT_TRANSCODES,
                     )
                     self.playlists.push_front(
                         self._cell_group(cell), item,

@@ -790,7 +790,8 @@ class VideoCell(QWidget):
     def drop_prefetch(self) -> None:
         """Forget the queued entry (e.g. the wall's filter changed and the
         drawn item may no longer belong). The mpv-side playlist entry is
-        cleared by the next loadfile replace."""
+        cleared by the next loadfile replace. Keep its URL accounting until
+        that replace happens because mpv may still have the demuxer open."""
         self._prefetched = None
 
     @traced("cell.advance_to_prefetched")
