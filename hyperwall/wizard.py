@@ -20,7 +20,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -87,7 +86,7 @@ class _DisplayRow(QWidget):
 
 
 class SetupWizard(QDialog):
-    """Pre-launch configuration dialog: select monitors, libraries, grid."""
+    """Pre-launch configuration dialog: select monitors, libraries, and grids."""
 
     def __init__(
         self,
@@ -104,7 +103,7 @@ class SetupWizard(QDialog):
     ):
         super().__init__()
         self.setWindowTitle(f"HyperWall {VERSION_SHORT}")
-        self.resize(_s(1_020), _s(620))
+        self.resize(_s(1_160), _s(620))
         self.setStyleSheet(theme.dialog_qss())
 
         self._screen_map: dict[str, Any] = {}
@@ -112,8 +111,15 @@ class SetupWizard(QDialog):
         self._role_boxes: dict[str, QComboBox] = {}
         self._rotation_boxes: dict[str, QComboBox] = {}
         self._grid_boxes: dict[str, QComboBox] = {}
+        self._preview_labels_by_item: dict[int, str] = {}
+        self._grid_defaults = {
+            DisplayRole.WALL: (last_rows, last_cols),
+            DisplayRole.PREVIEW: (last_preview_rows, last_preview_cols),
+        }
         last_display_roles = last_display_roles or {}
         last_display_layouts = last_display_layouts or {}
+        self._saved_display_roles = dict(last_display_roles)
+        self._saved_display_layouts = dict(last_display_layouts)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(_s(26), _s(22), _s(26), _s(22))
@@ -140,7 +146,7 @@ class SetupWizard(QDialog):
         panels.setSpacing(_s(14))
 
         # ── Displays ──
-        grp_disp = QGroupBox("DISPLAYS · ROLE / ROTATION / VIDEO GRID")
+        grp_disp = QGroupBox("DISPLAYS · ROLE / ROTATION / GRID / PREVIEW")
         ld = QVBoxLayout(grp_disp)
         self.list_disp = QListWidget()
         self.list_disp.setSelectionMode(
@@ -157,12 +163,17 @@ class SetupWizard(QDialog):
             self.list_disp.addItem(item)
             self._screen_map[label_text] = s
             self._screen_items[label_text] = item
+            self._preview_labels_by_item[id(item)] = label_text
 
             row = _DisplayRow()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(_s(6), _s(2), _s(6), _s(2))
             row_layout.setSpacing(_s(8))
-            row.clicked.connect(lambda item=item: item.setSelected(True))
+            row.clicked.connect(
+                lambda item=item: (
+                    item.setSelected(True), self.list_disp.setCurrentItem(item)
+                )
+            )
             lbl = QLabel(label_text)
             lbl.setStyleSheet(
                 f"color: {theme.TEXT}; font-size: {_s(11)}px; background: transparent;"
@@ -175,12 +186,17 @@ class SetupWizard(QDialog):
             role_box.addItem("Preview", DisplayRole.PREVIEW)
             role_box.setMinimumWidth(_s(78))
             role = last_display_roles.get(s.name(), DisplayRole.WALL)
-            role_box.setCurrentIndex(
-                0 if role == DisplayRole.WALL else 1
-            )
+            if not DisplayRole.is_valid(role):
+                role = DisplayRole.WALL
+            role_box.setCurrentIndex(0 if role == DisplayRole.WALL else 1)
             self._role_boxes[label_text] = role_box
             role_box.currentIndexChanged.connect(
-                lambda _index, item=item: item.setSelected(True)
+                lambda _index, item=item, label=label_text: (
+                    item.setSelected(True),
+                    self.list_disp.setCurrentItem(item),
+                    self._role_changed(label),
+                    self._sync_selected_preview()
+                )
             )
             row_layout.addWidget(role_box)
 
@@ -198,9 +214,8 @@ class SetupWizard(QDialog):
             )
             rotation_box.setMinimumWidth(_s(72))
 
-            default_rows = last_preview_rows if role == DisplayRole.PREVIEW else last_rows
-            default_cols = last_preview_cols if role == DisplayRole.PREVIEW else last_cols
-            saved_layout = last_display_layouts.get(s.name(), {})
+            default_rows, default_cols = self._grid_defaults[role]
+            saved_layout = self._saved_display_layouts.get(s.name(), {})
             display_layout = normalize_display_layout({
                 "rotation": saved_layout.get("rotation", DisplayRotation.AUTO),
                 "rows": saved_layout.get("rows", default_rows),
@@ -229,7 +244,11 @@ class SetupWizard(QDialog):
             grid_box.setCurrentIndex(max(0, grid_index))
             self._grid_boxes[label_text] = grid_box
             grid_box.currentIndexChanged.connect(
-                lambda _index, item=item: item.setSelected(True)
+                lambda _index, item=item, label=label_text: (
+                    item.setSelected(True),
+                    self.list_disp.setCurrentItem(item),
+                    self._sync_selected_preview()
+                )
             )
             row_layout.addWidget(grid_box)
             self.list_disp.setItemWidget(item, row)
@@ -241,6 +260,9 @@ class SetupWizard(QDialog):
             item.setSizeHint(row.sizeHint())
 
         ld.addWidget(self.list_disp)
+        self.list_disp.currentItemChanged.connect(
+            lambda _current, _previous: self._sync_selected_preview()
+        )
         panels.addWidget(grp_disp)
 
         # ── Sources ──
@@ -263,57 +285,18 @@ class SetupWizard(QDialog):
 
         layout.addLayout(panels)
 
-        # ── Wall grid + live preview ──
-        grp_wall = QGroupBox("FALLBACK WALL GRID (new displays)")
-        lg = QHBoxLayout(grp_wall)
-        lg.setSpacing(_s(12))
-        self.rows = QSpinBox()
-        self.rows.setRange(1, 6)
-        self.rows.setValue(last_rows)
-        self.cols = QSpinBox()
-        self.cols.setRange(1, 6)
-        self.cols.setValue(last_cols)
-        lg.addWidget(QLabel("ROWS"))
-        lg.addWidget(self.rows)
-        lg.addSpacing(_s(12))
-        lg.addWidget(QLabel("COLS"))
-        lg.addWidget(self.cols)
-        lg.addSpacing(_s(16))
-
-        self.preview = _GridPreview(last_rows, last_cols)
-        lg.addWidget(self.preview)
-        self.lbl_cells = QLabel()
-        self.lbl_cells.setStyleSheet(
-            f"color: {theme.TEXT_DIM}; font-size: {_s(11)}px; background: transparent;"
-        )
-        lg.addWidget(self.lbl_cells)
-        lg.addStretch()
-        layout.addWidget(grp_wall)
-
-        # ── Preview grid ──
-        grp_preview = QGroupBox("FALLBACK PREVIEW GRID (new displays)")
+        # ── Live preview ──
+        grp_preview = QGroupBox("LIVE PREVIEW · SELECTED MONITOR")
         pg = QHBoxLayout(grp_preview)
         pg.setSpacing(_s(12))
-        self.preview_rows = QSpinBox()
-        self.preview_rows.setRange(1, 6)
-        self.preview_rows.setValue(last_preview_rows)
-        self.preview_cols = QSpinBox()
-        self.preview_cols.setRange(1, 6)
-        self.preview_cols.setValue(last_preview_cols)
-        pg.addWidget(QLabel("ROWS"))
-        pg.addWidget(self.preview_rows)
-        pg.addSpacing(_s(12))
-        pg.addWidget(QLabel("COLS"))
-        pg.addWidget(self.preview_cols)
-        pg.addSpacing(_s(16))
-
-        self.preview_preview = _GridPreview(last_preview_rows, last_preview_cols)
-        pg.addWidget(self.preview_preview)
-        self.lbl_preview_cells = QLabel()
-        self.lbl_preview_cells.setStyleSheet(
-            f"color: {theme.TEXT_DIM}; font-size: {_s(11)}px; background: transparent;"
+        self.preview = _GridPreview()
+        pg.addWidget(self.preview)
+        self.lbl_preview = QLabel()
+        self.lbl_preview.setStyleSheet(
+            f"color: {theme.TEXT_DIM}; font-size: {_s(11)}px;"
+            " background: transparent;"
         )
-        pg.addWidget(self.lbl_preview_cells)
+        pg.addWidget(self.lbl_preview)
         pg.addStretch()
         layout.addWidget(grp_preview)
 
@@ -323,19 +306,57 @@ class SetupWizard(QDialog):
         btn.setAutoDefault(True)
         layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self.rows.valueChanged.connect(self._sync_preview)
-        self.cols.valueChanged.connect(self._sync_preview)
-        self.preview_rows.valueChanged.connect(self._sync_preview)
-        self.preview_cols.valueChanged.connect(self._sync_preview)
-        self._sync_preview()
+        if screens:
+            initial_index = next(
+                (
+                    index for index, screen in enumerate(screens)
+                    if screen.name() in prev_screens
+                ),
+                0,
+            )
+            self.list_disp.setCurrentRow(initial_index)
+        self._sync_selected_preview()
 
-    def _sync_preview(self) -> None:
-        r, c = self.rows.value(), self.cols.value()
-        self.preview.set_grid(r, c)
-        self.lbl_cells.setText(f"{r * c} cells / display")
-        pr, pc = self.preview_rows.value(), self.preview_cols.value()
-        self.preview_preview.set_grid(pr, pc)
-        self.lbl_preview_cells.setText(f"{pr * pc} cells / display")
+    def _role_changed(self, label: str) -> None:
+        """Switch a monitor to its role default without losing its rotation."""
+        role = self._role_boxes[label].currentData()
+        saved_layout = self._saved_display_layouts.get(
+            self._screen_map[label].name(), {}
+        )
+        saved_role = self._saved_display_roles.get(
+            self._screen_map[label].name()
+        )
+        if saved_role == role:
+            rows = saved_layout.get("rows", self._grid_defaults[role][0])
+            cols = saved_layout.get("cols", self._grid_defaults[role][1])
+        else:
+            rows, cols = self._grid_defaults.get(role, (2, 2))
+        box = self._grid_boxes[label]
+        index = box.findData((int(rows), int(cols)))
+        if index >= 0:
+            box.setCurrentIndex(index)
+
+    def _sync_selected_preview(self) -> None:
+        """Show the current monitor's selected role/grid in the live preview."""
+        item = self.list_disp.currentItem()
+        label = self._preview_labels_by_item.get(id(item)) if item else None
+        if label is None and self._screen_map:
+            label = next(iter(self._screen_map))
+        if label is None:
+            self.lbl_preview.setText("No monitors detected")
+            return
+
+        value = self._grid_boxes[label].currentData()
+        if isinstance(value, tuple) and len(value) == 2:
+            rows, cols = int(value[0]), int(value[1])
+            role = self._role_boxes[label].currentData()
+            role_name = "Preview" if role == DisplayRole.PREVIEW else "Wall"
+            screen = self._screen_map[label]
+            self.preview.set_grid(rows, cols)
+            self.lbl_preview.setText(
+                f"{screen.name()} · {role_name} · {rows} × {cols} "
+                f"({rows * cols} cells)"
+            )
 
     def get_settings(self) -> dict[str, Any]:
         """Return the selected configuration."""
@@ -349,13 +370,13 @@ class SetupWizard(QDialog):
             "libraries": [
                 i.text() for i in self.list_lib.selectedItems()
             ],
-            "grid_rows": self.rows.value(),
-            "grid_cols": self.cols.value(),
-            "preview_rows": self.preview_rows.value(),
-            "preview_cols": self.preview_cols.value(),
+            "grid_rows": self._grid_for_role(DisplayRole.WALL)[0],
+            "grid_cols": self._grid_for_role(DisplayRole.WALL)[1],
+            "preview_rows": self._grid_for_role(DisplayRole.PREVIEW)[0],
+            "preview_cols": self._grid_for_role(DisplayRole.PREVIEW)[1],
             "display_roles": {
                 self._screen_map[l].name(): self._role_boxes[l].currentData()
-                for l in selected_labels
+                for l in self._screen_map
             },
             "display_layouts": {
                 self._screen_map[l].name(): {
@@ -366,3 +387,13 @@ class SetupWizard(QDialog):
                 for l in self._screen_map
             },
         }
+
+    def _grid_for_role(self, role: str) -> tuple[int, int]:
+        """Return the first configured grid for a role, or its fallback."""
+        fallback = self._grid_defaults.get(role, (2, 2))
+        for label, box in self._role_boxes.items():
+            if box.currentData() == role:
+                value = self._grid_boxes[label].currentData()
+                if isinstance(value, tuple) and len(value) == 2:
+                    return int(value[0]), int(value[1])
+        return fallback
