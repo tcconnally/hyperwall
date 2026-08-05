@@ -78,3 +78,10 @@ class PlaylistManager:
             self._refill(group)
             q = self._queues[group]
         return q.popleft()
+
+    def push_front(self, group: str, item: Item) -> None:
+        """Return a reserved item to the front of a group's live queue."""
+        if item not in self._pools.get(group, []):
+            return
+        q = self._queues.setdefault(group, deque())
+        q.appendleft(item)

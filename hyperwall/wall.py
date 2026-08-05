@@ -55,7 +55,12 @@ from .constants import (
 )
 from .emby import EmbyClient, ContentLoader
 from .urls import needs_transcode as _needs_transcode_pure
-from .reliability import is_systemic_outage, gate_auto_transcode
+from .reliability import (
+    active_transcode_count,
+    allow_transcode_prefetch,
+    gate_auto_transcode,
+    is_systemic_outage,
+)
 from .urls import build_stream_url, tag_names
 from .playlist import PlaylistManager, DEFAULT_GROUP
 
@@ -649,9 +654,13 @@ class WallController:
         if force_transcode:
             transcode = True
         else:
-            active = sum(
-                1 for c in self.cells
-                if c is not cell and getattr(c, "_is_transcoding", False)
+            active = active_transcode_count(
+                (
+                    getattr(c, "_stream_url", None),
+                    False,
+                )
+                for c in self.cells
+                if c is not cell
             )
             transcode = gate_auto_transcode(
                 auto_transcode, active, MAX_CONCURRENT_TRANSCODES,
@@ -748,8 +757,31 @@ class WallController:
             if item is None:
                 return
             url, sid = self._build_url(item, prefetch=True, cell=cell)
+            if "/master.m3u8" in url:
+                active = active_transcode_count(
+                    (
+                        getattr(other, "_stream_url", None),
+                        False,
+                    )
+                    for other in self.cells
+                    if other is not cell
+                )
+                if not allow_transcode_prefetch(
+                    active, MAX_CONCURRENT_TRANSCODES,
+                ):
+                    logger.info(
+                        "Skipping transcoded prefetch while %d/%d "
+                        "transcode slots are active.",
+                        active, MAX_CONCURRENT_TRANSCODES,
+                    )
+                    self.playlists.push_front(
+                        self._cell_group(cell), item,
+                    )
+                    return
             if not cell.prefetch(item, url, sid):
                 logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
+            else:
+                cell._prefetched_stream_url = url
 
         QTimer.singleShot(0, _queue)
 
