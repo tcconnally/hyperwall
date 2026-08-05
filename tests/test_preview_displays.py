@@ -100,6 +100,54 @@ def test_config_save_load_preview_fields():
         assert loaded.display_roles() == {"DP-1": "wall", "eDP-1": "preview"}
 
 
+def test_wizard_uses_per_monitor_role_and_grid_as_preview_source():
+    wizard = Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    source = wizard.read_text(encoding="utf-8")
+    assert "display_layouts" in source
+    assert "display_roles" in source
+    assert "self._grid_boxes" in source
+    assert "self.preview_rows" not in source
+    assert "self.preview_cols" not in source
+    assert "FALLBACK WALL GRID" not in source
+    assert "FALLBACK PREVIEW GRID" not in source
+
+
+def test_wizard_settings_persist_preview_role_and_grid_for_all_monitors():
+    wizard = Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    source = wizard.read_text(encoding="utf-8")
+    assert 'for l in self._screen_map' in source
+    assert 'self._role_boxes[l].currentData()' in source
+    assert 'self._grid_boxes[l].currentData()[0]' in source
+    assert 'self._grid_boxes[l].currentData()[1]' in source
+
+
+def test_wizard_role_change_reloads_that_monitor_grid_preview():
+    wizard = Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    source = wizard.read_text(encoding="utf-8")
+    assert "role_box.currentIndexChanged.connect" in source
+    assert "grid_box.setCurrentIndex" in source
+    assert "_sync_selected_preview" in source
+
+
+def test_wizard_live_preview_follows_selected_monitor_and_grid():
+    wizard = Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    source = wizard.read_text(encoding="utf-8")
+    assert 'QGroupBox("LIVE PREVIEW · SELECTED MONITOR")' in source
+    assert "currentItemChanged.connect" in source
+    assert "self.preview.set_grid(rows, cols)" in source
+    assert "self._grid_boxes[label].currentData()" in source
+    assert "self._sync_selected_preview()" in source
+    assert "self.list_disp.setCurrentItem(item)" in source
+
+
+def test_wizard_persists_roles_for_unselected_monitors():
+    wizard = Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    source = wizard.read_text(encoding="utf-8")
+    roles_block = source[source.index('"display_roles"'):source.index('"display_layouts"')]
+    assert 'for l in self._screen_map' in roles_block
+    assert 'for l in selected_labels' not in roles_block
+
+
 # ── WallController construction (Windows/Qt only) ──
 
 def _build_bare_wall(
