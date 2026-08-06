@@ -132,6 +132,26 @@ def test_display_layouts_reject_malformed_entries():
     }
 
 
+def test_stable_display_settings_round_trip_preserves_selection_and_layout():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "config.ini")
+        settings = {
+            "screen-v1:external": {
+                "selected": True,
+                "role": "preview",
+                "rotation": "90",
+                "rows": 4,
+                "cols": 3,
+            },
+        }
+        cfg = HyperwallConfig(
+            server_url="http://h", username="u", password="p",
+            last_display_settings=json.dumps(settings),
+        )
+        cfg.save(path)
+        assert HyperwallConfig.load(path).display_settings() == settings
+
+
 def test_scenes_round_trip():
     from hyperwall.scenes import scene_to_str, normalize_scene, scenes_from_mapping
     with tempfile.TemporaryDirectory() as d:

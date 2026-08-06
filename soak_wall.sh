@@ -3,13 +3,15 @@
 # Captures app telemetry plus host memory/VM/network/power snapshots in a
 # timestamped directory. The wall self-terminates after HYPERWALL_SOAK_MINUTES.
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")"
 
 MINUTES="${1:-60}"
 REPORT_ROOT="${HYPERWALL_SOAK_REPORT_ROOT:-$PWD/soak_reports}"
-RUN_ID="$(date +%Y%m%d_%H%M%S)"
-REPORT_DIR="$REPORT_ROOT/$RUN_ID"
+RUN_ID="$(python3 -c 'from datetime import datetime; print(datetime.now().strftime("%Y%m%d_%H%M%S"))')"
+REPORT_DIR="${HYPERWALL_SOAK_REPORT_DIR:-$REPORT_ROOT/$RUN_ID}"
 mkdir -p "$REPORT_DIR"
+chmod 700 "$REPORT_DIR"
 
 export HYPERWALL_STATS=1
 export HYPERWALL_PERFTRACE=1
@@ -24,13 +26,13 @@ cleanup() {
   local status=$?
   for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
   wait "${PIDS[@]:-}" 2>/dev/null || true
-  printf 'ended_at=%s\nexit_status=%s\n' "$(date -Iseconds)" "$status" >> "$REPORT_DIR/run.env"
+  printf 'ended_at=%s\nexit_status=%s\n' "$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')" "$status" >> "$REPORT_DIR/run.env"
 }
 trap cleanup EXIT INT TERM
 PIDS=()
 
 {
-  printf 'started_at=%s\n' "$(date -Iseconds)"
+  printf 'started_at=%s\n' "$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"
   printf 'host='; sw_vers
   printf 'hardware='; system_profiler SPHardwareDataType 2>/dev/null || true
   printf 'env=HYPERWALL_SOAK_MINUTES=%s HYPERWALL_SOAK_DWELL_S=%s HYPERWALL_SOAK_PROFILE=%s\n' \
@@ -40,7 +42,7 @@ PIDS=()
 sample_vm() {
   while :; do
     {
-      printf '\n=== %s ===\n' "$(date -Iseconds)"
+      printf '\n=== %s ===\n' "$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"
       vm_stat
       memory_pressure 2>/dev/null || true
     } >> "$REPORT_DIR/vm_stat.log"
@@ -50,7 +52,7 @@ sample_vm() {
 sample_net() {
   while :; do
     {
-      printf '\n=== %s ===\n' "$(date -Iseconds)"
+      printf '\n=== %s ===\n' "$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"
       nettop -P -L 1 -x -J bytes_in,bytes_out,state 2>/dev/null || true
     } >> "$REPORT_DIR/nettop.log"
     sleep 10

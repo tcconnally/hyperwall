@@ -148,6 +148,63 @@ def test_wizard_persists_roles_for_unselected_monitors():
     assert 'for l in selected_labels' not in roles_block
 
 
+def test_wizard_uses_stable_identity_for_selection_and_settings_restore():
+    wizard = Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    source = wizard.read_text(encoding="utf-8")
+    assert "display_identity(s)" in source
+    assert "last_display_settings" in source
+    assert "_using_stable_settings" in source
+    assert '"selected": self._screen_items[l].isSelected()' in source
+
+
+def test_config_can_store_stable_display_settings():
+    cfg = HyperwallConfig(
+        server_url="http://localhost:8096",
+        username="u",
+        password="p",
+        last_display_settings=json.dumps({
+            "screen-v1:monitor-a": {
+                "selected": True,
+                "role": "preview",
+                "rotation": "180",
+                "rows": 3,
+                "cols": 2,
+            }
+        }),
+    )
+    assert cfg.display_settings()["screen-v1:monitor-a"] == {
+        "selected": True,
+        "role": "preview",
+        "rotation": "180",
+        "rows": 3,
+        "cols": 2,
+    }
+
+
+def test_config_invalid_stable_display_settings_use_defaults():
+    cfg = HyperwallConfig(
+        server_url="http://localhost:8096",
+        username="u",
+        password="p",
+        last_display_settings=json.dumps({
+            "screen-v1:monitor-a": {
+                "selected": "yes",
+                "role": "not-a-role",
+                "rotation": "sideways",
+                "rows": 99,
+                "cols": 0,
+            }
+        }),
+    )
+    assert cfg.display_settings()["screen-v1:monitor-a"] == {
+        "selected": False,
+        "role": "wall",
+        "rotation": "auto",
+        "rows": 6,
+        "cols": 1,
+    }
+
+
 # ── WallController construction (Windows/Qt only) ──
 
 def _build_bare_wall(
