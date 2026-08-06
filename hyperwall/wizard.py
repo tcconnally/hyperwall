@@ -206,7 +206,6 @@ class SetupWizard(QDialog):
             if not self._using_stable_settings:
                 role_value = last_display_roles.get(s.name(), DisplayRole.WALL)
             role = role_value if isinstance(role_value, str) else DisplayRole.WALL
-            role = last_display_roles.get(s.name(), DisplayRole.WALL)
             if not DisplayRole.is_valid(role):
                 role = DisplayRole.WALL
             role_box.setCurrentIndex(0 if role == DisplayRole.WALL else 1)
@@ -241,7 +240,6 @@ class SetupWizard(QDialog):
                 if self._using_stable_settings
                 else dict(self._saved_display_layouts.get(s.name(), {}))
             )
-            saved_layout = self._saved_display_layouts.get(s.name(), {})
             display_layout = normalize_display_layout({
                 "rotation": saved_layout.get("rotation", DisplayRotation.AUTO),
                 "rows": saved_layout.get("rows", default_rows),
@@ -346,13 +344,6 @@ class SetupWizard(QDialog):
                     ),
                     0,
                 )
-            initial_index = next(
-                (
-                    index for index, screen in enumerate(screens)
-                    if screen.name() in prev_screens
-                ),
-                0,
-            )
             self.list_disp.setCurrentRow(initial_index)
         self._sync_selected_preview()
 
@@ -377,12 +368,6 @@ class SetupWizard(QDialog):
         saved_role = saved_settings.get("role")
         if not self._using_stable_settings:
             saved_role = self._saved_display_roles.get(self._screen_map[label].name())
-        saved_layout = self._saved_display_layouts.get(
-            self._screen_map[label].name(), {}
-        )
-        saved_role = self._saved_display_roles.get(
-            self._screen_map[label].name()
-        )
         if saved_role == role:
             rows = saved_layout.get("rows", self._grid_defaults[role][0])
             cols = saved_layout.get("cols", self._grid_defaults[role][1])
