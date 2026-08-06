@@ -94,6 +94,39 @@ OUTAGE_WINDOW_S = _int_env("HYPERWALL_OUTAGE_WINDOW_S", 45, 10, 600)
 OUTAGE_MIN_CELLS = _int_env("HYPERWALL_OUTAGE_MIN_CELLS", 3, 2, 100)
 OUTAGE_BACKOFF_S = _int_env("HYPERWALL_OUTAGE_BACKOFF_S", 20, 5, 600)
 
+def _physical_memory_mb() -> int | None:
+    """Return host physical memory without spawning a platform command."""
+    try:
+        pages = int(os.sysconf("SC_PHYS_PAGES"))
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        if pages > 0 and page_size > 0:
+            return (pages * page_size) // (1024 * 1024)
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+    return None
+
+
+def cache_defaults_for_platform(
+    platform: str | None = None,
+    physical_memory_mb: int | None = None,
+) -> tuple[int, int]:
+    """Choose demuxer-per-cell and aggregate cache defaults.
+
+    The original 1 GiB/cell, 8 GiB aggregate defaults were tuned for a 32 GiB
+    Windows host. A 16 GiB Mac can enter compression/swap pressure long before
+    mpv reaches that ceiling because Qt, libmpv surfaces, and the desktop share
+    the same memory. Keep explicit environment overrides authoritative, but
+    start <=20 GiB macOS hosts at 512 MiB/cell and a 4 GiB aggregate ceiling.
+    """
+    plat = sys.platform if platform is None else platform
+    memory_mb = (
+        _physical_memory_mb() if physical_memory_mb is None else physical_memory_mb
+    )
+    if plat == "darwin" and (memory_mb is None or memory_mb <= 20 * 1024):
+        return 512, 4_096
+    return 1_024, 8_192
+
+
 # Direct-play budget: sources heavier than this transcode server-side. This is
 # the ONLY auto-transcode gate — the >1080p resolution gate was dropped
 # 2026-07-13 (A/B bench: 4K direct-plays with 0 drops, while the live-transcode
@@ -138,11 +171,15 @@ def effective_bitrate_budget_mbps(n_cells: int) -> int:
 
 # Memory-aware demuxer cache budget. Each cell wants PER_CELL demuxer bytes, but
 # the grid total is capped at CACHE_BUDGET_MB so large grids don't blow up RAM.
-# Sized for this box (32 GB): 1 GB/cell, 8 GB grid cap — deep enough that the
-# 60s readahead (see MPV_OPTS) is byte-bound only above ~140 Mbps, so network
-# blips stay invisible. Was 512MB/3GB, tuned for a leaner host.
-DEMUXER_PER_CELL_MB = _int_env("HYPERWALL_DEMUXER_PER_CELL_MB", 1_024, 32, 4_096)
-CACHE_BUDGET_MB = _int_env("HYPERWALL_CACHE_BUDGET_MB", 8_192, 128, 65_536)
+# Windows/Linux retain the 32 GB host tuning. Small macOS hosts use the
+# conservative defaults selected above; explicit env values still win.
+_DEFAULT_DEMUXER_MB, _DEFAULT_CACHE_BUDGET_MB = cache_defaults_for_platform()
+DEMUXER_PER_CELL_MB = _int_env(
+    "HYPERWALL_DEMUXER_PER_CELL_MB", _DEFAULT_DEMUXER_MB, 32, 4_096
+)
+CACHE_BUDGET_MB = _int_env(
+    "HYPERWALL_CACHE_BUDGET_MB", _DEFAULT_CACHE_BUDGET_MB, 128, 65_536
+)
 
 # ── MPV Options ──────────────────────────────────────────────────────────────
 _MPV_OPTS_BASE: dict[str, object] = dict(
@@ -296,6 +333,11 @@ def mpv_opts_for_platform(platform: str | None = None) -> dict[str, object]:
         out["vo"] = "libmpv"           # render API — --wid unsupported on macOS
         out.pop("gpu_api", None)       # d3d11 is Windows-only
         out["hwdec"] = "videotoolbox"  # Apple Silicon hardware decode
+        # QOpenGLWidget/report_swap supplies the display clock. Prefer
+        # display-resample so the VO does not drop frames to chase a separate
+        # audio clock in every cell; HYPERWALL_VIDEO_SYNC=audio remains an
+        # explicit compatibility override.
+        out["video_sync"] = "display-resample"
         out["ao"] = "coreaudio,null"
         # With the render API the host drives frame swaps from the single
         # GUI thread; never let mpv block the render call waiting for the

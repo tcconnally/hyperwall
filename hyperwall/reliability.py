@@ -73,7 +73,13 @@ def scale_demuxer_mb(
     """
     n = max(1, int(n_cells))
     per = min(per_cell_mb, total_budget_mb / n)
-    return int(max(floor_mb, per))
+    floor = max(0, int(floor_mb))
+    if floor * n <= total_budget_mb:
+        return int(max(floor, per))
+    # When an explicit budget is smaller than the nominal floor for every
+    # cell, the aggregate ceiling wins. This keeps low-budget overrides from
+    # silently multiplying back above the caller's limit.
+    return max(1, int(per))
 
 
 def scale_readahead_s(n_cells: int, base_s: int = 60, floor_s: int = 10) -> int:

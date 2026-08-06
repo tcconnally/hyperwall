@@ -162,8 +162,8 @@ Environment variables:
 | `HYPERWALL_CRASHLOOP_THRESHOLD` | Failures within the window before a cell is parked (default 5) |
 | `HYPERWALL_CRASHLOOP_WINDOW_S` | Rolling window for the crash-loop guard (default 60) |
 | `HYPERWALL_CRASHLOOP_COOLDOWN_S` | How long a parked cell waits before resuming (default 120) |
-| `HYPERWALL_CACHE_BUDGET_MB` | Aggregate demuxer cache ceiling across all cells (default 8192) |
-| `HYPERWALL_DEMUXER_PER_CELL_MB` | Desired per-cell demuxer cache before budget scaling (default 1024) |
+| `HYPERWALL_CACHE_BUDGET_MB` | Aggregate demuxer cache ceiling across all cells (default 8192 MiB on Windows/Linux; 4096 MiB on macOS hosts up to 20 GiB RAM) |
+| `HYPERWALL_DEMUXER_PER_CELL_MB` | Desired per-cell demuxer cache before budget scaling (default 1024 MiB on Windows/Linux; 512 MiB on small macOS hosts) |
 | `HYPERWALL_PERFTRACE=1` | Emit GUI loop-lag and slow-slot telemetry |
 | `HYPERWALL_SOAK_MINUTES` | Run a self-terminating randomized soak for N minutes |
 | `HYPERWALL_SOAK_PROFILE` | Soak mix: `mixed` (default), `audio` (mute/unmute focus), or `advance` |

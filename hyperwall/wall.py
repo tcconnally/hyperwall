@@ -226,6 +226,7 @@ class WallController:
         # failure, consulted by cells to decide whether to escalate.
         self._failure_events: deque[tuple[float, int]] = deque(maxlen=512)
         self._last_outage_log_ts = 0.0
+        self._mpv_opts_effective: dict[str, Any] = {}
 
         # Emergency escape
         self._escape_filter = EmergencyKeyFilter(
@@ -241,6 +242,7 @@ class WallController:
         # per-cell demuxer cache so the grid total stays under CACHE_BUDGET_MB.
         n_cells = len(self.cells)
         budgeted = apply_cache_budget(apply_env_overrides(MPV_OPTS), n_cells)
+        self._mpv_opts_effective = dict(budgeted)
         for cell in self.cells:
             cell._mpv_opts = budgeted
         # Burst-aware budgets (2026-07-14): 80% of freeze episodes began
@@ -1034,7 +1036,7 @@ class WallController:
         payload = {
             "ts": _time.strftime("%Y-%m-%dT%H:%M:%S"),
             "n_cells": len(self.cells),
-            "mpv_opts_effective": apply_env_overrides(MPV_OPTS),
+            "mpv_opts_effective": dict(self._mpv_opts_effective),
             "env": {
                 k: os.environ.get(k)
                 for k in (
@@ -1101,7 +1103,12 @@ class WallController:
         if _sys.platform == "darwin":
             for c in self.cells:
                 try:
-                    c.video_frame.release()
+                    # Serialize cancellation with the worker's native aid/seek
+                    # calls before stopping the VO or freeing its context.
+                    with c._audio_arm_call_lock:
+                        c._cancel_audio_arm(timeout_s=0.0)
+                        c._stop_mpv_for_render_release()
+                        c.video_frame.release()
                 except Exception as e:
                     logger.debug("GL pre-release failed: %s", e)
 
