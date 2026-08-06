@@ -8,6 +8,8 @@ windows-build CI job; skips on the pure-logic ubuntu lane.
 """
 import os
 import sys
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -88,6 +90,37 @@ def test_unmute_arms_audio_with_keyframe_seek():
     assert cell._audio_started is True
     assert cell._mpv.seeks == 1
     assert cell._mpv.seek_flags == ["absolute+keyframes"]  # not exact
+
+
+def test_audio_arm_does_not_block_gui_on_slow_mpv():
+    """The aid switch/seek must not occupy the GUI slot during IPC stalls."""
+    if sys.platform != "darwin":
+        print("  SKIP  async audio-arm probe is macOS-specific")
+        return
+    cell = _make_cell()
+    finished = threading.Event()
+
+    class _SlowMpv(_FakeMpv):
+        def __setitem__(self, key, value):
+            if key == "aid":
+                time.sleep(0.12)
+            super().__setitem__(key, value)
+
+        def seek(self, *args, **kwargs):
+            time.sleep(0.12)
+            super().seek(*args, **kwargs)
+            finished.set()
+
+    cell._mpv = _SlowMpv()
+    cell._play_pos = 12.0
+    started = time.perf_counter()
+    cell._enable_audio_track()
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.05, f"audio arm blocked GUI for {elapsed:.3f}s"
+    assert finished.wait(1.0), "background audio arm did not complete"
+    assert cell._mpv.props["aid"] == "auto"
+    assert cell._mpv.seeks == 1
 
 
 def test_unmute_from_low_nonzero_restores_last_volume():

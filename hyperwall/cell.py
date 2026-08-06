@@ -256,6 +256,21 @@ class VideoCell(QWidget):
         self._switching = False
         self._track_done = False  # this track already triggered its advance
         self._audio_started = False  # True once this track's audio is armed
+        # Audio track selection and keyframe relock can block inside libmpv
+        # while an HLS demuxer catches up. They must never occupy the Qt GUI
+        # thread: the audio-focused soak observed >200ms mute slots and
+        # multi-second wall stalls. One daemon worker per cell is enough; a
+        # token + event prevent stale work from racing a track switch or
+        # teardown.
+        self._audio_arm_lock = threading.Lock()
+        self._audio_arm_call_lock = threading.Lock()
+        self._audio_arm_token = 0
+        self._audio_arm_inflight_token: int | None = None
+        self._audio_arm_done = threading.Event()
+        self._audio_arm_done.set()
+        self._deferred_play: tuple[dict[str, Any], str] | None = None
+        self._deferred_play_retry_scheduled = False
+        self._track_generation = 0
         # (item, url, emby_session_id) queued on the live mpv playlist so
         # prefetch-playlist warms its demuxer before the current track ends.
         self._prefetched: tuple[dict[str, Any], str, str] | None = None
@@ -431,9 +446,13 @@ class VideoCell(QWidget):
         # v10.8 armed audio at load to make unmute seamless and reintroduced
         # exactly that freeze on the wall's *primary* passive-playback mode;
         # audio is (re)armed on first unmute instead — see _enable_audio_track.
-        self._audio_started = not self.muted
+        # New instances always start with lazy audio, including a cell that
+        # is currently unmuted. The first post-load play() call arms audio
+        # through _enable_audio_track, so recreation never performs aid=auto
+        # synchronously during the GUI-side constructor path.
+        self._audio_started = False
         try:
-            m["aid"] = "auto" if self._audio_started else "no"
+            m["aid"] = "no"
         except Exception as e:
             logger.debug("mpv: failed to set initial aid: %s", e)
         if self.looping:
@@ -512,7 +531,42 @@ class VideoCell(QWidget):
 
         self._mpv = m
 
-    def _destroy_mpv(self, wait_s: float = 1.5) -> None:
+    def _stop_mpv_for_render_release(self) -> None:
+        """Stop the VO before freeing a macOS libmpv render context."""
+        if self._mpv is None:
+            return
+        if (
+            sys.platform == "darwin"
+            and getattr(self.video_frame, "_ctx", None) is None
+        ):
+            # The wall may already have performed the GUI-thread pre-release;
+            # do not send a second stop after the render context is gone.
+            return
+        try:
+            self._mpv["mute"] = True
+        except Exception:
+            pass
+        if sys.platform == "darwin":
+            try:
+                # render_context_free() disables an active VO. Stop first so
+                # the core does not continue submitting frames after the
+                # context has been freed (the soak logged "No render context
+                # set" during the old shutdown ordering).
+                self._mpv.command("stop")
+            except Exception as e:
+                logger.debug("mpv stop before render release failed: %s", e)
+
+    def _destroy_mpv(
+        self, wait_s: float = 1.5, *, audio_lock_held: bool = False,
+    ) -> None:
+        """Terminate mpv while serializing against audio-arm native calls."""
+        if audio_lock_held:
+            self._destroy_mpv_impl(wait_s)
+            return
+        with self._audio_arm_call_lock:
+            self._destroy_mpv_impl(wait_s)
+
+    def _destroy_mpv_impl(self, wait_s: float = 1.5) -> None:
         """Terminate mpv with a genuinely bounded wait.
 
         terminate runs on a daemon thread; we join for at most `wait_s` and
@@ -521,13 +575,15 @@ class VideoCell(QWidget):
         which blocks the GUI thread until terminate returns — one wedged libmpv
         teardown froze every cell on the wall indefinitely.
         """
+        self._cancel_audio_arm()
         if self._mpv is None:
             return
         if STATS_ENABLED:
             self._flush_stats()
         if sys.platform == "darwin":
-            # render.h: the render context must be freed BEFORE the mpv core
-            # is destroyed, with the GL context current (GUI thread here).
+            # Stop the VO while the render context is still alive, then free
+            # the context on the GUI thread before destroying the mpv core.
+            self._stop_mpv_for_render_release()
             self.video_frame.release()
         # Silence the handle BEFORE terminate: a wedged teardown gets
         # abandoned on a daemon thread below, and an abandoned-but-alive
@@ -657,6 +713,7 @@ class VideoCell(QWidget):
             self._retry_count = 0
             self._force_transcode = False
         self.current_item = item
+        self._track_generation += 1
         self._duration_s = 0.0
         self._play_pos = 0.0
         # Reset stall tracking so the freshly-loaded track gets a full grace
@@ -687,8 +744,44 @@ class VideoCell(QWidget):
         self._loading_pulse.stop()
         self._title_overlay.hide()
 
+    def _defer_play_until_audio_idle(
+        self, item: dict[str, Any], url: str,
+    ) -> None:
+        """Retry a transition after a worker releases the native-call lock."""
+        self._deferred_play = (item, url)
+        if self._deferred_play_retry_scheduled:
+            return
+        self._deferred_play_retry_scheduled = True
+
+        def _retry() -> None:
+            self._deferred_play_retry_scheduled = False
+            pending = self._deferred_play
+            if pending is None or self._mpv is None:
+                self._deferred_play = None
+                return
+            if self._audio_arm_call_lock.locked():
+                self._defer_play_until_audio_idle(*pending)
+                return
+            self._deferred_play = None
+            self.play(*pending)
+
+        QTimer.singleShot(50, _retry)
+
     @traced("cell.play")
     def play(self, item: dict[str, Any], url: str) -> None:
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            self._defer_play_until_audio_idle(item, url)
+            return
+        try:
+            # The worker either owns the call lock (in which case we returned
+            # above) or is waiting to acquire it. Invalidate it before the
+            # replacement and let the generation check discard it afterward.
+            self._cancel_audio_arm(timeout_s=0.0)
+            self._play_impl(item, url)
+        finally:
+            self._audio_arm_call_lock.release()
+
+    def _play_impl(self, item: dict[str, Any], url: str) -> None:
         """Load a video into this cell."""
         if self._parked:
             # A manual/web advance during the park cooldown is a deliberate
@@ -725,7 +818,7 @@ class VideoCell(QWidget):
             self._played_anything = False
 
         if need_create:
-            self._destroy_mpv()
+            self._destroy_mpv(audio_lock_held=True)
             self._ensure_mpv()
         elif self._mpv is not None:
             # Reusing the instance: loadfile resets mpv's per-file counters,
@@ -761,6 +854,8 @@ class VideoCell(QWidget):
             self._mpv["pause"] = False
             self._paused = False
             self.btn_play.setText(_G_PAUSE)
+            if not self.muted and not self._audio_started:
+                self._enable_audio_track()
         except Exception as e:
             self._switching = False
             logger.error("mpv loadfile failed: %s", e)
@@ -796,6 +891,18 @@ class VideoCell(QWidget):
 
     @traced("cell.advance_to_prefetched")
     def advance_to_prefetched(self) -> bool:
+        if self._prefetched is None or self._mpv is None:
+            return False
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            self._prefetched = None
+            return False
+        try:
+            self._cancel_audio_arm(timeout_s=0.0)
+            return self._advance_to_prefetched_impl()
+        finally:
+            self._audio_arm_call_lock.release()
+
+    def _advance_to_prefetched_impl(self) -> bool:
         """Jump to the prefetched playlist entry.
 
         Returns False when there is nothing usable (no queue, dead mpv,
@@ -833,6 +940,8 @@ class VideoCell(QWidget):
             )
             return False
         self._begin_track(item)
+        if not self.muted and not self._audio_started:
+            self._enable_audio_track()
         self._emby_session_id = sid
         self._emby_item_id = item["Id"]
         return True
@@ -1096,24 +1205,37 @@ class VideoCell(QWidget):
 
     @traced("cell._seek_release")
     def _seek_release(self) -> None:
-        if self._mpv is not None and self._duration_s > 0:
-            try:
-                # 0.98, not 0.90: the property-driven EOF advance makes the
-                # clip tail safe to seek into; 10% of every video was
-                # unreachable for no remaining reason.
-                frac = min(self.seek_slider.value() / 1000.0, 0.98)
-                target = frac * self._duration_s
-                self._mpv.seek(target, "absolute")
-                # Restore the PRE-DRAG pause state instead of always
-                # resuming — a paused cell stays paused after a seek.
-                resume_paused = getattr(self, "_paused_before_seek", False)
-                self._last_seek_ts = _time.monotonic()
-                self._mpv["pause"] = resume_paused
-                self._paused = resume_paused
-                self.btn_play.setText(_G_PLAY if resume_paused else _G_PAUSE)
-            except Exception as e:
-                logger.warning("seek failed: %s", e)
-        self._dragging = False
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            # The audio-arm worker owns the native handle. Let it finish its
+            # aid/seek pair, then retry the user's seek instead of allowing a
+            # stale cached-position seek to overwrite current UI intent.
+            QTimer.singleShot(50, self._seek_release)
+            return
+        try:
+            # Invalidate any worker that has not entered the native section
+            # yet. The ownership lock prevents one that is already inside from
+            # racing this handler.
+            self._cancel_audio_arm(timeout_s=0.0)
+            if self._mpv is not None and self._duration_s > 0:
+                try:
+                    # 0.98, not 0.90: the property-driven EOF advance makes
+                    # the clip tail safe to seek into; 10% of every video was
+                    # unreachable for no remaining reason.
+                    frac = min(self.seek_slider.value() / 1000.0, 0.98)
+                    target = frac * self._duration_s
+                    self._mpv.seek(target, "absolute")
+                    # Restore the PRE-DRAG pause state instead of always
+                    # resuming — a paused cell stays paused after a seek.
+                    resume_paused = getattr(self, "_paused_before_seek", False)
+                    self._last_seek_ts = _time.monotonic()
+                    self._mpv["pause"] = resume_paused
+                    self._paused = resume_paused
+                    self.btn_play.setText(_G_PLAY if resume_paused else _G_PAUSE)
+                except Exception as e:
+                    logger.warning("seek failed: %s", e)
+            self._dragging = False
+        finally:
+            self._audio_arm_call_lock.release()
 
     def set_paused_ui(self, paused: bool) -> None:
         """Sync the play/pause button glyph to an externally-set pause state
@@ -1150,19 +1272,120 @@ class VideoCell(QWidget):
             except Exception as e:
                 logger.debug("toggle_loop failed: %s", e)
 
-    def _enable_audio_track(self) -> None:
-        """Arm this track's audio the first time the cell is unmuted.
+    def _audio_arm_is_current(
+        self, token: int, mpv_ref: Any, track_generation: int,
+    ) -> bool:
+        """Return whether an audio-arm worker may still touch its mpv."""
+        with self._audio_arm_lock:
+            return (
+                self._audio_arm_inflight_token == token
+                and self._audio_arm_token == token
+                and self._mpv is mpv_ref
+                and self._track_generation == track_generation
+            )
 
-        Muted cells load aid=no (see _ensure_mpv) — safe for poorly
-        interleaved files. Selecting the track cold under video_sync=audio
-        would stutter until the buffer fills, so we relock with a seek. The
-        relock is a KEYFRAME seek, not an exact one: exact re-decodes from
-        the last keyframe to the current position (the ~1s freeze owners
-        reported), while keyframe jumps to the nearest keyframe fast and
-        still flushes/refills both decoders. Probed across the library:
-        keyframe starts audio cleanly with ≤4 sample stalls where no-seek
-        stuttered up to 12; exact worked but froze. No-op once armed.
+    def _cancel_audio_arm(self, timeout_s: float = 1.0) -> bool:
+        """Invalidate and, briefly, drain a pending audio-arm worker.
+
+        A worker that is already inside libmpv is allowed to finish its
+        current call, but it is invalidated before a replacement load or
+        teardown so its keyframe seek cannot target a different track. The
+        boolean reports whether the worker actually drained; callers that
+        replace a track must recreate mpv when it did not.
         """
+        with self._audio_arm_lock:
+            self._audio_arm_token += 1
+            inflight = self._audio_arm_inflight_token
+            done = self._audio_arm_done
+        if inflight is None or done.wait(timeout_s):
+            return True
+        logger.warning(
+            "Audio arm still running after %.1fs — abandoning worker.",
+            timeout_s,
+        )
+        return False
+
+    def _start_audio_arm(self) -> None:
+        """Submit the potentially blocking aid/seek sequence to a daemon."""
+        mpv_ref = self._mpv
+        if mpv_ref is None:
+            return
+        with self._audio_arm_lock:
+            if self._audio_arm_inflight_token is not None:
+                return
+            self._audio_arm_token += 1
+            token = self._audio_arm_token
+            self._audio_arm_inflight_token = token
+            self._audio_arm_done.clear()
+            track_generation = self._track_generation
+            position = self._play_pos if self._play_pos > 0 else None
+        worker = threading.Thread(
+            target=self._audio_arm_worker,
+            args=(token, mpv_ref, track_generation, position),
+            name="mpv-audio-arm",
+            daemon=True,
+        )
+        try:
+            worker.start()
+        except Exception:
+            with self._audio_arm_lock:
+                if self._audio_arm_inflight_token == token:
+                    self._audio_arm_inflight_token = None
+                    self._audio_arm_done.set()
+            raise
+
+    def _audio_arm_worker(
+        self,
+        token: int,
+        mpv_ref: Any,
+        track_generation: int,
+        position: float | None,
+    ) -> None:
+        """Run lazy audio selection and relock without occupying Qt."""
+        aid_ms = 0.0
+        seek_ms = 0.0
+        try:
+            # The lock covers the validity check and every native call. A
+            # cancellation token alone leaves a TOCTOU window between the
+            # final check and seek; transition/teardown paths take this lock
+            # before replacing or freeing the mpv handle.
+            with self._audio_arm_call_lock:
+                if not self._audio_arm_is_current(
+                    token, mpv_ref, track_generation
+                ):
+                    return
+                started = _time.perf_counter()
+                mpv_ref["aid"] = "auto"
+                aid_ms = (_time.perf_counter() - started) * 1000
+                if not self._audio_arm_is_current(
+                    token, mpv_ref, track_generation
+                ):
+                    return
+                if position is not None:
+                    started = _time.perf_counter()
+                    mpv_ref.seek(position, "absolute+keyframes")
+                    seek_ms = (_time.perf_counter() - started) * 1000
+                if not self._audio_arm_is_current(
+                    token, mpv_ref, track_generation
+                ):
+                    return
+                with self._audio_arm_lock:
+                    if self._audio_arm_inflight_token == token:
+                        self._audio_started = True
+            logger.info(
+                "AUDIO arm: aid=%.0fms seek=%.0fms cached-pos=%s",
+                aid_ms, seek_ms, "yes" if position is not None else "no",
+            )
+        except Exception as e:
+            logger.warning("Audio track arm failed on unmute: %s", e)
+        finally:
+            with self._audio_arm_lock:
+                if self._audio_arm_inflight_token == token:
+                    self._audio_arm_inflight_token = None
+                    self._audio_arm_done.set()
+
+    def _enable_audio_track_sync(self) -> None:
+        """Arm audio synchronously on platforms without the macOS GUI stall."""
         if self._audio_started or self._mpv is None:
             return
         try:
@@ -1171,10 +1394,6 @@ class VideoCell(QWidget):
             aid_ms = (_time.perf_counter() - t0) * 1000
             self._audio_started = True
             # time-pos is maintained by the observer on the mpv event thread.
-            # Reading m.time_pos here is synchronous libmpv IPC and was part
-            # of the 210ms GUI click stall caught on the M5 soak.  The cached
-            # value is fresh at video-frame cadence and a keyframe relock is
-            # tolerant of a slightly stale position.
             pos = self._play_pos if self._play_pos > 0 else None
             seek_ms = 0.0
             if pos is not None:
@@ -1186,10 +1405,24 @@ class VideoCell(QWidget):
                 aid_ms, seek_ms, "yes" if pos is not None else "no",
             )
         except Exception as e:
-            # WARNING, not debug: _apply_mute proceeds to show the audible
-            # glow, so a swallowed failure here = a "live" cell with no
-            # sound and no trace (2026-07-13 audit).
             logger.warning("Audio track arm failed on unmute: %s", e)
+
+    def _enable_audio_track(self) -> None:
+        """Start lazy audio arm without blocking the macOS Qt GUI thread.
+
+        Muted cells load with aid=no (see _ensure_mpv). macOS uses the worker
+        because its render-path soak showed long libmpv IPC stalls; Windows
+        and Linux retain the established synchronous behavior.
+        """
+        if sys.platform != "darwin":
+            self._enable_audio_track_sync()
+            return
+        if self._audio_started or self._mpv is None:
+            return
+        try:
+            self._start_audio_arm()
+        except Exception as e:
+            logger.warning("Audio track arm could not start: %s", e)
 
     def _sync_mute_ui(self, muted: bool) -> None:
         """Single writer for every mute-state visual: glyph, checked state,

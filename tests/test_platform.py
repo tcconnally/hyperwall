@@ -75,6 +75,12 @@ def test_05_env_overrides_still_win_on_macos():
     assert opts["hwdec"] == "videotoolbox-copy"
 
 
+def test_06_macos_render_api_prefers_display_resample_sync():
+    from hyperwall.constants import mpv_opts_for_platform
+    opts = mpv_opts_for_platform("darwin")
+    assert opts["video_sync"] == "display-resample"
+
+
 def run_all() -> int:
     tests = [
         test_01_macos_opts_use_render_api,
@@ -82,6 +88,7 @@ def run_all() -> int:
         test_03_linux_opts_are_sane,
         test_04_native_wid_masking,
         test_05_env_overrides_still_win_on_macos,
+        test_06_macos_render_api_prefers_display_resample_sync,
     ]
     failed = 0
     for test in tests:

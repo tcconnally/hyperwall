@@ -94,10 +94,15 @@ def test_large_grid_scaled_down():
     assert got * 36 <= 3072
 
 
-def test_floor_respected():
-    # Absurd cell count clamps to the floor, never zero.
-    got = scale_demuxer_mb(10_000, per_cell_mb=512, total_budget_mb=3072, floor_mb=32)
+def test_floor_respected_when_budget_can_afford_it():
+    # The floor is useful when the aggregate budget can still pay for it.
+    got = scale_demuxer_mb(64, per_cell_mb=10, total_budget_mb=3072, floor_mb=32)
     assert got == 32
+
+
+def test_tiny_budget_does_not_exceed_aggregate_ceiling():
+    got = scale_demuxer_mb(36, per_cell_mb=512, total_budget_mb=128, floor_mb=32)
+    assert got * 36 <= 128
 
 
 def test_zero_cells_is_safe():
@@ -296,8 +301,11 @@ def test_constants_defaults_load():
     assert c.STALL_TIMEOUT_S == 20
     assert c.WATCHDOG_INTERVAL_MS == 5_000
     assert c.CRASH_LOOP_THRESHOLD == 5
-    assert c.DEMUXER_PER_CELL_MB == 1_024
-    assert c.CACHE_BUDGET_MB == 8_192
+    expected_per_cell, expected_budget = c.cache_defaults_for_platform(
+        sys.platform, c._physical_memory_mb(),
+    )
+    assert c.DEMUXER_PER_CELL_MB == expected_per_cell
+    assert c.CACHE_BUDGET_MB == expected_budget
 
 
 def test_scale_readahead_shrinks_beyond_four_cells():
@@ -440,6 +448,13 @@ def test_transcode_load_count_includes_pending_hls_streams():
 def test_max_concurrent_transcodes_constant():
     from hyperwall import constants as c
     assert c.MAX_CONCURRENT_TRANSCODES == 4
+
+
+def test_macos_16gb_uses_conservative_cache_defaults():
+    from hyperwall.constants import cache_defaults_for_platform
+    assert cache_defaults_for_platform("darwin", 16 * 1024) == (512, 4_096)
+    assert cache_defaults_for_platform("darwin", 32 * 1024) == (1_024, 8_192)
+    assert cache_defaults_for_platform("linux", 16 * 1024) == (1_024, 8_192)
 
 
 def test_apply_cache_budget_shape():

@@ -20,11 +20,104 @@ def _source(relative: str) -> str:
 
 def test_audio_relock_uses_observed_position_cache():
     source = _source("hyperwall/cell.py")
-    start = source.index("    def _enable_audio_track")
+    start = source.index("    def _start_audio_arm")
     end = source.index("\n    def _sync_mute_ui", start)
     body = source[start:end]
     assert "self._play_pos" in body
     assert "self._mpv.time_pos" not in body
+
+
+def test_audio_arm_is_deferred_out_of_gui_handler():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _enable_audio_track(self)")
+    end = source.index("\n    def _sync_mute_ui", start)
+    body = source[start:end]
+    assert "_start_audio_arm" in body
+    assert "self._mpv[\"aid\"] = \"auto\"" not in body
+
+
+def test_recreated_mpv_defers_audio_until_after_load():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _ensure_mpv")
+    end = source.index("\n    def _stop_mpv_for_render_release", start)
+    body = source[start:end]
+    assert 'm["aid"] = "no"' in body
+    assert 'self._audio_started = False' in body
+
+
+def test_gui_seek_serializes_and_cancels_audio_relock():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _seek_release")
+    end = source.index("\n    def set_paused_ui", start)
+    body = source[start:end]
+    assert "_audio_arm_call_lock.acquire(blocking=False)" in body
+    assert "QTimer.singleShot(50, self._seek_release)" in body
+    assert "self._cancel_audio_arm(timeout_s=0.0)" in body
+    assert body.index("self._cancel_audio_arm(timeout_s=0.0)") < body.index(
+        "self._mpv.seek"
+    )
+
+
+def test_audio_arm_transition_serializes_replacement():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def play(")
+    end = source.index("\n    def _play_impl", start)
+    body = source[start:end]
+    assert "_audio_arm_call_lock.acquire(blocking=False)" in body
+    assert "_defer_play_until_audio_idle" in body
+
+    start = source.index("    def _audio_arm_worker")
+    end = source.index("\n    def _enable_audio_track_sync", start)
+    body = source[start:end]
+    assert "with self._audio_arm_call_lock" in body
+    assert "_audio_arm_is_current" in body
+
+    start = source.index("    def advance_to_prefetched")
+    end = source.index("\n    def _advance_to_prefetched_impl", start)
+    body = source[start:end]
+    assert "_audio_arm_call_lock.acquire(blocking=False)" in body
+    assert "return False" in body
+
+
+def test_non_macos_audio_arm_preserves_sync_path():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _enable_audio_track(self)")
+    end = source.index("\n    def _sync_mute_ui", start)
+    body = source[start:end]
+    assert 'sys.platform != "darwin"' in body
+    assert "_enable_audio_track_sync" in body
+
+
+def test_stats_dump_reports_budgeted_mpv_options():
+    source = _source("hyperwall/wall.py")
+    assert "self._mpv_opts_effective = dict(budgeted)" in source
+    start = source.index("    def _dump_stats_json")
+    end = source.index("\n    # ── shutdown", start)
+    body = source[start:end]
+    assert '"mpv_opts_effective": dict(self._mpv_opts_effective)' in body
+
+
+def test_render_release_stops_vo_before_context_free():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _destroy_mpv_impl")
+    end = source.index("\n    def _flush_stats", start)
+    body = source[start:end]
+    assert "_stop_mpv_for_render_release()" in body
+    assert body.index("_stop_mpv_for_render_release()") < body.index(
+        "self.video_frame.release()"
+    )
+
+
+def test_wall_shutdown_stops_vo_before_gl_release():
+    source = _source("hyperwall/wall.py")
+    start = source.index("    def _cleanup")
+    end = source.index("\n        # Hide all windows immediately", start)
+    body = source[start:end]
+    assert "c._stop_mpv_for_render_release()" in body
+    assert "with c._audio_arm_call_lock" in body
+    assert body.index("c._stop_mpv_for_render_release()") < body.index(
+        "c.video_frame.release()"
+    )
 
 
 def test_prefetch_is_deferred_after_transition():
