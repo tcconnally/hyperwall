@@ -187,6 +187,35 @@ To test a different hardware-decoder path, run a separate, otherwise identical
 session, e.g. `HYPERWALL_HWDEC=videotoolbox-copy ./soak_wall.sh 60`; do not mix
 profiles in one run.
 
+### One-command no-image diagnostics
+
+Run the repository checks, an unauthenticated source-health probe, and two
+short live decoder phases with offline parsing in one command:
+
+```bash
+python3 scripts/run-soak-diagnostics.py --minutes 10 --decoders videotoolbox,videotoolbox-copy
+```
+
+The runner writes a timestamped directory under `soak_reports/`, redacts text
+copies for sharing, and returns nonzero when a measured reliability gate is
+blocked. It collects application logs, JSONL soak events, final per-cell stats,
+`vm_stat`, `nettop`, and best-effort `powermetrics`; it captures **no images,
+screenshots, or video**. Use `--decoders videotoolbox` for one phase, or
+`--skip-live` to exercise only the repository/source checks. A source-health
+failure is reported separately from a client/decoder failure. The current
+checkout still requires one manual SetupWizard acceptance per live phase; the
+runner prints this notice rather than automating GUI clicks.
+
+The default 10-minute phases are a pilot. Run the full soak only after the
+pilot is clean:
+
+```bash
+python3 scripts/run-soak-diagnostics.py --minutes 60 --decoders videotoolbox
+```
+
+Do not share the raw phase directories: use the `*-redacted/` copies because
+raw media URLs may contain credentials or session identifiers.
+
 ## Building
 
 ```cmd

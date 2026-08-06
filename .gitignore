@@ -26,6 +26,7 @@ mpv-temp.7z
 # ── Stats dumps ────────────────────────────────────────────────────────────
 hyperwall_stats_*.json
 test_codec_matrix_results.json
+soak_reports/
 
 # ── OS junk ────────────────────────────────────────────────────────────────
 Thumbs.db

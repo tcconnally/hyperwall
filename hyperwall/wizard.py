@@ -32,6 +32,7 @@ from .constants import (
     _s,
     normalize_display_layout,
 )
+from .displays import display_identity, restore_display_settings
 
 
 class _GridPreview(QWidget):
@@ -100,6 +101,7 @@ class SetupWizard(QDialog):
         last_preview_cols: int = 4,
         last_display_roles: dict[str, str] | None = None,
         last_display_layouts: dict[str, dict[str, object]] | None = None,
+        last_display_settings: dict[str, dict[str, object]] | None = None,
     ):
         super().__init__()
         self.setWindowTitle(f"HyperWall {VERSION_SHORT}")
@@ -120,6 +122,10 @@ class SetupWizard(QDialog):
         last_display_layouts = last_display_layouts or {}
         self._saved_display_roles = dict(last_display_roles)
         self._saved_display_layouts = dict(last_display_layouts)
+        self._saved_display_settings = dict(last_display_settings or {})
+        # Stable-identity state is authoritative. The name-keyed maps are
+        # retained only as a compatibility fallback for older config files.
+        self._using_stable_settings = bool(self._saved_display_settings)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(_s(26), _s(22), _s(26), _s(22))
@@ -163,6 +169,17 @@ class SetupWizard(QDialog):
             self.list_disp.addItem(item)
             self._screen_map[label_text] = s
             self._screen_items[label_text] = item
+            screen_identity = display_identity(s)
+            saved_settings = (
+                restore_display_settings(
+                    s,
+                    self._saved_display_settings,
+                    wall_grid=self._grid_defaults[DisplayRole.WALL],
+                    preview_grid=self._grid_defaults[DisplayRole.PREVIEW],
+                )
+                if self._using_stable_settings
+                else {}
+            )
             self._preview_labels_by_item[id(item)] = label_text
 
             row = _DisplayRow()
@@ -185,6 +202,10 @@ class SetupWizard(QDialog):
             role_box.addItem("Wall", DisplayRole.WALL)
             role_box.addItem("Preview", DisplayRole.PREVIEW)
             role_box.setMinimumWidth(_s(78))
+            role_value = saved_settings.get("role", DisplayRole.WALL)
+            if not self._using_stable_settings:
+                role_value = last_display_roles.get(s.name(), DisplayRole.WALL)
+            role = role_value if isinstance(role_value, str) else DisplayRole.WALL
             role = last_display_roles.get(s.name(), DisplayRole.WALL)
             if not DisplayRole.is_valid(role):
                 role = DisplayRole.WALL
@@ -215,6 +236,11 @@ class SetupWizard(QDialog):
             rotation_box.setMinimumWidth(_s(72))
 
             default_rows, default_cols = self._grid_defaults[role]
+            saved_layout = (
+                dict(saved_settings)
+                if self._using_stable_settings
+                else dict(self._saved_display_layouts.get(s.name(), {}))
+            )
             saved_layout = self._saved_display_layouts.get(s.name(), {})
             display_layout = normalize_display_layout({
                 "rotation": saved_layout.get("rotation", DisplayRotation.AUTO),
@@ -254,7 +280,11 @@ class SetupWizard(QDialog):
             self.list_disp.setItemWidget(item, row)
 
             # Match selection state to the underlying item
-            if s.name() in prev_screens:
+            if (
+                bool(saved_settings.get("selected", False))
+                if self._using_stable_settings
+                else s.name() in prev_screens
+            ):
                 item.setSelected(True)
             # Size the row to its contents
             item.setSizeHint(row.sizeHint())
@@ -307,6 +337,15 @@ class SetupWizard(QDialog):
         layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         if screens:
+            initial_index = 0
+            if not self._using_stable_settings:
+                initial_index = next(
+                    (
+                        index for index, screen in enumerate(screens)
+                        if screen.name() in prev_screens
+                    ),
+                    0,
+                )
             initial_index = next(
                 (
                     index for index, screen in enumerate(screens)
@@ -320,6 +359,24 @@ class SetupWizard(QDialog):
     def _role_changed(self, label: str) -> None:
         """Switch a monitor to its role default without losing its rotation."""
         role = self._role_boxes[label].currentData()
+        saved_settings = (
+            restore_display_settings(
+                self._screen_map[label],
+                self._saved_display_settings,
+                wall_grid=self._grid_defaults[DisplayRole.WALL],
+                preview_grid=self._grid_defaults[DisplayRole.PREVIEW],
+            )
+            if self._using_stable_settings
+            else {}
+        )
+        saved_layout = (
+            dict(saved_settings)
+            if self._using_stable_settings
+            else dict(self._saved_display_layouts.get(self._screen_map[label].name(), {}))
+        )
+        saved_role = saved_settings.get("role")
+        if not self._using_stable_settings:
+            saved_role = self._saved_display_roles.get(self._screen_map[label].name())
         saved_layout = self._saved_display_layouts.get(
             self._screen_map[label].name(), {}
         )
@@ -385,6 +442,19 @@ class SetupWizard(QDialog):
                     "cols": self._grid_boxes[l].currentData()[1],
                 }
                 for l in self._screen_map
+            },
+            "display_settings": {
+                **self._saved_display_settings,
+                **{
+                    display_identity(self._screen_map[l]): {
+                        "selected": self._screen_items[l].isSelected(),
+                        "role": self._role_boxes[l].currentData(),
+                        "rotation": self._rotation_boxes[l].currentData(),
+                        "rows": self._grid_boxes[l].currentData()[0],
+                        "cols": self._grid_boxes[l].currentData()[1],
+                    }
+                    for l in self._screen_map
+                },
             },
         }
 

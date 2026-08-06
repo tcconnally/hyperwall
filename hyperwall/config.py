@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass, field
 
 from .constants import CONFIG_FILE, normalize_display_layout
+from .displays import normalize_display_settings
 
 
 def effective_server_url(configured: str, override: str | None = None) -> str:
@@ -45,6 +46,8 @@ class HyperwallConfig:
     last_preview_cols: int = 4
     last_display_roles: str = ""
     last_display_layouts: str = ""
+    # Stable monitor identity -> selected/role/rotation/grid JSON.
+    last_display_settings: str = ""
     cleanup_on_startup: bool = False
 
     # ── Network sync ──
@@ -103,6 +106,9 @@ class HyperwallConfig:
             last_display_layouts=cfg.get(
                 "Settings", "last_display_layouts", fallback=""
             ),
+            last_display_settings=cfg.get(
+                "Settings", "last_display_settings", fallback=""
+            ),
             cleanup_on_startup=cfg.getboolean(
                 "Settings", "cleanup_on_startup", fallback=False
             ),
@@ -140,6 +146,7 @@ class HyperwallConfig:
             "last_preview_cols": "4",
             "last_display_roles": "",
             "last_display_layouts": "",
+            "last_display_settings": "",
             "cleanup_on_startup": "false",
             "sync_enabled": "false",
             "sync_server": "false",
@@ -172,6 +179,7 @@ class HyperwallConfig:
             "last_preview_cols": str(self.last_preview_cols),
             "last_display_roles": self.last_display_roles,
             "last_display_layouts": self.last_display_layouts,
+            "last_display_settings": self.last_display_settings,
             "cleanup_on_startup": str(self.cleanup_on_startup),
             "sync_enabled": str(self.sync_enabled),
             "sync_server": str(self.sync_server),
@@ -208,6 +216,23 @@ class HyperwallConfig:
             for name, layout in raw.items()
             if isinstance(layout, dict)
         }
+
+    def display_settings(self) -> dict[str, dict[str, object]]:
+        """Parse stable-identity monitor settings with safe defaults."""
+        if not self.last_display_settings:
+            return {}
+        try:
+            raw = json.loads(self.last_display_settings)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        result: dict[str, dict[str, object]] = {}
+        for identity, value in raw.items():
+            if not isinstance(identity, str) or not isinstance(value, dict):
+                continue
+            result[identity] = normalize_display_settings(value)
+        return result
 
 
 class ConfigMissingError(Exception):

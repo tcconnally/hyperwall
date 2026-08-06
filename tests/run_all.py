@@ -24,6 +24,8 @@ SUITES = [
     "test_urls",
     "test_config",
     "test_preview_displays",
+    "test_display_identity",
+    "test_diagnostics",
     "test_sync",
     "test_playlist",
     "test_scenes",

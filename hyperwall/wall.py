@@ -1046,8 +1046,10 @@ class WallController:
             },
             "cells": cells_payload,
         }
+        report_dir = os.environ.get("HYPERWALL_SOAK_REPORT_DIR", "").strip()
         out = os.path.join(
-            SCRIPT_DIR, f"hyperwall_stats_{int(_time.time())}.json"
+            report_dir or SCRIPT_DIR,
+            f"hyperwall_stats_{int(_time.time())}.json",
         )
         try:
             with open(out, "w", encoding="utf-8") as f:

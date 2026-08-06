@@ -354,6 +354,7 @@ def main() -> None:
         last_preview_cols=cfg.last_preview_cols,
         last_display_roles=cfg.display_roles(),
         last_display_layouts=cfg.display_layouts(),
+        last_display_settings=cfg.display_settings(),
     )
     if wiz.exec() != QDialog.DialogCode.Accepted:
         client.close()
@@ -385,7 +386,15 @@ def main() -> None:
         last_display_layouts=json.dumps(
             settings.get("display_layouts", {}), sort_keys=True
         ),
+        last_display_settings=json.dumps(
+            settings.get("display_settings", {}), sort_keys=True
+        ),
         cleanup_on_startup=cfg.cleanup_on_startup,
+        sync_enabled=cfg.sync_enabled,
+        sync_server=cfg.sync_server,
+        sync_host=cfg.sync_host,
+        sync_port=cfg.sync_port,
+        sync_display_name=cfg.sync_display_name,
         scenes=cfg.scenes,  # preserve saved scene presets across the rewrite
     )
     cfg.save()

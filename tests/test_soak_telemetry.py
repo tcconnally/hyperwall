@@ -46,6 +46,8 @@ def test_soak_emits_machine_readable_manifest():
     assert 'self._write_report("start"' in source
     assert 'self._write_report(\n            "sample"' in source
     assert 'self._write_report(\n            "finish"' in source
+    assert "root.mkdir(parents=True, exist_ok=True, mode=0o700)" in source
+    assert "path.chmod(0o600)" in source
 
 
 def test_macos_soak_launcher_collects_system_telemetry():
@@ -59,8 +61,16 @@ def test_macos_soak_launcher_collects_system_telemetry():
         "powermetrics",
         "nettop",
         "vm_stat",
+        "chmod 700",
+        "datetime.now(timezone.utc)",
     ):
         assert expected in source
+
+
+def test_soak_launcher_honors_runner_report_directory():
+    path = os.path.join(os.path.dirname(__file__), "..", "soak_wall.sh")
+    source = open(path, encoding="utf-8").read()
+    assert 'HYPERWALL_SOAK_REPORT_DIR:-$REPORT_ROOT/$RUN_ID' in source
 
 
 def run_all() -> int:

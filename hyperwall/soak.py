@@ -171,9 +171,11 @@ class SoakController(QObject):
             return None
         try:
             root = Path(SOAK_REPORT_DIR).expanduser()
-            root.mkdir(parents=True, exist_ok=True)
+            root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            root.chmod(0o700)
             path = root / f"hyperwall_soak_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
             path.touch(exist_ok=False)
+            path.chmod(0o600)
             return path
         except Exception as e:
             logger.warning("SOAK report disabled: %s", e)
