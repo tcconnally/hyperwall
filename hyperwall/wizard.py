@@ -33,6 +33,7 @@ from .constants import (
     normalize_display_layout,
 )
 from .displays import display_identity, restore_display_settings
+from .wizard_logic import update_last_selected_grid
 
 
 class _GridPreview(QWidget):
@@ -118,6 +119,7 @@ class SetupWizard(QDialog):
             DisplayRole.WALL: (last_rows, last_cols),
             DisplayRole.PREVIEW: (last_preview_rows, last_preview_cols),
         }
+        self._last_selected_grids = dict(self._grid_defaults)
         last_display_roles = last_display_roles or {}
         last_display_layouts = last_display_layouts or {}
         self._saved_display_roles = dict(last_display_roles)
@@ -271,6 +273,7 @@ class SetupWizard(QDialog):
                 lambda _index, item=item, label=label_text: (
                     item.setSelected(True),
                     self.list_disp.setCurrentItem(item),
+                    self._remember_grid_selection(label),
                     self._sync_selected_preview()
                 )
             )
@@ -346,6 +349,14 @@ class SetupWizard(QDialog):
                 )
             self.list_disp.setCurrentRow(initial_index)
         self._sync_selected_preview()
+
+    def _remember_grid_selection(self, label: str) -> None:
+        """Remember the most recent valid grid selected for this role."""
+        role = self._role_boxes[label].currentData()
+        value = self._grid_boxes[label].currentData()
+        self._last_selected_grids = update_last_selected_grid(
+            self._last_selected_grids, role, value
+        )
 
     def _role_changed(self, label: str) -> None:
         """Switch a monitor to its role default without losing its rotation."""
@@ -444,7 +455,10 @@ class SetupWizard(QDialog):
         }
 
     def _grid_for_role(self, role: str) -> tuple[int, int]:
-        """Return the first configured grid for a role, or its fallback."""
+        """Return the most recently selected grid for a role."""
+        remembered = self._last_selected_grids.get(role)
+        if isinstance(remembered, tuple) and len(remembered) == 2:
+            return int(remembered[0]), int(remembered[1])
         fallback = self._grid_defaults.get(role, (2, 2))
         for label, box in self._role_boxes.items():
             if box.currentData() == role:

@@ -22,9 +22,47 @@ except ImportError:
 
 from hyperwall.config import HyperwallConfig
 from hyperwall.constants import DisplayRole
+from hyperwall.wizard_logic import update_last_selected_grid
 
 
 # ── constants / config ──
+
+def test_last_selected_grid_becomes_default_for_that_role():
+    remembered = {
+        DisplayRole.WALL: (2, 2),
+        DisplayRole.PREVIEW: (3, 4),
+    }
+
+    updated = update_last_selected_grid(
+        remembered, DisplayRole.WALL, (5, 6)
+    )
+
+    assert updated == {
+        DisplayRole.WALL: (5, 6),
+        DisplayRole.PREVIEW: (3, 4),
+    }
+
+
+def test_invalid_last_selected_grid_does_not_replace_default():
+    remembered = {
+        DisplayRole.WALL: (2, 2),
+        DisplayRole.PREVIEW: (3, 4),
+    }
+
+    updated = update_last_selected_grid(
+        remembered, DisplayRole.WALL, (0, 7)
+    )
+
+    assert updated == remembered
+
+
+def test_wizard_wires_grid_changes_to_last_selected_defaults():
+    wizard_source = (
+        Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    ).read_text(encoding="utf-8")
+    assert "self._remember_grid_selection(label)" in wizard_source
+    assert "update_last_selected_grid" in wizard_source
+    assert "self._last_selected_grids" in wizard_source
 
 def test_wizard_uses_qt_item_view_selection_enum():
     wizard_source = (
