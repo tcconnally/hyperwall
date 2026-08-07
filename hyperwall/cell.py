@@ -76,6 +76,8 @@ from .constants import (
 from .reliability import (
     apply_jitter,
     classify_playback_fault,
+    PlaybackToken,
+    playback_token_is_current,
     decoder_recovery_plan,
     end_file_reason,
     escalation_plan,
@@ -88,6 +90,8 @@ from .perftrace import traced
 from .urls import tag_names
 
 logger = logging.getLogger("HyperWall")
+
+NativeContext = tuple[int, int, str | None, str | None, str | None]
 
 
 # Glassy translucent control bar, on-brand accent, rounded top. Buttons are
@@ -208,11 +212,12 @@ class VideoCell(QWidget):
     request_prev = pyqtSignal(object)
     request_solo = pyqtSignal(object)
     request_remote_solo = pyqtSignal(object)
-    _sig_eof = pyqtSignal(int, str)
-    _sig_track_done = pyqtSignal(int)
-    _sig_buffering = pyqtSignal(int, bool)
-    _sig_decoder_fault = pyqtSignal(int, str)
-    _sig_transport_fault = pyqtSignal(int, str)
+    _sig_eof = pyqtSignal(object, str)
+    _sig_track_done = pyqtSignal(object)
+    _sig_buffering = pyqtSignal(object, bool)
+    _sig_decoder_fault = pyqtSignal(object, str)
+    _sig_transport_fault = pyqtSignal(object, str)
+    _sig_release_retry = pyqtSignal()
 
     def __init__(self, controller: Any):
         super().__init__()
@@ -229,7 +234,19 @@ class VideoCell(QWidget):
 
         # Internal state
         self._mpv: Any = None          # mpv.MPV instance
+        self._render_context_released = sys.platform != "darwin"
+        self._shutdown_render_release_requested = False
+        self._shutdown_render_release_deadline = 0.0
+        self._render_finalizer_pending = False
+        self._destroy_retry_requested = False
+        self._destroy_retry_deadline = 0.0
+        self._native_finalizer_lock = threading.Lock()
+        self._native_finalizer_records: list[dict[str, Any]] = []
         self._mpv_gen = 0              # generation counter
+        self._native_active_context: NativeContext | None = None
+        self._pending_native_context: NativeContext | None = None
+        self._native_track_observers: list[tuple[str, Any]] = []
+        self._native_playlist_contexts: dict[int, NativeContext] = {}
         self._duration_s = 0.0
         self._play_pos = 0.0
         self._dragging = False
@@ -248,11 +265,14 @@ class VideoCell(QWidget):
         self._force_software_decode = False
         self._decoder_fault_count = 0
         self._decoder_recovery_scheduled = False
+        self._decoder_recovery_token: PlaybackToken | None = None
         self._transport_retry_count = 0
         self._transport_recovery_scheduled = False
+        self._transport_recovery_token: PlaybackToken | None = None
+        self._retry_backoff_token: PlaybackToken | None = None
+        self._park_token: PlaybackToken | None = None
         self._transport_resource_quarantined = False
         self._resource_quarantined = False
-        self._preserve_failure_state_on_next_play = False
         self._closing = False
         # URL state used by the controller's transcode-concurrency gate.
         # Prefetched URLs are kept separate from the currently playing URL so
@@ -263,6 +283,8 @@ class VideoCell(QWidget):
         self._paused = False  # main-thread cache; safe to read cross-thread
         self._last_next_request_ts = 0.0
         self._pending_next = False  # a throttled advance waiting to re-fire
+        self._pending_next_token: PlaybackToken | None = None
+        self._prefetch_request_token: PlaybackToken | None = None
         self._mouse_in_cell = False
         self._emby_session_id: str | None = None
         self._emby_item_id: str | None = None
@@ -272,6 +294,8 @@ class VideoCell(QWidget):
         # the eof handling of every cell's first track (2026-07-11 lockup).
         self._switching = False
         self._track_done = False  # this track already triggered its advance
+        self._eof_reached = False
+        self._cache_buffering_state: Any = "?"
         self._audio_started = False  # True once this track's audio is armed
         # Audio track selection and keyframe relock can block inside libmpv
         # while an HLS demuxer catches up. They must never occupy the Qt GUI
@@ -290,12 +314,14 @@ class VideoCell(QWidget):
         # a track replacement or shutdown.
         self._native_control_tokens: dict[str, int] = {}
         self._native_control_serial = 0
-        self._deferred_play: tuple[dict[str, Any], str] | None = None
+        self._deferred_play: tuple[dict[str, Any], str, bool, Any | None, str | None] | None = None
         self._deferred_play_retry_scheduled = False
         self._track_generation = 0
         # (item, url, emby_session_id) queued on the live mpv playlist so
         # prefetch-playlist warms its demuxer before the current track ends.
         self._prefetched: tuple[dict[str, Any], str, str] | None = None
+        self._prefetch_drop_retry_count = 0
+        self._prefetch_drop_retry_scheduled = False
 
         # Reliability / self-healing (Epic 2)
         self._last_progress_ts = 0.0   # monotonic ts of last time-pos advance
@@ -393,6 +419,9 @@ class VideoCell(QWidget):
         self._sig_transport_fault.connect(
             self._handle_transport_fault, Qt.ConnectionType.QueuedConnection
         )
+        self._sig_release_retry.connect(
+            self._retry_destroy_on_gui, Qt.ConnectionType.QueuedConnection
+        )
 
         # Stall watchdog: polls for silent freezes (frozen frame / wedged
         # decoder / network hang that survives reconnect) which never emit an
@@ -430,7 +459,10 @@ class VideoCell(QWidget):
         next_gen = self._mpv_gen + 1
 
         def _log_handler(level: str, component: str, message: str) -> None:
-            self._mpv_log(level, component, message, next_gen)
+            # mpv log callbacks carry no playlist/resource identity. Keep the
+            # diagnostic log, but never attribute a decoder/transport fault to
+            # whichever track happens to be active when a delayed log arrives.
+            self._mpv_log(level, component, message, next_gen, None, None)
 
         if sys.platform != "darwin":
             # HWND sign-extension fix: mask to 32-bit (Windows only — the
@@ -468,6 +500,7 @@ class VideoCell(QWidget):
             # VO (render.h); attach_mpv creates it now if GL is up, else at
             # initializeGL — which precedes the staggered first play().
             self.video_frame.attach_mpv(m)
+            self._render_context_released = False
 
         # Apply initial state
         try:
@@ -499,35 +532,136 @@ class VideoCell(QWidget):
 
         self._mpv_gen += 1
         gen = self._mpv_gen
+        self._native_active_context = None
+        self._native_playlist_contexts.clear()
+        self._decoder_recovery_scheduled = False
+        self._decoder_recovery_token = None
+        self._transport_recovery_scheduled = False
+        self._transport_recovery_token = None
+
+        @m.event_callback("start-file")
+        def _on_start_file(ev: Any) -> None:
+            if gen != self._mpv_gen:
+                return
+            entry_id = self._native_playlist_entry_id(ev)
+            context = (
+                self._native_playlist_contexts.get(entry_id)
+                if entry_id is not None
+                else None
+            )
+            pending = self._pending_native_context
+            if context is not None:
+                # A delayed event for an earlier playlist entry must never
+                # rebind observers to the replacement track. Reuse of the
+                # same native entry for a new generation is the one exception:
+                # the pending item/URL prove that this is the new admission.
+                if context[1] != self._track_generation:
+                    if (
+                        pending is None
+                        or pending[2:4] != context[2:4]
+                    ):
+                        return
+                    context = pending
+                    if entry_id is not None:
+                        self._native_playlist_contexts[entry_id] = context
+            else:
+                if pending is None or pending[0] != gen:
+                    return
+                context = pending
+                if entry_id is not None:
+                    self._native_playlist_contexts[entry_id] = context
+                    while len(self._native_playlist_contexts) > 32:
+                        self._native_playlist_contexts.pop(
+                            next(iter(self._native_playlist_contexts)),
+                            None,
+                        )
+            self._native_active_context = context
+            if pending is not None and context == pending:
+                self._pending_native_context = None
+            self._switching = False
+            self._eof_reached = False
+            self._bind_native_track_observers(m, gen, context)
 
         @m.event_callback("end-file")
         def _on_end_file(ev: Any) -> None:
-            self._sig_eof.emit(gen, end_file_reason(ev))
-
-        # PRIMARY advance trigger. With keep_open="always" a naturally
-        # finished track fires NO end-file event at all — mpv just pauses on
-        # the last frame and flips eof-reached to True (probed live against
-        # the shipped DLL, 2026-07-12). Advancement wired only to end-file
-        # left every finished clip frozen until (at best) the stall watchdog.
-        @m.property_observer("eof-reached")
-        def _on_eof_reached(_name: str, value: Any) -> None:
-            if value is True and gen == self._mpv_gen:
-                self._sig_track_done.emit(gen)
-
-        # Freeze visibility: mpv pauses itself when the demuxer cache
-        # starves (network stall/reset). Bare emit per the observer rules.
-        @m.property_observer("paused-for-cache")
-        def _on_pfc(_name: str, value: Any) -> None:
-            if value is not None and gen == self._mpv_gen:
-                self._sig_buffering.emit(gen, bool(value))
-
-        @m.property_observer("time-pos")
-        def _on_time(_name: str, value: float | None) -> None:
-            if value is None or gen != self._mpv_gen:
+            context = self._native_context_for_event(ev, gen)
+            if context is None or context[1] != self._track_generation:
                 return
-            # Record forward progress for the stall watchdog. mpv can emit the
-            # same time-pos repeatedly on a frozen stream; only a real advance
-            # counts as "alive".
+            reason = end_file_reason(ev)
+            if reason == "error":
+                error_code = getattr(getattr(ev, "data", None), "error", None)
+                message = f"mpv end-file error: {error_code}"
+                if error_code in {-15, -17, -18}:
+                    self._sig_decoder_fault.emit(context, message)
+                else:
+                    self._sig_transport_fault.emit(context, message)
+            elif reason not in ("stop", "quit", "redirect", "restarted"):
+                self._sig_eof.emit(context, reason)
+
+        # Property observers are bound per start-file in
+        # _bind_native_track_observers(), where each callback closes over the
+        # immutable resource context that produced it.
+        self._mpv = m
+
+    @staticmethod
+    def _native_playlist_entry_id(event: Any) -> int | None:
+        data = getattr(event, "data", event)
+        value = (
+            data.get("playlist_entry_id")
+            if isinstance(data, dict)
+            else getattr(data, "playlist_entry_id", None)
+        )
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _native_context_for_event(
+        self, event: Any, gen: int,
+    ) -> NativeContext | None:
+        entry_id = self._native_playlist_entry_id(event)
+        context = (
+            self._native_playlist_contexts.get(entry_id)
+            if entry_id is not None
+            else None
+        )
+        return context if context is not None and context[0] == gen else None
+
+    def _unbind_native_track_observers(self, mpv_ref: Any | None = None) -> None:
+        mpv_ref = mpv_ref or self._mpv
+        for prop, handler in self._native_track_observers:
+            if mpv_ref is not None:
+                try:
+                    mpv_ref.unobserve_property(prop, handler)
+                except Exception:
+                    pass
+        self._native_track_observers.clear()
+
+    def _bind_native_track_observers(
+        self, mpv_ref: Any, gen: int, context: NativeContext,
+    ) -> None:
+        self._unbind_native_track_observers(mpv_ref)
+
+        def register(prop: str, handler: Any) -> None:
+            try:
+                bound = mpv_ref.property_observer(prop)(handler)
+                self._native_track_observers.append((prop, bound))
+            except Exception as e:
+                logger.debug("Could not bind track observer %s: %s", prop, e)
+
+        def on_eof(_name: str, value: Any) -> None:
+            if value is True and self._native_context_is_current(context):
+                self._eof_reached = True
+                self._sig_track_done.emit(context)
+
+        def on_pfc(_name: str, value: Any) -> None:
+            if value is not None and self._native_context_is_current(context):
+                self._cache_buffering_state = value
+                self._sig_buffering.emit(context, bool(value))
+
+        def on_time(_name: str, value: float | None) -> None:
+            if value is None or not self._native_context_is_current(context):
+                return
             if value > self._last_seen_pos:
                 self._last_seen_pos = value
                 self._last_progress_ts = _time.monotonic()
@@ -537,35 +671,114 @@ class VideoCell(QWidget):
             if self._duration_s > 0 and self._duration_s < 0.5 and value > 0:
                 self._played_anything = True
 
-        @m.property_observer("duration")
-        def _on_dur(_name: str, value: float | None) -> None:
-            if gen != self._mpv_gen:
-                return
-            if value:
+        def on_duration(_name: str, value: float | None) -> None:
+            if value and self._native_context_is_current(context):
                 self._duration_s = float(value)
 
+        register("eof-reached", on_eof)
+        register("paused-for-cache", on_pfc)
+        register("time-pos", on_time)
+        register("duration", on_duration)
         if STATS_ENABLED:
-            for _prop in STATS_COUNTER_PROPS:
-                @m.property_observer(_prop)
-                def _on_counter(
+            for prop in STATS_COUNTER_PROPS:
+                def on_counter(
                     _name: str, value: float | None,
-                    _gen: int = gen, _prop: str = _prop,
+                    prop: str = prop, context: NativeContext = context,
                 ) -> None:
-                    if _gen != self._mpv_gen or value is None:
-                        return
-                    self._stats_current[_prop] = float(value)
-
-            for _prop in STATS_INFO_PROPS:
-                @m.property_observer(_prop)
-                def _on_info(
+                    if value is not None and self._native_context_is_current(context):
+                        self._stats_current[prop] = float(value)
+                register(prop, on_counter)
+            for prop in STATS_INFO_PROPS:
+                def on_info(
                     _name: str, value: Any,
-                    _gen: int = gen, _prop: str = _prop,
+                    prop: str = prop, context: NativeContext = context,
                 ) -> None:
-                    if _gen != self._mpv_gen or value is None:
-                        return
-                    self._stats_info[_prop] = value
+                    if value is not None and self._native_context_is_current(context):
+                        self._stats_info[prop] = value
+                register(prop, on_info)
 
-        self._mpv = m
+    def _native_context_is_current(self, context: NativeContext) -> bool:
+        current_id = (self.current_item or {}).get("Id")
+        active = self._native_active_context
+        pending = self._pending_native_context
+        session_matches = (
+            context[4] is None
+            or context[4] == self._emby_session_id
+            or (
+                active is not None
+                and active[0:2] == context[0:2]
+                and active[4] == context[4]
+            )
+            or (
+                pending is not None
+                and pending[0:2] == context[0:2]
+                and pending[4] == context[4]
+            )
+        )
+        return (
+            not self._closing
+            and self._mpv is not None
+            and context[0] == self._mpv_gen
+            and context[1] == self._track_generation
+            and context[2] == current_id
+            and context[3] == self._stream_url
+            and session_matches
+        )
+
+    def _native_call(
+        self,
+        fn: Any,
+        *,
+        audio_lock_held: bool = False,
+        retry: Any | None = None,
+        valid: Any | None = None,
+    ) -> bool:
+        """Run one native mpv operation under the shared ownership lock."""
+        if self._mpv is None:
+            return False
+        operation_token = self._current_playback_token()
+
+        def _schedule_retry() -> None:
+            if retry is None or self._closing:
+                return
+
+            def _retry_if_current() -> None:
+                if self._closing or self._mpv is None:
+                    return
+                if operation_token is None:
+                    return
+                if not self._playback_token_is_current(operation_token):
+                    return
+                if valid is not None and not valid():
+                    return
+                retry()
+
+            QTimer.singleShot(50, _retry_if_current)
+
+        if audio_lock_held:
+            try:
+                if valid is not None and not valid():
+                    return False
+                fn(self._mpv)
+                return True
+            except Exception as e:
+                logger.debug("native mpv call failed: %s", e)
+                return False
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            _schedule_retry()
+            return False
+        try:
+            if self._mpv is None:
+                return False
+            if valid is not None and not valid():
+                return False
+            fn(self._mpv)
+            return True
+        except Exception as e:
+            logger.debug("native mpv call failed: %s", e)
+            return False
+        finally:
+            self._audio_arm_call_lock.release()
 
     def _stop_mpv_for_render_release(self) -> None:
         """Stop the VO before freeing a macOS libmpv render context."""
@@ -592,15 +805,130 @@ class VideoCell(QWidget):
             except Exception as e:
                 logger.debug("mpv stop before render release failed: %s", e)
 
+    def _release_render_context_on_gui(self) -> bool:
+        """Release the macOS render context only from the widget's thread."""
+        if sys.platform != "darwin" or self._render_context_released:
+            return True
+        if self._mpv is None:
+            self._render_context_released = True
+            return True
+        try:
+            self._stop_mpv_for_render_release()
+            self.video_frame.release()
+            self._render_context_released = True
+            return True
+        except Exception as e:
+            logger.debug("GL render-context release failed: %s", e)
+            return False
+
+    def request_render_release_when_idle(
+        self, shutdown_deadline: float | None = None,
+    ) -> None:
+        """Retry GUI render release after an in-flight native call drains."""
+        if sys.platform != "darwin" or self._render_context_released:
+            return
+        self._shutdown_render_release_requested = True
+        candidate = (
+            shutdown_deadline
+            if shutdown_deadline is not None
+            else _time.monotonic() + 5.0
+        )
+        if self._shutdown_render_release_deadline <= 0.0:
+            self._shutdown_render_release_deadline = candidate
+        else:
+            self._shutdown_render_release_deadline = min(
+                self._shutdown_render_release_deadline, candidate,
+            )
+        QTimer.singleShot(0, self._release_render_context_when_idle)
+
+    def _release_render_context_when_idle(self) -> None:
+        if (
+            not self._shutdown_render_release_requested
+            or self._render_context_released
+            or not self._closing
+        ):
+            return
+        if _time.monotonic() >= self._shutdown_render_release_deadline:
+            logger.error(
+                "Bounded GUI render release deadline reached; retaining "
+                "render finalizer record."
+            )
+            self._render_finalizer_pending = True
+            self._shutdown_render_release_requested = False
+            return
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            QTimer.singleShot(25, self._release_render_context_when_idle)
+            return
+        try:
+            released = self._release_render_context_on_gui()
+        finally:
+            self._audio_arm_call_lock.release()
+        if not released:
+            QTimer.singleShot(25, self._release_render_context_when_idle)
+        else:
+            self._shutdown_render_release_requested = False
+            self._render_finalizer_pending = False
+
+    def has_pending_render_finalizer(self) -> bool:
+        return self._render_finalizer_pending
+
+    def _retry_destroy_on_gui(self) -> None:
+        if not self._destroy_retry_requested:
+            return
+        if self._mpv is None:
+            self._destroy_retry_requested = False
+            return
+        if _time.monotonic() >= self._destroy_retry_deadline:
+            logger.error("Bounded native destroy deadline reached; abandoning safely.")
+            self._destroy_retry_requested = False
+            return
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            QTimer.singleShot(25, self._retry_destroy_on_gui)
+            return
+        remaining = max(
+            0.0, self._destroy_retry_deadline - _time.monotonic(),
+        )
+        try:
+            self._destroy_mpv_impl(wait_s=remaining)
+        finally:
+            self._audio_arm_call_lock.release()
+        if self._mpv is not None:
+            QTimer.singleShot(25, self._retry_destroy_on_gui)
+        else:
+            self._destroy_retry_requested = False
+
+    def has_pending_native_finalizer(self) -> bool:
+        with self._native_finalizer_lock:
+            return bool(self._native_finalizer_records)
+
     def _destroy_mpv(
         self, wait_s: float = 1.5, *, audio_lock_held: bool = False,
+        shutdown_deadline: float | None = None,
     ) -> None:
         """Terminate mpv while serializing against audio-arm native calls."""
         if audio_lock_held:
             self._destroy_mpv_impl(wait_s)
             return
-        with self._audio_arm_call_lock:
+        remaining = (
+            max(0.0, shutdown_deadline - _time.monotonic())
+            if shutdown_deadline is not None
+            else 0.25
+        )
+        if not self._audio_arm_call_lock.acquire(timeout=min(0.25, remaining)):
+            logger.warning("mpv release deferred: native audio call is still busy.")
+            if not self._destroy_retry_requested:
+                self._destroy_retry_requested = True
+                self._destroy_retry_deadline = (
+                    shutdown_deadline
+                    if shutdown_deadline is not None
+                    else _time.monotonic() + 5.0
+                )
+            self._sig_release_retry.emit()
+            return
+        try:
             self._destroy_mpv_impl(wait_s)
+        finally:
+            self._audio_arm_call_lock.release()
 
     def _destroy_mpv_impl(self, wait_s: float = 1.5) -> None:
         """Terminate mpv with a genuinely bounded wait.
@@ -615,12 +943,19 @@ class VideoCell(QWidget):
         if self._mpv is None:
             return
         if STATS_ENABLED:
-            self._flush_stats()
+            self._flush_stats(audio_lock_held=True)
         if sys.platform == "darwin":
-            # Stop the VO while the render context is still alive, then free
-            # the context on the GUI thread before destroying the mpv core.
-            self._stop_mpv_for_render_release()
-            self.video_frame.release()
+            # The render context belongs to the GUI thread. A worker may only
+            # destroy the core after the GUI has released it; otherwise leave
+            # the core abandoned rather than touching Qt/GL off-thread.
+            if not self._render_context_released:
+                if QThread.currentThread() is not self.thread():
+                    logger.warning(
+                        "Skipping off-thread mpv destroy before GUI render release."
+                    )
+                    return
+                if not self._release_render_context_on_gui():
+                    return
         # Silence the handle BEFORE terminate: a wedged teardown gets
         # abandoned on a daemon thread below, and an abandoned-but-alive
         # instance that was audible would keep playing sound that no
@@ -630,28 +965,68 @@ class VideoCell(QWidget):
         except Exception:
             pass
         mpv_ref = self._mpv
+        self._unbind_native_track_observers(mpv_ref)
         self._mpv = None
+        record: dict[str, Any] = {
+            "mpv": mpv_ref,
+            "status": "running",
+            "started_at": _time.monotonic(),
+        }
+        with self._native_finalizer_lock:
+            self._native_finalizer_records.append(record)
 
         def _terminate() -> None:
             try:
                 mpv_ref.terminate()
+                record["status"] = "finished"
             except Exception as e:
+                record["status"] = "failed"
                 logger.debug("mpv terminate raised: %s", e)
+            finally:
+                if record["status"] == "finished":
+                    with self._native_finalizer_lock:
+                        self._native_finalizer_records[:] = [
+                            item for item in self._native_finalizer_records
+                            if item is not record
+                        ]
+                else:
+                    logger.error(
+                        "mpv finalizer did not confirm termination; retaining "
+                        "the durable record."
+                    )
 
         t = threading.Thread(
             target=_terminate, name="mpv-terminate", daemon=True
         )
-        t.start()
+        record["thread"] = t
+        try:
+            t.start()
+        except Exception as e:
+            record["status"] = "failed-to-start"
+            logger.error("mpv finalizer could not start: %s", e)
+            return
         if wait_s > 0:
             t.join(wait_s)
             if t.is_alive():
                 logger.warning(
-                    "mpv terminate still running after %.1fs — abandoning it "
-                    "on a daemon thread.", wait_s,
+                    "mpv terminate still running after %.1fs — retaining "
+                    "durable finalizer record.", wait_s
                 )
 
-    def _flush_stats(self) -> None:
+
+    def _flush_stats(
+        self, *, audio_lock_held: bool = False, timeout_s: float = 0.25,
+    ) -> None:
         """Snapshot current mpv stats into running totals."""
+        if not audio_lock_held:
+            if not self._audio_arm_call_lock.acquire(timeout=max(0.0, timeout_s)):
+                logger.debug("Stats flush skipped while native audio call is busy.")
+                return
+            try:
+                self._flush_stats(audio_lock_held=True, timeout_s=timeout_s)
+            finally:
+                self._audio_arm_call_lock.release()
+            return
         if self._mpv is not None:
             # Stats names are property-only: read via attribute (m[...] is
             # options/<name> and raises), or the snapshot silently no-ops and
@@ -684,8 +1059,10 @@ class VideoCell(QWidget):
         component: str,
         message: str,
         generation: int | None = None,
+        track_generation: int | None = None,
+        resource_context: NativeContext | None = None,
     ) -> None:
-        """Route mpv logs and queue narrow per-cell recovery signals."""
+        """Route mpv logs using the immutable producer-side resource context."""
         text = message.strip()
         if level == "warn" and any(pat in text for pat in MPV_LOG_NOISE):
             return
@@ -698,15 +1075,25 @@ class VideoCell(QWidget):
         if fault == "other" or self._closing:
             return
         gen = self._mpv_gen if generation is None else generation
+        if (
+            resource_context is None
+            or resource_context[0] != gen
+            or (
+                track_generation is not None
+                and resource_context[1] != track_generation
+            )
+        ):
+            return
         try:
             if fault == "decoder":
-                self._sig_decoder_fault.emit(gen, text)
+                self._sig_decoder_fault.emit(resource_context, text)
             elif fault == "transport":
-                self._sig_transport_fault.emit(gen, text)
+                self._sig_transport_fault.emit(resource_context, text)
         except Exception:
             # Log callbacks run on native mpv threads and must never propagate
             # into the callback boundary during QObject teardown.
             pass
+
 
     # ── Qt events ─────────────────────────────────────────────────────────
 
@@ -779,8 +1166,20 @@ class VideoCell(QWidget):
             self._transport_recovery_scheduled = False
             self._transport_resource_quarantined = False
             self._resource_quarantined = False
+        self._pending_next = False
+        self._pending_next_token = None
+        self._prefetch_request_token = None
+        # Recovery timers belong to the exact resource, even when retry
+        # counters are deliberately preserved for a same-URL reload.
+        self._decoder_recovery_scheduled = False
+        self._decoder_recovery_token = None
+        self._transport_recovery_scheduled = False
+        self._transport_recovery_token = None
+        self._retry_backoff_token = None
+        self._park_token = None
         self.current_item = item
         self._track_generation += 1
+        self._eof_reached = False
         self._duration_s = 0.0
         self._play_pos = 0.0
         # Reset stall tracking so the freshly-loaded track gets a full grace
@@ -812,10 +1211,28 @@ class VideoCell(QWidget):
         self._title_overlay.hide()
 
     def _defer_play_until_audio_idle(
-        self, item: dict[str, Any], url: str,
+        self,
+        item: dict[str, Any],
+        url: str,
+        preserve_failure_state: bool = False,
+        on_started: Any | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Retry a transition after a worker releases the native-call lock."""
-        self._deferred_play = (item, url)
+        previous = self._deferred_play
+        superseded = (
+            previous is not None
+            and (
+                previous[0] is not item
+                or previous[1] != url
+                or previous[4] != session_id
+            )
+        )
+        if superseded and previous[3] is not None:
+            previous[3](False)
+        self._deferred_play = (
+            item, url, preserve_failure_state, on_started, session_id,
+        )
         if self._deferred_play_retry_scheduled:
             return
         self._deferred_play_retry_scheduled = True
@@ -825,35 +1242,69 @@ class VideoCell(QWidget):
             pending = self._deferred_play
             if self._closing or pending is None or self._mpv is None:
                 self._deferred_play = None
+                if pending is not None and pending[3] is not None:
+                    pending[3](False)
                 return
             if self._audio_arm_call_lock.locked():
                 self._defer_play_until_audio_idle(*pending)
                 return
             self._deferred_play = None
-            self.play(*pending)
+            self.play(
+                pending[0], pending[1],
+                preserve_failure_state=pending[2],
+                on_started=pending[3],
+                session_id=pending[4],
+            )
 
         QTimer.singleShot(50, _retry)
 
     @traced("cell.play")
-    def play(self, item: dict[str, Any], url: str) -> None:
+    def play(
+        self,
+        item: dict[str, Any],
+        url: str,
+        *,
+        preserve_failure_state: bool = False,
+        on_started: Any | None = None,
+        session_id: str | None = None,
+    ) -> bool:
         if self._closing:
-            return
+            if on_started is not None:
+                on_started(False)
+            return False
         if not self._audio_arm_call_lock.acquire(blocking=False):
-            self._defer_play_until_audio_idle(item, url)
-            return
+            self._defer_play_until_audio_idle(
+                item, url, preserve_failure_state, on_started, session_id,
+            )
+            return True  # admitted for deferred execution
+        started = False
         try:
             # The worker either owns the call lock (in which case we returned
             # above) or is waiting to acquire it. Invalidate it before the
             # replacement and let the generation check discard it afterward.
             self._cancel_audio_arm(timeout_s=0.0)
-            self._play_impl(item, url)
+            started = self._play_impl(
+                item, url, preserve_failure_state=preserve_failure_state,
+                session_id=session_id,
+            )
         finally:
             self._audio_arm_call_lock.release()
+        if on_started is not None:
+            on_started(started)
+        return started
 
-    def _play_impl(self, item: dict[str, Any], url: str) -> None:
+
+    def _play_impl(
+        self,
+        item: dict[str, Any],
+        url: str,
+        *,
+        preserve_failure_state: bool = False,
+        session_id: str | None = None,
+    ) -> bool:
         """Load a video into this cell."""
         if self._closing:
-            return
+            return False
         if self._parked:
             # A manual/web advance during the park cooldown is a deliberate
             # resume: clear the parked state so a failure of THIS load runs
@@ -868,11 +1319,8 @@ class VideoCell(QWidget):
         same_resource = (
             self.current_item is item and self._stream_url == url
         )
-        preserve_failure_state = (
-            self._preserve_failure_state_on_next_play or same_resource
-        )
-        self._preserve_failure_state_on_next_play = False
-        self._prefetched = None
+        preserve_failure_state = preserve_failure_state or same_resource
+        self.drop_prefetch(audio_lock_held=True)
         self._stream_url = url
         self._prefetched_stream_url = None
         self._begin_track(
@@ -908,7 +1356,7 @@ class VideoCell(QWidget):
             # Reusing the instance: loadfile resets mpv's per-file counters,
             # so bank the outgoing track's stats now or they're lost.
             if STATS_ENABLED:
-                self._flush_stats()
+                self._flush_stats(audio_lock_held=True)
             # New track: a re-muted cell drops back to aid=no so the next
             # file starts in the safe lazy-audio state (see _ensure_mpv).
             if self.muted and self._audio_started:
@@ -920,7 +1368,7 @@ class VideoCell(QWidget):
 
         if self._mpv is None:
             logger.error("mpv not initialized — cannot play.")
-            return
+            return False
 
         # _switching suppresses stale events from the track loadfile replaces:
         # the old track's end-file (reason "stop") and any in-flight
@@ -929,9 +1377,21 @@ class VideoCell(QWidget):
         # there latches it forever (watchdog + advance both gated on it).
         self._switching = not need_create
         self._track_done = False
+        self._pending_native_context = (
+            self._mpv_gen,
+            self._track_generation,
+            item.get("Id"),
+            url,
+            session_id or self._emby_session_id,
+        )
         try:
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
+            self._forget_prefetch_after_native_clear(requeue=True)
+            # mpv emits the outgoing end-file callbacks while this command is
+            # still executing. Keep the old native context until command
+            # completion, then bind subsequent callbacks to this new resource.
+            # Keep the old context until the matching start-file event.
             # keep-open pauses the player at EOF and the pause property
             # PERSISTS across loadfile (probed live 2026-07-12) — without an
             # explicit unpause every post-EOF load sits frozen on frame 0.
@@ -942,13 +1402,28 @@ class VideoCell(QWidget):
                 self._enable_audio_track()
         except Exception as e:
             self._switching = False
+            failed_context = (
+                self._pending_native_context
+                or self._native_active_context
+                or (self._mpv_gen, self._track_generation,
+                    item.get("Id"), url, session_id or self._emby_session_id)
+            )
             logger.error("mpv loadfile failed: %s", e)
-            self._sig_eof.emit(self._mpv_gen, "error")
-            return
+            self._sig_eof.emit(failed_context, "error")
+            return False
+        return True
 
     # ── gapless prefetch ──────────────────────────────────────────────────
 
     def prefetch(self, item: dict[str, Any], url: str, session_id: str) -> bool:
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            return False
+        try:
+            return self._prefetch_impl(item, url, session_id)
+        finally:
+            self._audio_arm_call_lock.release()
+
+    def _prefetch_impl(self, item: dict[str, Any], url: str, session_id: str) -> bool:
         """Queue the next item on the live mpv playlist.
 
         With prefetch-playlist=yes, mpv opens the queued entry's demuxer as
@@ -958,27 +1433,109 @@ class VideoCell(QWidget):
         """
         if self._closing or self._mpv is None:
             return False
+        if self._prefetched is not None:
+            if not self.drop_prefetch(audio_lock_held=True):
+                return False
         try:
             self._mpv.command("loadfile", url, "append")
         except Exception as e:
             logger.debug("prefetch append failed: %s", e)
             return False
         self._prefetched = (item, url, session_id)
+        self._prefetched_stream_url = url
         return True
 
-    def drop_prefetch(self) -> None:
-        """Forget the queued entry (e.g. the wall's filter changed and the
-        drawn item may no longer belong). The mpv-side playlist entry is
-        cleared by the next loadfile replace. Keep its URL accounting until
-        that replace happens because mpv may still have the demuxer open."""
+    def _remove_prefetched_playlist_entry(
+        self, *, audio_lock_held: bool = False,
+    ) -> bool:
+        if not audio_lock_held:
+            if not self._audio_arm_call_lock.acquire(blocking=False):
+                return False
+            try:
+                return self._remove_prefetched_playlist_entry(audio_lock_held=True)
+            finally:
+                self._audio_arm_call_lock.release()
+        if self._mpv is None:
+            return True
+        try:
+            current = getattr(self._mpv, "playlist_pos")
+            count = getattr(self._mpv, "playlist_count")
+            if current is None or count is None:
+                return True
+            next_index = int(current) + 1
+            if int(count) > next_index:
+                self._mpv.command("playlist-remove", next_index)
+            return True
+        except Exception as e:
+            logger.debug("Prefetch playlist removal failed: %s", e)
+            return False
+
+    def _forget_prefetch_after_native_clear(self, *, requeue: bool = True) -> None:
+        pending = self._prefetched
         self._prefetched = None
+        self._prefetched_stream_url = None
+        self._prefetch_request_token = None
+        self._prefetch_drop_retry_count = 0
+        if pending is None:
+            return
+        item, _url, session_id = pending
+        if requeue:
+            try:
+                self.controller.playlists.push_front(
+                    self.controller._cell_group(self), item,
+                )
+            except Exception as e:
+                logger.debug("Prefetch item could not be requeued: %s", e)
+        try:
+            self.controller.stop_emby_session(item.get("Id"), session_id)
+        except Exception as e:
+            logger.debug("Prefetch session stop could not be queued: %s", e)
+
+    def _schedule_prefetch_drop_retry(self, *, requeue: bool) -> None:
+        if self._closing or self._prefetch_drop_retry_scheduled:
+            return
+        if self._prefetch_drop_retry_count >= 3:
+            logger.error("Prefetch cleanup remains pending after bounded retries.")
+            return
+        token = self._current_playback_token()
+        self._prefetch_drop_retry_count += 1
+        self._prefetch_drop_retry_scheduled = True
+
+        def _retry() -> None:
+            self._prefetch_drop_retry_scheduled = False
+            if (
+                self._closing
+                or token is None
+                or not self._playback_token_is_current(token)
+            ):
+                return
+            self.drop_prefetch(requeue=requeue)
+
+        QTimer.singleShot(50, _retry)
+
+    def drop_prefetch(
+        self,
+        *,
+        audio_lock_held: bool = False,
+        requeue: bool = True,
+    ) -> bool:
+        """Drop a queued resource transactionally."""
+        if self._prefetched is None:
+            return True
+        removed = self._remove_prefetched_playlist_entry(
+            audio_lock_held=audio_lock_held,
+        )
+        if not removed:
+            self._schedule_prefetch_drop_retry(requeue=requeue)
+            return False
+        self._forget_prefetch_after_native_clear(requeue=requeue)
+        return True
 
     @traced("cell.advance_to_prefetched")
     def advance_to_prefetched(self) -> bool:
         if self._closing or self._prefetched is None or self._mpv is None:
             return False
         if not self._audio_arm_call_lock.acquire(blocking=False):
-            self._prefetched = None
             return False
         try:
             self._cancel_audio_arm(timeout_s=0.0)
@@ -999,11 +1556,10 @@ class VideoCell(QWidget):
         if self._prefetched is None or self._mpv is None:
             return False
         item, _url, sid = self._prefetched
-        self._prefetched = None
-        self._stream_url = _url
-        self._prefetched_stream_url = None
+        old_item_id = self._emby_item_id
+        old_session_id = self._emby_session_id
         if STATS_ENABLED:
-            self._flush_stats()
+            self._flush_stats(audio_lock_held=True)
         if self.muted and self._audio_started:
             try:
                 self._mpv["aid"] = "no"
@@ -1012,6 +1568,13 @@ class VideoCell(QWidget):
                 logger.debug("mpv: failed to re-disable aid: %s", e)
         self._switching = True
         self._track_done = False
+        self._pending_native_context = (
+            self._mpv_gen,
+            self._track_generation + 1,
+            item.get("Id"),
+            _url,
+            sid,
+        )
         try:
             self._mpv.command("playlist-next")
             self._mpv["pause"] = False
@@ -1019,15 +1582,22 @@ class VideoCell(QWidget):
             self.btn_play.setText(_G_PAUSE)
         except Exception as e:
             self._switching = False
+            self._pending_native_context = None
             logger.warning(
                 "Prefetched advance failed (%s) — falling back to reload.", e
             )
             return False
+        self._prefetched = None
+        self._stream_url = _url
+        self._prefetched_stream_url = None
+        self._prefetch_request_token = None
         self._begin_track(item)
         if not self.muted and not self._audio_started:
             self._enable_audio_track()
         self._emby_session_id = sid
         self._emby_item_id = item["Id"]
+        if old_item_id and old_session_id and old_session_id != sid:
+            self.controller.stop_emby_session(old_item_id, old_session_id)
         return True
 
     def _stop_qt_timers(self) -> None:
@@ -1056,17 +1626,30 @@ class VideoCell(QWidget):
         """Quiesce GUI-owned state before mpv is released off-thread."""
         self._closing = True
         self._pending_next = False
+        self._pending_next_token = None
+        pending_play = self._deferred_play
         self._deferred_play = None
-        self._prefetched = None
-        self._prefetched_stream_url = None
+        if pending_play is not None and pending_play[3] is not None:
+            pending_play[3](False)
+        self.drop_prefetch(requeue=False)
         self._cancel_audio_arm(timeout_s=0.0)
         self._stop_qt_timers()
 
-    def release(self) -> None:
+    def release(
+        self, *, wait_s: float | None = None,
+        shutdown_deadline: float | None = None,
+    ) -> None:
         """Release mpv after GUI-owned state has been quiesced."""
         if QThread.currentThread() is self.thread() and not self._closing:
             self.prepare_shutdown()
-        self._destroy_mpv()
+        if wait_s is None:
+            wait_s = (
+                max(0.0, shutdown_deadline - _time.monotonic())
+                if shutdown_deadline is not None else 1.5
+            )
+        self._destroy_mpv(
+            wait_s=wait_s, shutdown_deadline=shutdown_deadline,
+        )
 
     # ── controls UI ───────────────────────────────────────────────────────
 
@@ -1302,6 +1885,14 @@ class VideoCell(QWidget):
             self.seek_slider.setValue(int(pos / dur * 1000))
         self.lbl_time.setText(f"{self._fmt_time(pos)} / {self._fmt_time(dur)}")
 
+    def _pause_for_seek_native(self) -> None:
+        if not self._dragging or self._closing:
+            return
+        self._native_call(
+            lambda mpv: mpv.__setitem__("pause", True),
+            retry=self._pause_for_seek_native,
+        )
+
     @traced("cell._seek_press")
     def _seek_press(self) -> None:
         self._dragging = True
@@ -1310,26 +1901,42 @@ class VideoCell(QWidget):
         # unconditionally resume, silently un-pausing a deliberately
         # paused cell (2026-07-13 audit).
         self._paused_before_seek = self._paused
-        if self._mpv is not None:
-            try:
-                self._mpv["pause"] = True
-                self._paused = True
-            except Exception:
-                pass
+        # _native_call serializes this write with _audio_arm_call_lock.
+        self._paused = True
+        self._native_call(
+            lambda mpv: mpv.__setitem__("pause", True),
+            retry=self._pause_for_seek_native,
+        )
 
     @traced("cell._seek_release")
-    def _seek_release(self) -> None:
+    def _seek_release(self, token: PlaybackToken | None = None) -> None:
+        if self._closing:
+            return
+        if token is None:
+            token = self._current_playback_token()
+            if token is None:
+                self._dragging = False
+                return
+        if not self._playback_token_is_current(token):
+            self._dragging = False
+            return
         if not self._audio_arm_call_lock.acquire(blocking=False):
             # The audio-arm worker owns the native handle. Let it finish its
             # aid/seek pair, then retry the user's seek instead of allowing a
             # stale cached-position seek to overwrite current UI intent.
-            QTimer.singleShot(50, self._seek_release)
+            QTimer.singleShot(50, lambda token=token: self._seek_release(token))
             return
         try:
             # Invalidate any worker that has not entered the native section
             # yet. The ownership lock prevents one that is already inside from
             # racing this handler.
             self._cancel_audio_arm(timeout_s=0.0)
+            if (
+                token is not None
+                and not self._playback_token_is_current(token)
+            ):
+                self._dragging = False
+                return
             if self._mpv is not None and self._duration_s > 0:
                 try:
                     # 0.98, not 0.90: the property-driven EOF advance makes
@@ -1364,27 +1971,52 @@ class VideoCell(QWidget):
         full-pill update through here."""
         self.controls_frame.update()
 
+    def _set_pause_from_controller(self, paused: bool) -> None:
+        if self._closing or self._mpv is None:
+            return
+        self._paused = paused
+        self.set_paused_ui(paused)
+        self._native_call(
+            lambda mpv: mpv.__setitem__("pause", paused),
+            retry=lambda: self._set_pause_from_controller(paused),
+        )
+
+    def _run_native_commands(self, *commands: tuple[Any, ...]) -> bool:
+        if self._closing or self._mpv is None:
+            return False
+
+        def _run(mpv: Any) -> None:
+            for command in commands:
+                mpv.command(*command)
+
+        return self._native_call(
+            _run,
+            retry=lambda: self._run_native_commands(*commands),
+        )
+
     @traced("cell._toggle_play")
     def _toggle_play(self) -> None:
         if self._mpv is None:
             return
-        try:
-            new_pause = not bool(self._mpv["pause"])
-            self._mpv["pause"] = new_pause
+
+        def _toggle(mpv: Any) -> None:
+            new_pause = not bool(mpv["pause"])
+            mpv["pause"] = new_pause
             self._paused = new_pause
             self.btn_play.setText(_G_PLAY if new_pause else _G_PAUSE)
             self._nudge_pill()
-        except Exception as e:
-            logger.debug("toggle_play failed: %s", e)
+
+        self._native_call(_toggle, retry=self._toggle_play)
 
     def _toggle_loop(self) -> None:
         self.looping = self.btn_loop.isChecked()
         self._nudge_pill()
         if self._mpv is not None:
-            try:
-                self._mpv["loop-file"] = "inf" if self.looping else "no"
-            except Exception as e:
-                logger.debug("toggle_loop failed: %s", e)
+            value = "inf" if self.looping else "no"
+            self._native_call(
+                lambda mpv: mpv.__setitem__("loop-file", value),
+                retry=self._toggle_loop,
+            )
 
     def _audio_arm_is_current(
         self, token: int, mpv_ref: Any, track_generation: int,
@@ -1392,7 +2024,8 @@ class VideoCell(QWidget):
         """Return whether an audio-arm worker may still touch its mpv."""
         with self._audio_arm_lock:
             return (
-                self._audio_arm_inflight_token == token
+                not self._closing
+                and self._audio_arm_inflight_token == token
                 and self._audio_arm_token == token
                 and self._mpv is mpv_ref
                 and self._track_generation == track_generation
@@ -1424,7 +2057,7 @@ class VideoCell(QWidget):
     def _start_audio_arm(self) -> None:
         """Submit the potentially blocking aid/seek sequence to a daemon."""
         mpv_ref = self._mpv
-        if mpv_ref is None:
+        if self._closing or mpv_ref is None:
             return
         with self._audio_arm_lock:
             if self._audio_arm_inflight_token is not None:
@@ -1486,7 +2119,10 @@ class VideoCell(QWidget):
                 ):
                     return
                 with self._audio_arm_lock:
-                    if self._audio_arm_inflight_token == token:
+                    if (
+                        not self._closing
+                        and self._audio_arm_inflight_token == token
+                    ):
                         self._audio_started = True
             logger.info(
                 "AUDIO arm: aid=%.0fms seek=%.0fms cached-pos=%s",
@@ -1557,9 +2193,37 @@ class VideoCell(QWidget):
         except Exception as e:
             logger.debug("Native %s write failed: %s", name, e)
 
-    def _enable_audio_track_sync(self) -> None:
+    def _enable_audio_track_sync(
+        self, token: PlaybackToken | None = None,
+    ) -> None:
+        if self._closing:
+            return
+        if token is None:
+            token = self._current_playback_token()
+            if token is None:
+                return
+        if not self._playback_token_is_current(token):
+            return
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            QTimer.singleShot(
+                50, lambda token=token: self._enable_audio_track_sync(token),
+            )
+            return
+        try:
+            self._enable_audio_track_sync_locked(token)
+        finally:
+            self._audio_arm_call_lock.release()
+
+    def _enable_audio_track_sync_locked(
+        self, token: PlaybackToken | None = None,
+    ) -> None:
         """Arm audio synchronously on platforms without the macOS GUI stall."""
-        if self._audio_started or self._mpv is None:
+        if (
+            self._closing
+            or self._audio_started
+            or self._mpv is None
+            or (token is not None and not self._playback_token_is_current(token))
+        ):
             return
         try:
             t0 = _time.perf_counter()
@@ -1588,7 +2252,7 @@ class VideoCell(QWidget):
         and Linux retain the established synchronous behavior.
         """
         if sys.platform != "darwin":
-            self._enable_audio_track_sync()
+            self._enable_audio_track_sync(self._current_playback_token())
             return
         if self._audio_started or self._mpv is None:
             return
@@ -1610,6 +2274,37 @@ class VideoCell(QWidget):
         st.polish(self.btn_mute)
         self._nudge_pill()
 
+    def _write_native_property_latest(self, name: str, value: Any) -> None:
+        mpv_ref = self._mpv
+        if mpv_ref is None or self._closing:
+            return
+        with self._audio_arm_lock:
+            self._native_control_serial += 1
+            token = self._native_control_serial
+            self._native_control_tokens[name] = token
+            track_generation = self._track_generation
+
+        def _attempt() -> None:
+            if self._closing:
+                return
+            if not self._audio_arm_call_lock.acquire(blocking=False):
+                QTimer.singleShot(50, _attempt)
+                return
+            try:
+                if self._native_control_is_current(
+                    name, token, mpv_ref, track_generation,
+                ):
+                    mpv_ref[name] = value
+            except Exception as e:
+                logger.debug("Native %s write failed: %s", name, e)
+            finally:
+                self._audio_arm_call_lock.release()
+
+        _attempt()
+
+    def _write_mute_native(self, muted: bool) -> None:
+        self._write_native_property_latest("mute", muted)
+
     def _apply_mute(self, muted: bool) -> None:
         """Single writer for the mute state itself (cache + mpv + UI).
 
@@ -1622,10 +2317,7 @@ class VideoCell(QWidget):
             if sys.platform == "darwin":
                 self._queue_mute_native(muted)
             else:
-                try:
-                    self._mpv["mute"] = muted
-                except Exception as e:
-                    logger.debug("apply_mute failed: %s", e)
+                self._write_mute_native(muted)
         self._sync_mute_ui(muted)
 
     @traced("cell._toggle_mute")
@@ -1643,6 +2335,9 @@ class VideoCell(QWidget):
         if self.vol_slider.value() >= 10:
             self._last_vol = self.vol_slider.value()
 
+    def _write_volume_native(self, value: float) -> None:
+        self._write_native_property_latest("volume", value)
+
     def _vol_changed(self, val: int) -> None:
         # Remember deliberate resting volumes only. Mid-drag samples must
         # not count: dragging DOWN from 70 sweeps every value ≥10 past this
@@ -1657,10 +2352,7 @@ class VideoCell(QWidget):
             if sys.platform == "darwin":
                 self._queue_native_property("volume", float(val))
             else:
-                try:
-                    self._mpv["volume"] = float(val)
-                except Exception as e:
-                    logger.debug("vol_changed failed: %s", e)
+                self._write_volume_native(float(val))
         if val > 0 and self.muted:
             self._apply_mute(False)   # drag up from silence = unmute
         elif val == 0 and not self.muted:
@@ -1703,25 +2395,51 @@ class VideoCell(QWidget):
         value = str(opts.get("hwdec", "")).strip().lower()
         return value not in {"", "no", "none", "software", "false", "0"}
 
-    def _handle_decoder_fault(self, gen: int, _message: str) -> None:
+    def _current_playback_token(self) -> PlaybackToken | None:
+        if self.current_item is None or self._stream_url is None:
+            return None
+        return PlaybackToken(
+            self._mpv_gen,
+            self._track_generation,
+            self.current_item.get("Id"),
+            self._stream_url,
+        )
+
+    def _playback_token_is_current(self, token: PlaybackToken) -> bool:
+        return playback_token_is_current(
+            token,
+            mpv_generation=self._mpv_gen,
+            track_generation=self._track_generation,
+            item_id=(self.current_item or {}).get("Id"),
+            stream_url=self._stream_url,
+            closing=self._closing,
+        )
+
+    def _handle_decoder_fault(
+        self, context: NativeContext, _message: str,
+    ) -> None:
         """Recover one cell from a decoder/backend fault on the GUI thread."""
-        if self._closing or gen != self._mpv_gen or self._mpv is None:
+        if (
+            self._closing
+            or self._mpv is None
+            or not self._native_context_is_current(context)
+        ):
+            return
+        token = self._current_playback_token()
+        if token is None or self._decoder_recovery_scheduled:
+            return
+        if self._resource_quarantined:
             return
         self._decoder_fault_count += 1
-        if self._decoder_recovery_scheduled:
-            return
         plan = decoder_recovery_plan(
             self._decoder_fault_count,
             hardware_decode=self._hardware_decode_enabled(),
             max_faults=DECODER_FAULT_MAX,
         )
-        if self._closing or self._resource_quarantined:
-            return
         if plan["action"] == "skip":
             logger.error(
                 "Decoder recovery exhausted on cell — quarantining current resource."
             )
-            self._decoder_recovery_scheduled = False
             self._resource_quarantined = True
             self._track_done = True
             self._request_next_throttled(False)
@@ -1733,64 +2451,86 @@ class VideoCell(QWidget):
             )
         else:
             logger.warning("Software decoder fault on cell — recreating demuxer.")
-        if not self.current_item or not self._stream_url:
-            self._on_error()
-            return
         self._decoder_recovery_scheduled = True
-        QTimer.singleShot(0, self._recover_current_decoder)
+        self._decoder_recovery_token = token
+        QTimer.singleShot(
+            0, lambda token=token: self._recover_current_decoder(token),
+        )
 
-    def _recover_current_decoder(self) -> None:
-        self._decoder_recovery_scheduled = False
-        if self._closing or self.current_item is None or not self._stream_url:
+    def _recover_current_decoder(self, token: PlaybackToken) -> None:
+        if self._decoder_recovery_token == token:
+            self._decoder_recovery_scheduled = False
+            self._decoder_recovery_token = None
+        if not self._playback_token_is_current(token):
             return
-        self.play(self.current_item, self._stream_url)
+        self.play(
+            self.current_item, token.stream_url,
+            preserve_failure_state=True,
+        )
 
-    def _handle_transport_fault(self, gen: int, _message: str) -> None:
+    def _handle_transport_fault(
+        self, context: NativeContext, _message: str,
+    ) -> None:
         """Retry a failed resource once, then advance without escalation."""
-        if self._closing or gen != self._mpv_gen or self._mpv is None:
+        if (
+            self._closing
+            or self._mpv is None
+            or not self._native_context_is_current(context)
+        ):
             return
-        if self._closing or self._resource_quarantined:
+        if self._resource_quarantined or self._transport_recovery_scheduled:
             return
-        if self._transport_recovery_scheduled:
+        token = self._current_playback_token()
+        if token is None:
             return
         self._transport_retry_count += 1
-        self._prefetched = None
-        self._prefetched_stream_url = None
         plan = transport_recovery_plan(
             self._transport_retry_count, max_attempts=TRANSPORT_RETRY_MAX,
         )
         if plan["action"] == "retry":
+            self.drop_prefetch()
             self._transport_recovery_scheduled = True
+            self._transport_recovery_token = token
             logger.warning(
                 "Transport fault on cell — retrying current resource once."
             )
-            delay_ms = int(str(plan["delay_s"])) * 1000
-            QTimer.singleShot(delay_ms, self._retry_transport_resource)
+            delay_ms = int(float(str(plan["delay_s"])) * 1000)
+            QTimer.singleShot(
+                delay_ms,
+                lambda token=token: self._retry_transport_resource(token),
+            )
             return
         logger.error(
             "Transport recovery exhausted on cell — skipping current resource."
         )
-        self._transport_recovery_scheduled = False
         self._transport_resource_quarantined = True
         self._resource_quarantined = True
         self._track_done = True
         self._request_next_throttled(False)
 
-    def _retry_transport_resource(self) -> None:
-        self._transport_recovery_scheduled = False
-        if self._closing or self._resource_quarantined or self.current_item is None:
+    def _retry_transport_resource(self, token: PlaybackToken) -> None:
+        if self._transport_recovery_token == token:
+            self._transport_recovery_scheduled = False
+            self._transport_recovery_token = None
+        if not self._playback_token_is_current(token):
             return
-        self._request_next_throttled(True)
+        self._request_next_throttled(True, token=token)
 
 
-    def _handle_buffering(self, gen: int, buffering: bool) -> None:
+    def _handle_buffering(
+        self, context: NativeContext, buffering: bool,
+    ) -> None:
         """GUI-thread side of the paused-for-cache observer.
 
         Turns invisible network-starvation freezes into: a pulsing
         BUFFERING card on the cell, a WARNING log with the measured
         duration, and per-cell counters that ride the stats dump.
         """
-        if gen != self._mpv_gen or self._mpv is None:
+        if (
+            self._closing
+            or self._mpv is None
+            or not self._native_context_is_current(context)
+        ):
             return
         if buffering:
             if not self._played_anything:
@@ -1816,10 +2556,7 @@ class VideoCell(QWidget):
                 dur = _time.monotonic() - self._freeze_t0
                 self._freeze_total_s += dur
                 self._freeze_t0 = 0.0
-                try:
-                    state = self._mpv.cache_buffering_state
-                except Exception:
-                    state = "?"
+                state = self._cache_buffering_state
                 tag = (
                     "post-seek refill"
                     if self._last_seek_ts > 0
@@ -1846,8 +2583,23 @@ class VideoCell(QWidget):
             )
         self._buffering_card = False
 
+    def _loop_current_track(self, token: PlaybackToken) -> None:
+        if not self._playback_token_is_current(token):
+            return
+
+        def _loop(mpv: Any) -> None:
+            mpv.seek(0, "absolute")
+            mpv["pause"] = False
+            self._paused = False
+
+        self._native_call(
+            _loop,
+            retry=lambda: self._loop_current_track(token),
+            valid=lambda: self._playback_token_is_current(token),
+        )
+
     @traced("cell._handle_track_done")
-    def _handle_track_done(self, gen: int) -> None:
+    def _handle_track_done(self, context: NativeContext) -> None:
         """A track finished naturally (eof-reached flipped True).
 
         This is the wall's primary advance path: with keep_open="always" mpv
@@ -1857,7 +2609,11 @@ class VideoCell(QWidget):
         a stale signal from a track that play() has since replaced must not
         advance the new one.
         """
-        if gen != self._mpv_gen or self._mpv is None:
+        if (
+            self._closing
+            or self._mpv is None
+            or not self._native_context_is_current(context)
+        ):
             return
         if self._paused:
             # Explicitly paused (global pause / user) — don't yank the wall
@@ -1866,29 +2622,18 @@ class VideoCell(QWidget):
             return
         if self._switching or self._track_done:
             return
-        try:
-            # Attribute access, NOT item access: python-mpv's m[...] reads
-            # options/<name>, and eof-reached is property-only, so the old
-            # m["eof-reached"] raised on every call and this guard silently
-            # swallowed EVERY natural-EOF advance (cell froze on the last
-            # frame until the stall watchdog "rescued" it as an error).
-            if self._mpv.eof_reached is not True:
-                return  # stale — the track this signal was about is gone
-        except Exception:
-            return
+        if not self._eof_reached:
+            return  # stale — the track this signal was about is gone
         if not self._played_anything:
             logger.warning("Track ended before first frame — treating as error.")
             self._track_done = True
             self._on_error()
             return
         if self.looping:
-            try:
-                self._mpv.seek(0, "absolute")
-                self._mpv["pause"] = False
-                self._paused = False
-                return
-            except Exception as e:
-                logger.warning("Loop seek failed: %s", e)
+            token = self._current_playback_token()
+            if token is not None:
+                self._loop_current_track(token)
+            return
         self._track_done = True
         logger.info(
             "Track finished: %s — advancing.",
@@ -1896,8 +2641,16 @@ class VideoCell(QWidget):
         )
         self._request_next_throttled(False)
 
-    def _handle_eof(self, gen: int, reason: str) -> None:
-        if gen != self._mpv_gen:
+    def _handle_eof(
+        self, context: NativeContext, reason: str,
+    ) -> None:
+        if self._closing or context[0] != self._mpv_gen:
+            return
+        if context[1] != self._track_generation:
+            if reason in ("stop", "quit", "redirect", "restarted"):
+                self._switching = False
+            return
+        if not self._native_context_is_current(context):
             return
         if reason in ("stop", "quit", "redirect", "restarted"):
             # "stop" is the stale end-file from a loadfile replace (and quit/
@@ -1910,6 +2663,8 @@ class VideoCell(QWidget):
             # Clear the switching guard here too: on the error path it would
             # leak True, gating the new track's eof handling forever.
             self._switching = False
+            if self._pending_native_context == context:
+                self._pending_native_context = None
             self._on_error()
             return
         # reason == "eof": under keep_open="always" this doesn't fire at
@@ -1925,18 +2680,21 @@ class VideoCell(QWidget):
             self._on_error()
             return
         if self.looping and self._mpv is not None:
-            try:
-                self._mpv.seek(0, "absolute")
-                self._mpv["pause"] = False
-                self._paused = False
-            except Exception as e:
-                logger.warning("Loop seek failed: %s", e)
-                self._request_next_throttled(False)
+            token = self._current_playback_token()
+            if token is not None:
+                self._loop_current_track(token)
         else:
             self._track_done = True
             self._request_next_throttled(False)
 
-    def _request_next_throttled(self, is_retry: bool) -> None:
+    def _request_next_throttled(
+        self,
+        is_retry: bool,
+        *,
+        token: PlaybackToken | None = None,
+    ) -> None:
+        if self._closing or (token is not None and not self._playback_token_is_current(token)):
+            return
         MIN_INTERVAL = 0.75
         now = _time.monotonic()
         elapsed = now - self._last_next_request_ts
@@ -1945,22 +2703,36 @@ class VideoCell(QWidget):
             # the cell frozen on its last frame until the stall watchdog
             # rescued it 20s later. One pending advance at a time.
             if not self._pending_next:
+                token = self._current_playback_token()
+                if token is None:
+                    return
                 self._pending_next = True
+                self._pending_next_token = token
                 delay_ms = int((MIN_INTERVAL - elapsed) * 1000) + 50
                 logger.warning(
                     "next_video throttled (last fire %.2fs ago) — "
                     "deferring %dms", elapsed, delay_ms,
                 )
-                QTimer.singleShot(delay_ms, self._fire_pending_next)
+                QTimer.singleShot(
+                    delay_ms,
+                    lambda token=token: self._fire_pending_next(token),
+                )
             return
         self._pending_next = False
+        self._pending_next_token = None
         self._last_next_request_ts = now
         self.request_next.emit(self, is_retry)
 
-    def _fire_pending_next(self) -> None:
-        if self._closing or not self._pending_next:
+    def _fire_pending_next(self, token: PlaybackToken) -> None:
+        if (
+            self._closing
+            or not self._pending_next
+            or self._pending_next_token != token
+            or not self._playback_token_is_current(token)
+        ):
             return
         self._pending_next = False
+        self._pending_next_token = None
         self._request_next_throttled(False)
 
     def _check_stall(self) -> None:
@@ -2017,14 +2789,24 @@ class VideoCell(QWidget):
             self._show_title_overlay(
                 "Media unavailable — retrying soon…", sticky=True,
             )
-            QTimer.singleShot(CRASH_LOOP_COOLDOWN_S * 1000, self._unpark)
+            token = self._current_playback_token()
+            self._park_token = token
+            QTimer.singleShot(
+                CRASH_LOOP_COOLDOWN_S * 1000,
+                lambda token=token: self._unpark(token),
+            )
             return True
         return False
 
-    def _unpark(self) -> None:
+    def _unpark(self, token: PlaybackToken | None = None) -> None:
         """Leave the parked state after the cooldown and try to resume."""
+        if token is not None and self._park_token != token:
+            return
         if self._closing or not self._parked:
             return
+        if token is not None and not self._playback_token_is_current(token):
+            return
+        self._park_token = None
         self._parked = False
         self._failure_ts.clear()
         self._retry_count = 0
@@ -2052,6 +2834,10 @@ class VideoCell(QWidget):
             outage = self.controller.register_failure(self)
         except Exception as e:
             logger.debug("register_failure failed: %s", e)
+        token = self._current_playback_token()
+        if token is None:
+            return
+        self._retry_backoff_token = token
         self._retry_count += 1
         logger.warning(
             "Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES
@@ -2064,7 +2850,9 @@ class VideoCell(QWidget):
             )
             QTimer.singleShot(
                 int(delay_s * 1000),
-                lambda: self._request_next_throttled(True),
+                lambda token=token: self._request_next_throttled(
+                    True, token=token,
+                ),
             )
             return
         plan = escalation_plan(self._retry_count, MAX_RETRIES)
@@ -2078,7 +2866,9 @@ class VideoCell(QWidget):
             delay_s = apply_jitter(plan["delay_s"], random.random())
             QTimer.singleShot(
                 int(delay_s * 1000),
-                lambda: self._request_next_throttled(True),
+                lambda token=token: self._request_next_throttled(
+                    True, token=token,
+                ),
             )
         else:
             logger.error("Max retries reached — skipping.")

@@ -443,12 +443,13 @@ def apply_cache_budget(
     from .reliability import scale_demuxer_mb, scale_readahead_s
 
     out = dict(opts)
-    if platform is None or platform == sys.platform:
+    if platform is None and physical_memory_mb is None:
         per_cell_mb = DEMUXER_PER_CELL_MB
         total_budget_mb = CACHE_BUDGET_MB
     else:
+        target_platform = sys.platform if platform is None else platform
         per_cell_mb, total_budget_mb = cache_defaults_for_platform(
-            platform, physical_memory_mb,
+            target_platform, physical_memory_mb,
         )
     mb = scale_demuxer_mb(
         n_cells,

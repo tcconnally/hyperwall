@@ -97,7 +97,7 @@ def test_paused_cell_does_not_auto_advance_at_eof():
     cell._played_anything = True
     cell._paused = True
     cell._mpv.props["eof-reached"] = True
-    cell._handle_track_done(cell._mpv_gen)
+    cell._handle_track_done((cell._mpv_gen, cell._track_generation, None, cell._stream_url, None))
     _app.processEvents()
     assert not fired, "paused cell must not auto-advance"
 

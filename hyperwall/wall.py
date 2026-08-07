@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time as _time
 import uuid
 from collections import deque
@@ -59,6 +60,7 @@ from .reliability import (
     allow_transcode_prefetch,
     gate_auto_transcode,
     is_systemic_outage,
+    PlaybackToken,
     transcode_load_count,
 )
 from .urls import build_stream_url, tag_names
@@ -217,6 +219,17 @@ class WallController:
         self._api_pool_closed = False
         self._cleaned_up = False
         self._shutdown_requested = False
+        self._session_registry: dict[str, str] = {}
+        self._session_registry_limit = max(
+            64, len(screens) * max(1, grid_rows * grid_cols) * 8,
+        )
+        self._session_cleanup_limit = max(
+            128, self._session_registry_limit * 2,
+        )
+        self._session_cleanup_ledger: dict[str, str] = {}
+        self._session_lock = threading.Lock()
+        self._session_stop_inflight: set[str] = set()
+        self._stopped_session_ids: deque[str] = deque(maxlen=4096)
 
         # Cross-thread → GUI-thread marshaling (used by the web remote).
         # Must be constructed on the main thread so queued calls land here.
@@ -704,32 +717,137 @@ class WallController:
 
     # ── session management ────────────────────────────────────────────────
 
+    def _retain_session_cleanup_locked(
+        self, item_id: str, session_id: str,
+    ) -> None:
+        ledger = self._session_cleanup_ledger
+        if session_id in self._session_registry:
+            # The registry itself is the durable record for an active session.
+            return
+        if session_id in ledger:
+            ledger[session_id] = item_id
+            return
+        if len(ledger) >= self._session_cleanup_limit:
+            logger.critical(
+                "Session cleanup capacity exhausted; admission must remain "
+                "closed until an unresolved stop succeeds."
+            )
+            return
+        ledger[session_id] = item_id
+
+    def _session_admission_available(self) -> bool:
+        with self._session_lock:
+            return (
+                len(self._session_registry)
+                + len(self._session_cleanup_ledger)
+                < self._session_cleanup_limit
+            )
+
+    def _register_session(self, item_id: str | None, session_id: str | None) -> bool:
+        if not item_id or not session_id:
+            return False
+        evicted: list[tuple[str, str]] = []
+        with self._session_lock:
+            is_new = (
+                session_id not in self._session_registry
+                and session_id not in self._session_cleanup_ledger
+            )
+            if (
+                is_new
+                and len(self._session_registry)
+                + len(self._session_cleanup_ledger)
+                >= self._session_cleanup_limit
+            ):
+                logger.error("Session admission closed at cleanup capacity.")
+                return False
+            self._session_registry[session_id] = item_id
+            self._session_cleanup_ledger.pop(session_id, None)
+            try:
+                self._stopped_session_ids.remove(session_id)
+            except ValueError:
+                pass
+            limit = getattr(self, "_session_registry_limit", 4096)
+            while len(self._session_registry) > limit:
+                old_session, old_item = next(iter(self._session_registry.items()))
+                self._session_registry.pop(old_session, None)
+                self._retain_session_cleanup_locked(old_item, old_session)
+                evicted.append((old_item, old_session))
+        for old_item, old_session in evicted:
+            logger.error(
+                "Session registry bound reached; forcing cleanup for %s",
+                old_session[:8],
+            )
+            self.stop_emby_session(old_item, old_session)
+        return True
+
     def stop_emby_session(
         self, item_id: str | None, session_id: str | None,
     ) -> None:
         if not item_id or not session_id:
             return
+        with self._session_lock:
+            if (
+                session_id in self._stopped_session_ids
+                or session_id in self._session_stop_inflight
+            ):
+                return
+            self._session_stop_inflight.add(session_id)
 
         def _worker() -> None:
-            try:
-                r = self.client.post(
-                    "/Sessions/Playing/Stopped",
-                    json={
-                        "ItemId": item_id,
-                        "PlaySessionId": session_id,
-                        "PositionTicks": 0,
-                    },
-                    timeout=5,
-                )
-                logger.info(
-                    "Session stop %s -> HTTP %d", session_id[:8], r.status_code
-                )
-            except Exception as e:
-                logger.warning(
-                    "Stop-session %s failed: %s", session_id[:8], e
+            success = False
+            last_error: Exception | None = None
+            for attempt in range(2):
+                try:
+                    r = self.client.post(
+                        "/Sessions/Playing/Stopped",
+                        json={
+                            "ItemId": item_id,
+                            "PlaySessionId": session_id,
+                            "PositionTicks": 0,
+                        },
+                        timeout=5,
+                    )
+                    if 200 <= r.status_code < 300:
+                        success = True
+                        logger.info(
+                            "Session stop %s -> HTTP %d",
+                            session_id[:8], r.status_code,
+                        )
+                        break
+                    last_error = RuntimeError(
+                        f"HTTP {r.status_code} from stop-session"
+                    )
+                    logger.warning(
+                        "Stop-session %s rejected (attempt %d/2): HTTP %d",
+                        session_id[:8], attempt + 1, r.status_code,
+                    )
+                except Exception as e:
+                    last_error = e
+                    logger.warning(
+                        "Stop-session %s failed (attempt %d/2): %s",
+                        session_id[:8], attempt + 1, e,
+                    )
+                if attempt == 0:
+                    _time.sleep(0.1)
+            with self._session_lock:
+                self._session_stop_inflight.discard(session_id)
+                if success:
+                    self._session_registry.pop(session_id, None)
+                    self._session_cleanup_ledger.pop(session_id, None)
+                    self._stopped_session_ids.append(session_id)
+                else:
+                    self._retain_session_cleanup_locked(item_id, session_id)
+            if not success and last_error is not None:
+                logger.error(
+                    "Stop-session %s remains registered after retries: %s",
+                    session_id[:8], last_error,
                 )
 
-        self._submit_api(_worker, "stop-session")
+        future = self._submit_api(_worker, "stop-session")
+        if future is None:
+            with self._session_lock:
+                self._session_stop_inflight.discard(session_id)
+                self._retain_session_cleanup_locked(item_id, session_id)
 
     def _submit_api(self, fn: callable, label: str) -> Any:
         if self._api_pool_closed:
@@ -751,29 +869,58 @@ class WallController:
         cell: VideoCell,
         item: dict[str, Any],
         force_transcode: bool = False,
+        preserve_failure_state: bool = False,
     ) -> None:
-        # Don't stop old sessions mid-playback — the async API call races
-        # with the new stream creation, and Emby can kill both when it sees
-        # a session-stop from the same device. Sessions are cleaned up on
-        # wall shutdown via _cleanup().
+        old_item_id = cell._emby_item_id
+        old_session_id = cell._emby_session_id
+        if not self._session_admission_available():
+            self.playlists.push_front(self._cell_group(cell), item)
+            logger.error("Session admission closed; requeued handoff item.")
+            return
         url, sid = self._build_url(item, force_transcode, cell=cell)
-        cell._emby_session_id = sid
-        cell._emby_item_id = item["Id"]
-        cell.play(item, url)
-        self._arm_prefetch(cell)
 
-    @traced("wall._arm_prefetch")
+        def _on_started(started: bool) -> None:
+            if not started:
+                # The candidate may have been rejected during shutdown or a
+                # native load failure. Do not stop the still-playing old
+                # session; only clean up the candidate we created here.
+                self.stop_emby_session(item.get("Id"), sid)
+                return
+            if not self._register_session(item.get("Id"), sid):
+                self.stop_emby_session(item.get("Id"), sid)
+                return
+            cell._emby_session_id = sid
+            cell._emby_item_id = item["Id"]
+            if old_session_id and old_session_id != sid:
+                self.stop_emby_session(old_item_id, old_session_id)
+            self._arm_prefetch(cell)
+
+        # play() invokes the callback immediately or carries it through a
+        # deferred lock admission. Session ownership changes only after the
+        # replacement has actually been admitted.
+        cell.play(
+            item, url,
+            preserve_failure_state=preserve_failure_state,
+            on_started=_on_started,
+            session_id=sid,
+        )
+
     def _arm_prefetch(self, cell: VideoCell) -> None:
-        """Schedule a playlist warmup after the active GUI transition returns.
+        """Schedule a playlist warmup after the active GUI transition returns."""
+        token = cell._current_playback_token()
+        if token is None or cell._prefetch_request_token == token:
+            return
+        cell._prefetch_request_token = token
 
-        ``loadfile append`` has to execute on the cell's mpv/GUI ownership
-        path, but the M5 soak showed it can take 170–200ms.  Deferring one Qt
-        turn keeps the visible next/mute handler short while preserving the
-        existing in-order mpv playlist semantics.  The closure re-checks
-        liveness and consumes its item only when it actually runs.
-        """
-        def _queue() -> None:
-            if self._shutdown_requested or cell._mpv is None:
+        def _queue(token: PlaybackToken = token) -> None:
+            if cell._prefetch_request_token != token:
+                return
+            cell._prefetch_request_token = None
+            if (
+                self._shutdown_requested
+                or cell._mpv is None
+                or not cell._playback_token_is_current(token)
+            ):
                 return
             item = self.playlists.next(self._cell_group(cell))
             if item is None:
@@ -798,11 +945,28 @@ class WallController:
                     self._cell_group(cell), item,
                 )
                 return
-            url, sid = self._build_url(item, prefetch=True, cell=cell)
+            if not self._session_admission_available():
+                self.playlists.push_front(self._cell_group(cell), item)
+                logger.error("Session admission closed; requeued prefetch item.")
+                return
+            try:
+                url, sid = self._build_url(item, prefetch=True, cell=cell)
+            except Exception as e:
+                self.playlists.push_front(
+                    self._cell_group(cell), item,
+                )
+                logger.debug("Prefetch URL build declined: %s", e)
+                return
             if not cell.prefetch(item, url, sid):
+                self.playlists.push_front(
+                    self._cell_group(cell), item,
+                )
+                self.stop_emby_session(item.get("Id"), sid)
                 logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
             else:
-                cell._prefetched_stream_url = url
+                if not self._register_session(item.get("Id"), sid):
+                    cell.drop_prefetch(requeue=True)
+                    self.stop_emby_session(item.get("Id"), sid)
 
         QTimer.singleShot(0, _queue)
 
@@ -843,8 +1007,12 @@ class WallController:
     @traced("wall.next_video")
     def next_video(self, cell: VideoCell, is_retry: bool = False) -> None:
         if is_retry and cell.current_item:
-            cell._preserve_failure_state_on_next_play = True
-            self._hand_off(cell, cell.current_item, cell._force_transcode)
+            self._hand_off(
+                cell,
+                cell.current_item,
+                cell._force_transcode,
+                preserve_failure_state=True,
+            )
             return
         prev = cell.current_item
         # Fast path: the next item is already queued and warmed on this
@@ -888,33 +1056,17 @@ class WallController:
         active_mpvs = [c for c in self.cells if c._mpv is not None]
         if not active_mpvs:
             return
-        # Per-cell reads: one wedged mpv used to abort the whole generator
-        # and force any_playing=False — turning a global PAUSE press into a
-        # global RESUME (2026-07-13 audit). Unreadable cells count as paused.
-        states = []
+        # The event-thread cache is deliberately used here; reading every
+        # native pause property from the GUI races audio-arm ownership.
+        any_playing = any(not c._paused for c in active_mpvs)
         for c in active_mpvs:
-            try:
-                states.append(not bool(c._mpv["pause"]))
-            except Exception as e:
-                logger.warning("Pause state read failed on a cell: %s", e)
-                states.append(False)
-        any_playing = any(states)
-        for c in active_mpvs:
-            try:
-                c._mpv["pause"] = any_playing
-                c._paused = any_playing
-                c.set_paused_ui(any_playing)
-            except Exception as e:
-                logger.debug("Pause toggle failed on cell: %s", e)
+            c._set_pause_from_controller(any_playing)
         if not any_playing:
-            # RESUME: cells that hit natural EOF while paused skipped their
-            # advance (paused cells don't auto-advance); re-arm them now.
+            # EOF state is also maintained by the event observer, so this
+            # resume path never performs an unlocked native read.
             for c in active_mpvs:
-                try:
-                    if c._mpv.eof_reached is True:
-                        self.next_video(c, False)
-                except Exception:
-                    pass
+                if c._eof_reached:
+                    self.next_video(c, False)
 
     @traced("wall._set_filter")
     def _set_filter(self, mode: str) -> None:
@@ -1013,14 +1165,13 @@ class WallController:
         if cell._mpv is None:
             logger.info("Stats: cell 0 has no live mpv yet.")
             return
-        try:
-            cell._mpv.command("script-binding", "stats/display-stats-toggle")
-            cell._mpv.command("script-binding", "stats/display-page-2")
+        if cell._run_native_commands(
+            ("script-binding", "stats/display-stats-toggle"),
+            ("script-binding", "stats/display-page-2"),
+        ):
             logger.info("Stats overlay toggled on cell 0 (page 2).")
-        except Exception as e:
-            logger.warning(
-                "Stats overlay toggle failed (stats.lua not loaded?): %s", e
-            )
+        else:
+            logger.warning("Stats overlay toggle failed (stats.lua not loaded?).")
 
     def _dump_stats_json(self) -> None:
         cells_payload = []
@@ -1085,13 +1236,55 @@ class WallController:
             return
         self._shutdown_requested = True
         logger.info("Shutdown requested.")
-        self._cleanup()
+        shutdown_deadline = _time.monotonic() + 5.0
+        deferred = self._cleanup(shutdown_deadline)
+        if deferred:
+            self._finish_deferred_shutdown(deferred, shutdown_deadline)
+        else:
+            QApplication.instance().quit()
+
+    def _finish_deferred_shutdown(
+        self, cells: list[VideoCell], deadline: float,
+    ) -> None:
+        pending = [
+            c for c in cells
+            if (
+                not c._render_context_released
+                or c._mpv is not None
+                or c.has_pending_native_finalizer()
+                or c.has_pending_render_finalizer()
+            )
+        ]
+        for c in cells:
+            if c._render_context_released and c._mpv is not None:
+                c._destroy_mpv(
+                    wait_s=max(0.0, deadline - _time.monotonic()),
+                    shutdown_deadline=deadline,
+                )
+        if pending or any(
+            c._mpv is not None
+            or c.has_pending_native_finalizer()
+            or c.has_pending_render_finalizer()
+            for c in cells
+        ):
+            if _time.monotonic() < deadline:
+                QTimer.singleShot(
+                    25,
+                    lambda: self._finish_deferred_shutdown(cells, deadline),
+                )
+                return
+            logger.error(
+                "Bounded shutdown deadline reached with deferred render/core "
+                "resources; leaving them abandoned rather than crossing thread affinity."
+            )
         QApplication.instance().quit()
 
-    def _cleanup(self) -> None:
+    def _cleanup(self, shutdown_deadline: float | None = None) -> list[VideoCell]:
+        shutdown_deadline = shutdown_deadline or (_time.monotonic() + 5.0)
         if self._cleaned_up:
-            return
+            return []
         self._cleaned_up = True
+        deferred_render_cells: list[VideoCell] = []
         prefetched_sessions = [
             (p_item.get("Id"), p_sid)
             for c in self.cells
@@ -1120,14 +1313,40 @@ class WallController:
         if _sys.platform == "darwin":
             for c in self.cells:
                 try:
-                    # Serialize cancellation with the worker's native aid/seek
-                    # calls before stopping the VO or freeing its context.
-                    with c._audio_arm_call_lock:
-                        c._cancel_audio_arm(timeout_s=0.0)
-                        c._stop_mpv_for_render_release()
-                        c.video_frame.release()
+                    # Invalidate the worker before waiting for ownership. This
+                    # lets an in-flight audio arm finish without targeting a
+                    # replacement, while keeping GUI teardown bounded.
+                    remaining = max(0.0, shutdown_deadline - _time.monotonic())
+                    drained = c._cancel_audio_arm(
+                        timeout_s=min(2.0, remaining),
+                    )
+                    if not drained:
+                        logger.warning(
+                            "Audio worker did not drain before GL release for cell."
+                        )
+                    remaining = max(0.0, shutdown_deadline - _time.monotonic())
+                    if not c._audio_arm_call_lock.acquire(
+                        timeout=min(2.0, remaining),
+                    ):
+                        logger.error(
+                            "GL render release could not acquire native ownership "
+                            "before timeout; deferring to the GUI shutdown drain."
+                        )
+                        c.request_render_release_when_idle(shutdown_deadline)
+                        deferred_render_cells.append(c)
+                        continue
+                    try:
+                        released = c._release_render_context_on_gui()
+                    finally:
+                        c._audio_arm_call_lock.release()
+                    if not released:
+                        c.request_render_release_when_idle(shutdown_deadline)
+                        deferred_render_cells.append(c)
                 except Exception as e:
                     logger.debug("GL pre-release failed: %s", e)
+                    c.request_render_release_when_idle(shutdown_deadline)
+                    if c not in deferred_render_cells:
+                        deferred_render_cells.append(c)
 
         # Hide all windows immediately
         for w in self.windows:
@@ -1141,12 +1360,19 @@ class WallController:
             self.stop_emby_session(c._emby_item_id, c._emby_session_id)
         for p_item_id, p_sid in prefetched_sessions:
             self.stop_emby_session(p_item_id, p_sid)
+        with self._session_lock:
+            registered_sessions = dict(self._session_cleanup_ledger)
+            registered_sessions.update(self._session_registry)
+        for session_id, item_id in registered_sessions.items():
+            self.stop_emby_session(item_id, session_id)
 
         # Flush stats
         if STATS_ENABLED:
             for c in self.cells:
                 try:
-                    c._flush_stats()
+                    c._flush_stats(
+                        timeout_s=max(0.0, shutdown_deadline - _time.monotonic()),
+                    )
                 except Exception as e:
                     logger.warning("stats flush failed: %s", e)
 
@@ -1157,8 +1383,12 @@ class WallController:
         import concurrent.futures as _cf
         if self.cells:
             ex = _cf.ThreadPoolExecutor(max_workers=min(len(self.cells), 32))
-            futures = [ex.submit(c.release) for c in self.cells]
-            done, not_done = _cf.wait(futures, timeout=5.0)
+            futures = [
+                ex.submit(c.release, shutdown_deadline=shutdown_deadline)
+                for c in self.cells
+            ]
+            remaining = max(0.0, shutdown_deadline - _time.monotonic())
+            done, not_done = _cf.wait(futures, timeout=remaining)
             for f in done:
                 if f.exception():
                     logger.warning("Cell release failed: %s", f.exception())
@@ -1168,6 +1398,16 @@ class WallController:
                     len(not_done),
                 )
             ex.shutdown(wait=False)
+            for c in self.cells:
+                if (
+                    (
+                        c._mpv is not None
+                        or c.has_pending_native_finalizer()
+                        or c.has_pending_render_finalizer()
+                    )
+                    and c not in deferred_render_cells
+                ):
+                    deferred_render_cells.append(c)
 
         if STATS_ENABLED:
             self._dump_stats_json()
@@ -1181,7 +1421,9 @@ class WallController:
             daemon=True,
         )
         _drain.start()
-        _drain.join(timeout=6.0)
+        _drain.join(
+            timeout=max(0.0, shutdown_deadline - _time.monotonic()),
+        )
         if _drain.is_alive():
             logger.warning("API pool drain timed out — forcing shutdown.")
 
@@ -1196,5 +1438,14 @@ class WallController:
             except Exception as e:
                 logger.debug("Sync stop failed: %s", e)
 
-        self.client.close()
+        close_thread = _threading.Thread(
+            target=self.client.close, name="client-close", daemon=True,
+        )
+        close_thread.start()
+        close_thread.join(
+            timeout=max(0.0, shutdown_deadline - _time.monotonic()),
+        )
+        if close_thread.is_alive():
+            logger.warning("Client close exceeded global shutdown deadline.")
         logger.info("Cleanup complete.")
+        return deferred_render_cells

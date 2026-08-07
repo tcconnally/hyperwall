@@ -25,6 +25,8 @@ from hyperwall.reliability import (  # noqa: E402
     scale_demuxer_mb,
     should_park,
     transport_recovery_plan,
+    PlaybackToken,
+    playback_token_is_current,
 )
 
 
@@ -148,6 +150,42 @@ def test_transport_fault_has_one_retry_then_quarantines_item():
     assert transport_recovery_plan(2, max_attempts=1) == {
         "action": "skip", "delay_s": 0,
     }
+
+
+def test_playback_token_rejects_stale_track_and_resource_callbacks():
+    token = PlaybackToken(3, 9, "item-1", "https://stream/old")
+    assert playback_token_is_current(
+        token,
+        mpv_generation=3,
+        track_generation=9,
+        item_id="item-1",
+        stream_url="https://stream/old",
+        closing=False,
+    )
+    assert not playback_token_is_current(
+        token,
+        mpv_generation=3,
+        track_generation=10,
+        item_id="item-1",
+        stream_url="https://stream/old",
+        closing=False,
+    )
+    assert not playback_token_is_current(
+        token,
+        mpv_generation=3,
+        track_generation=9,
+        item_id="item-1",
+        stream_url="https://stream/new",
+        closing=False,
+    )
+    assert not playback_token_is_current(
+        token,
+        mpv_generation=3,
+        track_generation=9,
+        item_id="item-1",
+        stream_url="https://stream/old",
+        closing=True,
+    )
 
 
 # ── escalation_plan (retry → transcode → skip) ────────────────────────────────

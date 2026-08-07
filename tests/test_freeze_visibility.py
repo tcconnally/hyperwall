@@ -61,15 +61,25 @@ def _make_cell():
     return cell
 
 
+def _context(cell, gen=None, track=None):
+    return (
+        cell._mpv_gen if gen is None else gen,
+        cell._track_generation if track is None else track,
+        None,
+        cell._stream_url,
+        None,
+    )
+
+
 def test_buffering_episode_counts_and_shows_card():
     cell = _make_cell()
     gen = cell._mpv_gen
-    cell._handle_buffering(gen, True)
+    cell._handle_buffering(_context(cell, gen), True)
     assert cell._freeze_count == 1
     assert cell._buffering_card is True
     assert cell._title_overlay.isVisible()
     assert "BUFFERING" in cell._title_overlay.text()
-    cell._handle_buffering(gen, False)
+    cell._handle_buffering(_context(cell, gen), False)
     assert cell._freeze_total_s >= 0.0
     assert cell._freeze_t0 == 0.0
     assert cell._buffering_card is False
@@ -79,21 +89,27 @@ def test_buffering_episode_counts_and_shows_card():
 def test_startup_fill_is_not_a_freeze():
     cell = _make_cell()
     cell._played_anything = False
-    cell._handle_buffering(cell._mpv_gen, True)
+    cell._handle_buffering(
+        _context(cell), True,
+    )
     assert cell._freeze_count == 0
     assert cell._buffering_card is False
 
 
 def test_stale_generation_buffering_ignored():
     cell = _make_cell()
-    cell._handle_buffering(cell._mpv_gen - 1, True)
+    cell._handle_buffering(
+        _context(cell, gen=cell._mpv_gen - 1), True,
+    )
     assert cell._freeze_count == 0
 
 
 def test_track_change_closes_open_freeze():
     cell = _make_cell()
     gen = cell._mpv_gen
-    cell._handle_buffering(gen, True)
+    cell._handle_buffering(
+        _context(cell, gen), True,
+    )
     assert cell._freeze_t0 > 0
     cell._begin_track({"Id": "x", "Name": "n"})
     assert cell._freeze_t0 == 0.0

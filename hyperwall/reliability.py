@@ -17,8 +17,38 @@ Six concerns (Epic 2 / #7 + the 2026-07-11 stampede/lockup reviews):
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable
 
+
+@dataclass(frozen=True, slots=True)
+class PlaybackToken:
+    """Immutable identity for one mpv/resource playback generation."""
+
+    mpv_generation: int
+    track_generation: int
+    item_id: str | None
+    stream_url: str
+
+
+def playback_token_is_current(
+    token: PlaybackToken,
+    *,
+    mpv_generation: int,
+    track_generation: int,
+    item_id: str | None,
+    stream_url: str | None,
+    closing: bool,
+) -> bool:
+    """Reject callbacks for replaced resources or a closing cell."""
+    return (
+        not closing
+        and stream_url is not None
+        and token.mpv_generation == mpv_generation
+        and token.track_generation == track_generation
+        and token.item_id == item_id
+        and token.stream_url == stream_url
+    )
 
 def is_stalled(
     idle_s: float,
