@@ -162,6 +162,64 @@ def test_prefetch_admission_does_not_demote_heavy_candidate_to_direct():
     assert body.index("self.playlists.push_front", admission) < build
 
 
+def test_decoder_faults_have_per_cell_software_fallback_path():
+    reliability = _source("hyperwall/reliability.py")
+    cell = _source("hyperwall/cell.py")
+    assert "classify_playback_fault" in reliability
+    assert "decoder_recovery_plan" in reliability
+    assert "_sig_decoder_fault" in cell
+    assert "_handle_decoder_fault" in cell
+    assert "_force_software_decode" in cell
+    assert '"hwdec"] = "no"' in cell or '"hwdec": "no"' in cell
+
+
+def test_decoder_fallback_state_is_considered_before_hwdec_option():
+    cell = _source("hyperwall/cell.py")
+    start = cell.index("    def _hardware_decode_enabled")
+    end = cell.index("\n    def _handle_decoder_fault", start)
+    body = cell[start:end]
+    assert "if self._force_software_decode" in body
+    assert "return False" in body
+
+
+def test_reused_item_resets_fault_state_when_session_url_changes():
+    cell = _source("hyperwall/cell.py")
+    assert "preserve_failure_state" in cell
+    assert "same_resource =" in cell
+    assert "self._stream_url == url" in cell
+
+
+def test_transport_faults_quarantine_failed_resource_after_bounded_retry():
+    reliability = _source("hyperwall/reliability.py")
+    cell = _source("hyperwall/cell.py")
+    assert "transport_recovery_plan" in reliability
+    assert "_sig_transport_fault" in cell
+    assert "_handle_transport_fault" in cell
+    assert "_transport_retry_count" in cell
+    assert "_transport_resource_quarantined" in cell
+    assert "_request_next_throttled(False)" in cell
+
+
+def test_macos_mute_native_write_is_deferred_from_gui_handler():
+    cell = _source("hyperwall/cell.py")
+    start = cell.index("    def _apply_mute")
+    end = cell.index("\n    @traced(\"cell._toggle_mute\")", start)
+    body = cell[start:end]
+    assert "_queue_mute_native" in body
+    darwin = body[body.index('if sys.platform == "darwin":'):]
+    assert "_queue_mute_native(muted)" in darwin
+
+
+def test_shutdown_stops_qt_timers_on_gui_thread_before_pool_release():
+    cell = _source("hyperwall/cell.py")
+    wall = _source("hyperwall/wall.py")
+    assert "def prepare_shutdown" in cell
+    assert "_stop_qt_timers" in cell
+    assert "c.prepare_shutdown()" in wall
+    release = cell[cell.index("    def release"):]
+    assert "_watchdog_timer.stop()" not in release
+
+
 def run_all() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0

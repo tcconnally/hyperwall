@@ -33,6 +33,7 @@ from PyQt6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
     QTimer,
+    QThread,
     pyqtSignal,
     pyqtSlot,
 )
@@ -55,6 +56,7 @@ from .constants import (
     CRASH_LOOP_COOLDOWN_S,
     CRASH_LOOP_THRESHOLD,
     CRASH_LOOP_WINDOW_S,
+    DECODER_FAULT_MAX,
     MAX_RETRIES,
     MOUSE_IDLE_MS,
     MPV_LOG_NOISE,
@@ -65,6 +67,7 @@ from .constants import (
     STATS_COUNTER_PROPS,
     STATS_ENABLED,
     STATS_INFO_PROPS,
+    TRANSPORT_RETRY_MAX,
     WATCHDOG_INTERVAL_MS,
     _s,
     apply_env_overrides,
@@ -72,10 +75,13 @@ from .constants import (
 )
 from .reliability import (
     apply_jitter,
+    classify_playback_fault,
+    decoder_recovery_plan,
     end_file_reason,
     escalation_plan,
     is_stalled,
     should_park,
+    transport_recovery_plan,
 )
 from . import theme
 from .perftrace import traced
@@ -205,6 +211,8 @@ class VideoCell(QWidget):
     _sig_eof = pyqtSignal(int, str)
     _sig_track_done = pyqtSignal(int)
     _sig_buffering = pyqtSignal(int, bool)
+    _sig_decoder_fault = pyqtSignal(int, str)
+    _sig_transport_fault = pyqtSignal(int, str)
 
     def __init__(self, controller: Any):
         super().__init__()
@@ -237,6 +245,15 @@ class VideoCell(QWidget):
         self._buffering_card = False
         self._retry_count = 0
         self._force_transcode = False
+        self._force_software_decode = False
+        self._decoder_fault_count = 0
+        self._decoder_recovery_scheduled = False
+        self._transport_retry_count = 0
+        self._transport_recovery_scheduled = False
+        self._transport_resource_quarantined = False
+        self._resource_quarantined = False
+        self._preserve_failure_state_on_next_play = False
+        self._closing = False
         # URL state used by the controller's transcode-concurrency gate.
         # Prefetched URLs are kept separate from the currently playing URL so
         # a warm future HLS playlist is not counted as active server work.
@@ -268,6 +285,11 @@ class VideoCell(QWidget):
         self._audio_arm_inflight_token: int | None = None
         self._audio_arm_done = threading.Event()
         self._audio_arm_done.set()
+        # Latest-value native control writes are serialized with audio arm and
+        # run off the GUI thread. Tokens discard stale mute/volume writes after
+        # a track replacement or shutdown.
+        self._native_control_tokens: dict[str, int] = {}
+        self._native_control_serial = 0
         self._deferred_play: tuple[dict[str, Any], str] | None = None
         self._deferred_play_retry_scheduled = False
         self._track_generation = 0
@@ -365,6 +387,12 @@ class VideoCell(QWidget):
         self._sig_buffering.connect(
             self._handle_buffering, Qt.ConnectionType.QueuedConnection
         )
+        self._sig_decoder_fault.connect(
+            self._handle_decoder_fault, Qt.ConnectionType.QueuedConnection
+        )
+        self._sig_transport_fault.connect(
+            self._handle_transport_fault, Qt.ConnectionType.QueuedConnection
+        )
 
         # Stall watchdog: polls for silent freezes (frozen frame / wedged
         # decoder / network hang that survives reconnect) which never emit an
@@ -386,16 +414,24 @@ class VideoCell(QWidget):
 
         Must be called after the widget is visible and realized.
         """
-        if self._mpv is not None:
+        if self._mpv is not None or self._closing:
             return
-
         import mpv as _mpv
 
         if not self.video_frame.isVisible():
             logger.warning("video_frame not visible — deferring mpv creation.")
             return
 
-        _opts = self._mpv_opts or apply_env_overrides(MPV_OPTS)
+        _opts = dict(self._mpv_opts or apply_env_overrides(MPV_OPTS))
+        if self._force_software_decode:
+            # Decoder fallback is isolated to this cell and this media item;
+            # the wall's other cells retain their configured hardware path.
+            _opts["hwdec"] = "no"
+        next_gen = self._mpv_gen + 1
+
+        def _log_handler(level: str, component: str, message: str) -> None:
+            self._mpv_log(level, component, message, next_gen)
+
         if sys.platform != "darwin":
             # HWND sign-extension fix: mask to 32-bit (Windows only — the
             # mask would corrupt a 64-bit pointer elsewhere).
@@ -414,13 +450,13 @@ class VideoCell(QWidget):
                 # vo=libmpv (from the platform opts) renders through the
                 # MpvGLWidget's GL framebuffer.
                 m = _mpv.MPV(
-                    log_handler=self._mpv_log,
+                    log_handler=_log_handler,
                     **_opts,
                 )
             else:
                 m = _mpv.MPV(
                     wid=str(wid),
-                    log_handler=self._mpv_log,
+                    log_handler=_log_handler,
                     **_opts,
                 )
         finally:
@@ -575,7 +611,7 @@ class VideoCell(QWidget):
         which blocks the GUI thread until terminate returns — one wedged libmpv
         teardown froze every cell on the wall indefinitely.
         """
-        self._cancel_audio_arm()
+        self._cancel_audio_arm(timeout_s=0.0)
         if self._mpv is None:
             return
         if STATS_ENABLED:
@@ -642,8 +678,14 @@ class VideoCell(QWidget):
         for k, v in current.items():
             self._stats_total[k] = self._stats_total.get(k, 0.0) + v
 
-    def _mpv_log(self, level: str, component: str, message: str) -> None:
-        """Route mpv log messages to Python logging, suppressing noise."""
+    def _mpv_log(
+        self,
+        level: str,
+        component: str,
+        message: str,
+        generation: int | None = None,
+    ) -> None:
+        """Route mpv logs and queue narrow per-cell recovery signals."""
         text = message.strip()
         if level == "warn" and any(pat in text for pat in MPV_LOG_NOISE):
             return
@@ -652,6 +694,19 @@ class VideoCell(QWidget):
             logger.error(msg)
         elif level == "warn":
             logger.warning(msg)
+        fault = classify_playback_fault(text)
+        if fault == "other" or self._closing:
+            return
+        gen = self._mpv_gen if generation is None else generation
+        try:
+            if fault == "decoder":
+                self._sig_decoder_fault.emit(gen, text)
+            elif fault == "transport":
+                self._sig_transport_fault.emit(gen, text)
+        except Exception:
+            # Log callbacks run on native mpv threads and must never propagate
+            # into the callback boundary during QObject teardown.
+            pass
 
     # ── Qt events ─────────────────────────────────────────────────────────
 
@@ -705,13 +760,25 @@ class VideoCell(QWidget):
 
     # ── playback ──────────────────────────────────────────────────────────
 
-    def _begin_track(self, item: dict[str, Any]) -> None:
+    def _begin_track(
+        self,
+        item: dict[str, Any],
+        *,
+        preserve_failure_state: bool = False,
+    ) -> None:
         """Per-track state + UI reset shared by play() and the prefetched
         advance. No title overlay here: the wall stays chrome-free during
         steady playback (title lives in the hover control bar)."""
-        if self.current_item is not item:
+        if not preserve_failure_state:
             self._retry_count = 0
             self._force_transcode = False
+            self._force_software_decode = False
+            self._decoder_fault_count = 0
+            self._transport_retry_count = 0
+            self._decoder_recovery_scheduled = False
+            self._transport_recovery_scheduled = False
+            self._transport_resource_quarantined = False
+            self._resource_quarantined = False
         self.current_item = item
         self._track_generation += 1
         self._duration_s = 0.0
@@ -756,7 +823,7 @@ class VideoCell(QWidget):
         def _retry() -> None:
             self._deferred_play_retry_scheduled = False
             pending = self._deferred_play
-            if pending is None or self._mpv is None:
+            if self._closing or pending is None or self._mpv is None:
                 self._deferred_play = None
                 return
             if self._audio_arm_call_lock.locked():
@@ -769,6 +836,8 @@ class VideoCell(QWidget):
 
     @traced("cell.play")
     def play(self, item: dict[str, Any], url: str) -> None:
+        if self._closing:
+            return
         if not self._audio_arm_call_lock.acquire(blocking=False):
             self._defer_play_until_audio_idle(item, url)
             return
@@ -783,6 +852,8 @@ class VideoCell(QWidget):
 
     def _play_impl(self, item: dict[str, Any], url: str) -> None:
         """Load a video into this cell."""
+        if self._closing:
+            return
         if self._parked:
             # A manual/web advance during the park cooldown is a deliberate
             # resume: clear the parked state so a failure of THIS load runs
@@ -794,13 +865,26 @@ class VideoCell(QWidget):
             logger.info("Parked cell manually resumed.")
         # loadfile (replace) clears the mpv playlist tail, so any queued
         # prefetch entry is gone with it (probed live 2026-07-13).
+        same_resource = (
+            self.current_item is item and self._stream_url == url
+        )
+        preserve_failure_state = (
+            self._preserve_failure_state_on_next_play or same_resource
+        )
+        self._preserve_failure_state_on_next_play = False
         self._prefetched = None
         self._stream_url = url
         self._prefetched_stream_url = None
-        self._begin_track(item)
+        self._begin_track(
+            item, preserve_failure_state=preserve_failure_state,
+        )
 
         # Determine if we need to recreate mpv
-        need_create = self._mpv is None or self._force_transcode
+        need_create = (
+            self._mpv is None
+            or self._force_transcode
+            or self._force_software_decode
+        )
         if not need_create and self._mpv is not None:
             try:
                 self._mpv["pause"]  # liveness check
@@ -872,7 +956,7 @@ class VideoCell(QWidget):
         before EOF), so the network stream is already warm when we advance —
         probed at ~60ms to first frame vs a cold loadfile's open latency.
         """
-        if self._mpv is None:
+        if self._closing or self._mpv is None:
             return False
         try:
             self._mpv.command("loadfile", url, "append")
@@ -891,7 +975,7 @@ class VideoCell(QWidget):
 
     @traced("cell.advance_to_prefetched")
     def advance_to_prefetched(self) -> bool:
-        if self._prefetched is None or self._mpv is None:
+        if self._closing or self._prefetched is None or self._mpv is None:
             return False
         if not self._audio_arm_call_lock.acquire(blocking=False):
             self._prefetched = None
@@ -946,12 +1030,42 @@ class VideoCell(QWidget):
         self._emby_item_id = item["Id"]
         return True
 
+    def _stop_qt_timers(self) -> None:
+        """Stop all Qt-owned timers/animations on the widget's own thread."""
+        for timer in (
+            self._watchdog_timer,
+            self._autohide_timer,
+            self._ui_timer,
+            self._overlay_show_timer,
+        ):
+            try:
+                timer.stop()
+            except Exception:
+                pass
+        for animation in (
+            self._loading_pulse,
+            self._overlay_anim,
+            self._ctrl_anim,
+        ):
+            try:
+                animation.stop()
+            except Exception:
+                pass
+
+    def prepare_shutdown(self) -> None:
+        """Quiesce GUI-owned state before mpv is released off-thread."""
+        self._closing = True
+        self._pending_next = False
+        self._deferred_play = None
+        self._prefetched = None
+        self._prefetched_stream_url = None
+        self._cancel_audio_arm(timeout_s=0.0)
+        self._stop_qt_timers()
+
     def release(self) -> None:
-        """Clean up and release all resources."""
-        try:
-            self._watchdog_timer.stop()
-        except Exception:
-            pass
+        """Release mpv after GUI-owned state has been quiesced."""
+        if QThread.currentThread() is self.thread() and not self._closing:
+            self.prepare_shutdown()
         self._destroy_mpv()
 
     # ── controls UI ───────────────────────────────────────────────────────
@@ -1295,6 +1409,8 @@ class VideoCell(QWidget):
         """
         with self._audio_arm_lock:
             self._audio_arm_token += 1
+            self._native_control_serial += 1
+            self._native_control_tokens.clear()
             inflight = self._audio_arm_inflight_token
             done = self._audio_arm_done
         if inflight is None or done.wait(timeout_s):
@@ -1384,6 +1500,63 @@ class VideoCell(QWidget):
                     self._audio_arm_inflight_token = None
                     self._audio_arm_done.set()
 
+    def _queue_mute_native(self, muted: bool) -> None:
+        self._queue_native_property("mute", muted)
+
+    def _native_control_is_current(
+        self,
+        name: str,
+        token: int,
+        mpv_ref: Any,
+        track_generation: int,
+    ) -> bool:
+        with self._audio_arm_lock:
+            return (
+                not self._closing
+                and self._native_control_tokens.get(name) == token
+                and self._mpv is mpv_ref
+                and self._track_generation == track_generation
+            )
+
+    def _queue_native_property(self, name: str, value: Any) -> None:
+        """Write a potentially blocking mpv property without blocking Qt."""
+        mpv_ref = self._mpv
+        if mpv_ref is None or self._closing:
+            return
+        with self._audio_arm_lock:
+            self._native_control_serial += 1
+            token = self._native_control_serial
+            self._native_control_tokens[name] = token
+            track_generation = self._track_generation
+        worker = threading.Thread(
+            target=self._native_property_worker,
+            args=(name, value, token, mpv_ref, track_generation),
+            name=f"mpv-{name}",
+            daemon=True,
+        )
+        try:
+            worker.start()
+        except Exception as e:
+            logger.debug("Native %s write could not start: %s", name, e)
+
+    def _native_property_worker(
+        self,
+        name: str,
+        value: Any,
+        token: int,
+        mpv_ref: Any,
+        track_generation: int,
+    ) -> None:
+        try:
+            with self._audio_arm_call_lock:
+                if not self._native_control_is_current(
+                    name, token, mpv_ref, track_generation
+                ):
+                    return
+                mpv_ref[name] = value
+        except Exception as e:
+            logger.debug("Native %s write failed: %s", name, e)
+
     def _enable_audio_track_sync(self) -> None:
         """Arm audio synchronously on platforms without the macOS GUI stall."""
         if self._audio_started or self._mpv is None:
@@ -1446,10 +1619,13 @@ class VideoCell(QWidget):
         if not muted:
             self._enable_audio_track()
         if self._mpv is not None:
-            try:
-                self._mpv["mute"] = muted
-            except Exception as e:
-                logger.debug("apply_mute failed: %s", e)
+            if sys.platform == "darwin":
+                self._queue_mute_native(muted)
+            else:
+                try:
+                    self._mpv["mute"] = muted
+                except Exception as e:
+                    logger.debug("apply_mute failed: %s", e)
         self._sync_mute_ui(muted)
 
     @traced("cell._toggle_mute")
@@ -1478,10 +1654,13 @@ class VideoCell(QWidget):
         if val >= 10 and not self.vol_slider.isSliderDown():
             self._last_vol = val
         if self._mpv is not None:
-            try:
-                self._mpv["volume"] = float(val)
-            except Exception as e:
-                logger.debug("vol_changed failed: %s", e)
+            if sys.platform == "darwin":
+                self._queue_native_property("volume", float(val))
+            else:
+                try:
+                    self._mpv["volume"] = float(val)
+                except Exception as e:
+                    logger.debug("vol_changed failed: %s", e)
         if val > 0 and self.muted:
             self._apply_mute(False)   # drag up from silence = unmute
         elif val == 0 and not self.muted:
@@ -1516,6 +1695,93 @@ class VideoCell(QWidget):
         self.controller.update_favorite(self.current_item["Id"], new)
 
     # ── EOF / error handling ──────────────────────────────────────────────
+
+    def _hardware_decode_enabled(self) -> bool:
+        if self._force_software_decode:
+            return False
+        opts = self._mpv_opts or apply_env_overrides(MPV_OPTS)
+        value = str(opts.get("hwdec", "")).strip().lower()
+        return value not in {"", "no", "none", "software", "false", "0"}
+
+    def _handle_decoder_fault(self, gen: int, _message: str) -> None:
+        """Recover one cell from a decoder/backend fault on the GUI thread."""
+        if self._closing or gen != self._mpv_gen or self._mpv is None:
+            return
+        self._decoder_fault_count += 1
+        if self._decoder_recovery_scheduled:
+            return
+        plan = decoder_recovery_plan(
+            self._decoder_fault_count,
+            hardware_decode=self._hardware_decode_enabled(),
+            max_faults=DECODER_FAULT_MAX,
+        )
+        if self._closing or self._resource_quarantined:
+            return
+        if plan["action"] == "skip":
+            logger.error(
+                "Decoder recovery exhausted on cell — quarantining current resource."
+            )
+            self._decoder_recovery_scheduled = False
+            self._resource_quarantined = True
+            self._track_done = True
+            self._request_next_throttled(False)
+            return
+        if plan["action"] == "fallback-software":
+            self._force_software_decode = True
+            logger.warning(
+                "Decoder fault on cell — recreating with software decode for item."
+            )
+        else:
+            logger.warning("Software decoder fault on cell — recreating demuxer.")
+        if not self.current_item or not self._stream_url:
+            self._on_error()
+            return
+        self._decoder_recovery_scheduled = True
+        QTimer.singleShot(0, self._recover_current_decoder)
+
+    def _recover_current_decoder(self) -> None:
+        self._decoder_recovery_scheduled = False
+        if self._closing or self.current_item is None or not self._stream_url:
+            return
+        self.play(self.current_item, self._stream_url)
+
+    def _handle_transport_fault(self, gen: int, _message: str) -> None:
+        """Retry a failed resource once, then advance without escalation."""
+        if self._closing or gen != self._mpv_gen or self._mpv is None:
+            return
+        if self._closing or self._resource_quarantined:
+            return
+        if self._transport_recovery_scheduled:
+            return
+        self._transport_retry_count += 1
+        self._prefetched = None
+        self._prefetched_stream_url = None
+        plan = transport_recovery_plan(
+            self._transport_retry_count, max_attempts=TRANSPORT_RETRY_MAX,
+        )
+        if plan["action"] == "retry":
+            self._transport_recovery_scheduled = True
+            logger.warning(
+                "Transport fault on cell — retrying current resource once."
+            )
+            delay_ms = int(str(plan["delay_s"])) * 1000
+            QTimer.singleShot(delay_ms, self._retry_transport_resource)
+            return
+        logger.error(
+            "Transport recovery exhausted on cell — skipping current resource."
+        )
+        self._transport_recovery_scheduled = False
+        self._transport_resource_quarantined = True
+        self._resource_quarantined = True
+        self._track_done = True
+        self._request_next_throttled(False)
+
+    def _retry_transport_resource(self) -> None:
+        self._transport_recovery_scheduled = False
+        if self._closing or self._resource_quarantined or self.current_item is None:
+            return
+        self._request_next_throttled(True)
+
 
     def _handle_buffering(self, gen: int, buffering: bool) -> None:
         """GUI-thread side of the paused-for-cache observer.
@@ -1692,7 +1958,7 @@ class VideoCell(QWidget):
         self.request_next.emit(self, is_retry)
 
     def _fire_pending_next(self) -> None:
-        if not self._pending_next:
+        if self._closing or not self._pending_next:
             return
         self._pending_next = False
         self._request_next_throttled(False)
@@ -1709,7 +1975,7 @@ class VideoCell(QWidget):
         timestamp (full grace window), so a load that silently wedges still
         gets rescued instead of the guard flag disabling the safety net.
         """
-        if self._mpv is None or self._parked:
+        if self._closing or self._mpv is None or self._parked:
             return
         if not self._played_anything:
             # Startup / EOF-before-first-frame is handled by the normal path.
@@ -1757,7 +2023,7 @@ class VideoCell(QWidget):
 
     def _unpark(self) -> None:
         """Leave the parked state after the cooldown and try to resume."""
-        if not self._parked:
+        if self._closing or not self._parked:
             return
         self._parked = False
         self._failure_ts.clear()
@@ -1767,7 +2033,12 @@ class VideoCell(QWidget):
         self._request_next_throttled(False)
 
     def _on_error(self) -> None:
-        if self._parked:
+        if (
+            self._closing
+            or self._parked
+            or self._transport_recovery_scheduled
+            or self._resource_quarantined
+        ):
             return
         # Crash-loop guard: if failures pile up in a short window, stop
         # hammering Emby and park the cell instead.

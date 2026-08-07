@@ -843,6 +843,7 @@ class WallController:
     @traced("wall.next_video")
     def next_video(self, cell: VideoCell, is_retry: bool = False) -> None:
         if is_retry and cell.current_item:
+            cell._preserve_failure_state_on_next_play = True
             self._hand_off(cell, cell.current_item, cell._force_transcode)
             return
         prev = cell.current_item
@@ -1091,6 +1092,22 @@ class WallController:
         if self._cleaned_up:
             return
         self._cleaned_up = True
+        prefetched_sessions = [
+            (p_item.get("Id"), p_sid)
+            for c in self.cells
+            if c._prefetched is not None
+            for p_item, _p_url, p_sid in (c._prefetched,)
+        ]
+
+        # Stop every Qt-owned timer/animation while still on the GUI thread.
+        # The bounded worker pool below may release mpv cores, but it must not
+        # call QTimer.stop() on widgets owned by this thread (Qt warns with
+        # killTimer and leaves timers active during teardown).
+        for c in self.cells:
+            try:
+                c.prepare_shutdown()
+            except Exception as e:
+                logger.debug("Cell GUI shutdown preparation failed: %s", e)
 
         # darwin: free each cell's mpv render context HERE — synchronously,
         # on the GUI thread, while the native windows still exist — BEFORE
@@ -1122,11 +1139,8 @@ class WallController:
         # Stop all Emby sessions
         for c in self.cells:
             self.stop_emby_session(c._emby_item_id, c._emby_session_id)
-            # A queued prefetch may have opened its stream server-side
-            # (mpv pre-opens the demuxer near the current track's EOF).
-            if c._prefetched is not None:
-                p_item, _p_url, p_sid = c._prefetched
-                self.stop_emby_session(p_item.get("Id"), p_sid)
+        for p_item_id, p_sid in prefetched_sessions:
+            self.stop_emby_session(p_item_id, p_sid)
 
         # Flush stats
         if STATS_ENABLED:

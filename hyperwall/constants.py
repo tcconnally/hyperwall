@@ -94,6 +94,12 @@ OUTAGE_WINDOW_S = _int_env("HYPERWALL_OUTAGE_WINDOW_S", 45, 10, 600)
 OUTAGE_MIN_CELLS = _int_env("HYPERWALL_OUTAGE_MIN_CELLS", 3, 2, 100)
 OUTAGE_BACKOFF_S = _int_env("HYPERWALL_OUTAGE_BACKOFF_S", 20, 5, 600)
 
+# Per-cell media fault containment. Hardware decoder errors get one local
+# software fallback before a repeated software fault quarantines the item;
+# transport failures get one retry before advancing past the resource.
+DECODER_FAULT_MAX = _int_env("HYPERWALL_DECODER_FAULT_MAX", 2, 1, 8)
+TRANSPORT_RETRY_MAX = _int_env("HYPERWALL_TRANSPORT_RETRY_MAX", 1, 0, 3)
+
 def _physical_memory_mb() -> int | None:
     """Return host physical memory without spawning a platform command."""
     try:
@@ -116,14 +122,14 @@ def cache_defaults_for_platform(
     Windows host. A 16 GiB Mac can enter compression/swap pressure long before
     mpv reaches that ceiling because Qt, libmpv surfaces, and the desktop share
     the same memory. Keep explicit environment overrides authoritative, but
-    start <=20 GiB macOS hosts at 512 MiB/cell and a 4 GiB aggregate ceiling.
+    start <=20 GiB macOS hosts at 256 MiB/cell and a 2 GiB aggregate ceiling.
     """
     plat = sys.platform if platform is None else platform
     memory_mb = (
         _physical_memory_mb() if physical_memory_mb is None else physical_memory_mb
     )
     if plat == "darwin" and (memory_mb is None or memory_mb <= 20 * 1024):
-        return 512, 4_096
+        return 256, 2_048
     return 1_024, 8_192
 
 
@@ -417,19 +423,37 @@ def apply_env_overrides(opts: dict) -> dict:
     return out
 
 
-def apply_cache_budget(opts: dict, n_cells: int) -> dict:
+def apply_cache_budget(
+    opts: dict,
+    n_cells: int,
+    *,
+    platform: str | None = None,
+    physical_memory_mb: int | None = None,
+) -> dict:
     """Return a copy of opts with demuxer_max_bytes scaled to the cell count.
 
     Keeps the aggregate grid demuxer buffer within CACHE_BUDGET_MB so large
     grids (e.g. 6x6) don't exhaust RAM. Pure w.r.t. the reliability helper.
+
+    ``platform`` and ``physical_memory_mb`` are optional probe arguments for
+    the platform matrix. The normal application path uses the import-time
+    host values; tests and diagnostic tooling can evaluate another target
+    without mutating process-wide environment state.
     """
     from .reliability import scale_demuxer_mb, scale_readahead_s
 
     out = dict(opts)
+    if platform is None or platform == sys.platform:
+        per_cell_mb = DEMUXER_PER_CELL_MB
+        total_budget_mb = CACHE_BUDGET_MB
+    else:
+        per_cell_mb, total_budget_mb = cache_defaults_for_platform(
+            platform, physical_memory_mb,
+        )
     mb = scale_demuxer_mb(
         n_cells,
-        per_cell_mb=DEMUXER_PER_CELL_MB,
-        total_budget_mb=CACHE_BUDGET_MB,
+        per_cell_mb=per_cell_mb,
+        total_budget_mb=total_budget_mb,
     )
     out["demuxer_max_bytes"] = f"{mb}MiB"
     # Readahead depth = burst size on every track open; scale it down with

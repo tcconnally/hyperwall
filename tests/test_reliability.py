@@ -15,13 +15,16 @@ sys.path.insert(0, REPO_ROOT)
 
 from hyperwall.reliability import (  # noqa: E402
     apply_jitter,
+    classify_playback_fault,
     count_recent,
+    decoder_recovery_plan,
     end_file_reason,
     escalation_plan,
     is_stalled,
     is_systemic_outage,
     scale_demuxer_mb,
     should_park,
+    transport_recovery_plan,
 )
 
 
@@ -108,6 +111,43 @@ def test_tiny_budget_does_not_exceed_aggregate_ceiling():
 def test_zero_cells_is_safe():
     # Defensive: n<1 must not divide-by-zero.
     assert scale_demuxer_mb(0, per_cell_mb=512, total_budget_mb=3072) == 512
+
+
+# ── decoder / transport fault containment ────────────────────────────────────
+
+def test_fault_classifier_separates_decoder_and_transport_failures():
+    assert classify_playback_fault(
+        "hardware accelerator failed to decode picture"
+    ) == "decoder"
+    assert classify_playback_fault(
+        "Connection reset by peer while reading partial file"
+    ) == "transport"
+    assert classify_playback_fault("audio device underrun detected") == "other"
+
+
+def test_decoder_fault_falls_back_to_software_for_the_cell():
+    plan = decoder_recovery_plan(
+        fault_count=1, hardware_decode=True, max_faults=2,
+    )
+    assert plan == {"action": "fallback-software", "hwdec": "no"}
+
+
+def test_repeated_software_decoder_fault_recreates_then_skips():
+    assert decoder_recovery_plan(
+        fault_count=1, hardware_decode=False, max_faults=2,
+    )["action"] == "recreate"
+    assert decoder_recovery_plan(
+        fault_count=2, hardware_decode=False, max_faults=2,
+    )["action"] == "skip"
+
+
+def test_transport_fault_has_one_retry_then_quarantines_item():
+    assert transport_recovery_plan(1, max_attempts=1) == {
+        "action": "retry", "delay_s": 3,
+    }
+    assert transport_recovery_plan(2, max_attempts=1) == {
+        "action": "skip", "delay_s": 0,
+    }
 
 
 # ── escalation_plan (retry → transcode → skip) ────────────────────────────────
@@ -452,9 +492,20 @@ def test_max_concurrent_transcodes_constant():
 
 def test_macos_16gb_uses_conservative_cache_defaults():
     from hyperwall.constants import cache_defaults_for_platform
-    assert cache_defaults_for_platform("darwin", 16 * 1024) == (512, 4_096)
+    assert cache_defaults_for_platform("darwin", 16 * 1024) == (256, 2_048)
     assert cache_defaults_for_platform("darwin", 32 * 1024) == (1_024, 8_192)
     assert cache_defaults_for_platform("linux", 16 * 1024) == (1_024, 8_192)
+
+
+def test_macos_8_cell_cache_is_256_mib_with_bounded_readahead():
+    from hyperwall.constants import apply_cache_budget, mpv_opts_for_platform
+    opts = apply_cache_budget(
+        mpv_opts_for_platform("darwin"), 8,
+        platform="darwin", physical_memory_mb=16 * 1024,
+    )
+    assert opts["demuxer_max_bytes"] == "256MiB"
+    assert opts["demuxer_readahead_secs"] == 30
+    assert opts["cache_secs"] == 30
 
 
 def test_apply_cache_budget_shape():

@@ -219,6 +219,74 @@ def is_systemic_outage(
     return len(recent) >= needed
 
 
+# Keep these markers deliberately narrow. They are used on mpv log text from
+# multiple codecs/backends, so a generic "error" must never trigger a player
+# recreation on its own.
+_DECODER_FAULT_MARKERS = (
+    "hardware accelerator failed",
+    "vt decoder cb: output image buffer is null",
+    "error while decoding",
+    "missing reference picture",
+    "co located pocs",
+    "invalid nal unit",
+    "data partitioning is not implemented",
+)
+_TRANSPORT_FAULT_MARKERS = (
+    "no route to host",
+    "connection reset",
+    "connection refused",
+    "connection timed out",
+    "partial file",
+    "failed to seek",
+    "seek failed",
+    "http error 5",
+    "http 5",
+)
+
+
+def classify_playback_fault(message: str) -> str:
+    """Classify a narrow mpv/FFmpeg fault for per-cell recovery.
+
+    The caller supplies a single log message. Unknown messages remain
+    ``"other"`` so ordinary codec warnings, audio underruns, and informational
+    lines cannot accidentally reset a live player.
+    """
+    text = str(message or "").lower()
+    if any(marker in text for marker in _DECODER_FAULT_MARKERS):
+        return "decoder"
+    if any(marker in text for marker in _TRANSPORT_FAULT_MARKERS):
+        return "transport"
+    return "other"
+
+
+def decoder_recovery_plan(
+    fault_count: int,
+    *,
+    hardware_decode: bool,
+    max_faults: int = 2,
+) -> dict[str, object]:
+    """Choose a bounded per-cell response to decoder faults.
+
+    The first hardware-decoder fault switches only that cell to software
+    decoding and recreates its mpv instance. Software faults get one fresh
+    demuxer retry; repeated software faults quarantine the current item.
+    """
+    count = max(1, int(fault_count))
+    limit = max(1, int(max_faults))
+    if hardware_decode:
+        return {"action": "fallback-software", "hwdec": "no"}
+    if count < limit:
+        return {"action": "recreate", "hwdec": "no"}
+    return {"action": "skip", "hwdec": "no"}
+
+
+def transport_recovery_plan(attempt: int, *, max_attempts: int = 1) -> dict[str, object]:
+    """Retry one failed resource, then let the caller advance past it."""
+    if int(attempt) <= max(0, int(max_attempts)):
+        return {"action": "retry", "delay_s": 3}
+    return {"action": "skip", "delay_s": 0}
+
+
 # libmpv MPV_END_FILE_REASON_* values, as surfaced by python-mpv's
 # MpvEventEndFile.reason when only the int is available.
 _END_FILE_REASONS = {
