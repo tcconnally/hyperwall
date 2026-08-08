@@ -25,6 +25,11 @@ def display_identity(screen: Any) -> str:
     Prefer the OS-provided display serial number. When a platform does not
     expose one, use manufacturer, model, and connector name as a deterministic
     best-effort fallback. No display-list index is part of the identity.
+
+    When serial and connector are both unavailable (e.g. identical monitors
+    on a Qt version where those APIs aren't present), include the screen's
+    geometry to disambiguate physically distinct displays — two monitors of
+    the same model must live at different positions.
     """
     serial = _screen_text(screen, "serialNumber")
     if serial.casefold() in {"0", "unknown", "none", "n/a"}:
@@ -33,15 +38,23 @@ def display_identity(screen: Any) -> str:
     model = _screen_text(screen, "model")
     name = _screen_text(screen, "name")
     connector = _screen_text(screen, "connectorName") or _screen_text(screen, "edidHash")
-    material = (
-        "serial|" + "|".join((manufacturer, model, serial))
-        if serial
-        else (
-            "connector|" + "|".join((manufacturer, model, connector))
-            if connector
-            else "fallback|" + "|".join((manufacturer, model, name))
-        )
-    )
+    if serial:
+        material = "serial|" + "|".join((manufacturer, model, serial))
+    elif connector:
+        material = "connector|" + "|".join((manufacturer, model, connector))
+    else:
+        # Pure-fallback: two identical monitors on a Qt version without
+        # serial, connector, or EDID metadata. Geometry disambiguates them.
+        geometry = getattr(screen, "geometry", None)
+        try:
+            geo = geometry() if callable(geometry) else None
+        except Exception:
+            geo = None
+        if geo is not None:
+            pos = f"{geo.x()},{geo.y()},{geo.width()}x{geo.height()}"
+        else:
+            pos = name
+        material = "fallback|" + "|".join((manufacturer, model, pos))
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
     return f"screen-v1:{digest}"
 
