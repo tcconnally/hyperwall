@@ -791,6 +791,17 @@ class WallController:
                 or session_id in self._session_stop_inflight
             ):
                 return
+            # During a systemic outage, skip the API call entirely — every
+            # stop-session POST would time out (5s connect + 5s retry), and
+            # with only 4 pool workers the wall can't admit new sessions.
+            # Retain in the cleanup ledger for a future retry or shutdown.
+            if self.in_outage():
+                self._retain_session_cleanup_locked(item_id, session_id)
+                logger.debug(
+                    "Stop-session %s deferred during systemic outage.",
+                    session_id[:8],
+                )
+                return
             self._session_stop_inflight.add(session_id)
 
         def _worker() -> None:
@@ -998,6 +1009,21 @@ class WallController:
                 OUTAGE_WINDOW_S,
             )
         return outage
+
+    def in_outage(self) -> bool:
+        """Return True when a systemic outage is currently active.
+
+        Consults the sliding failure-event window. Used by session cleanup
+        to skip doomed API calls that would only block the pool workers
+        during a known network/server outage.
+        """
+        now = _time.monotonic()
+        return is_systemic_outage(
+            self._failure_events, now,
+            window_s=OUTAGE_WINDOW_S,
+            total_cells=len(self.cells),
+            min_cells=OUTAGE_MIN_CELLS,
+        )
 
     def _cell_group(self, cell: VideoCell) -> str:
         """Source group a cell draws from. Defaults to the shared 'all' group;

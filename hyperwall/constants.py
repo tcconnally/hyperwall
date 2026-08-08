@@ -228,8 +228,8 @@ _MPV_OPTS_BASE: dict[str, object] = dict(
     cache_secs=60,
     demuxer_max_bytes="1024MiB",
     demuxer_readahead_secs=60,
-    network_timeout=15,
-    stream_lavf_o="reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
+    network_timeout=25,
+    stream_lavf_o="reconnect=1,reconnect_streamed=1,reconnect_delay_max=10",
     keep_open="always",
     # Open the queued playlist entry's demuxer once the current one is fully
     # read (≈ demuxer_readahead_secs before EOF) — the gapless-advance warmup

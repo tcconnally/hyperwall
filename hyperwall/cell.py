@@ -902,7 +902,7 @@ class VideoCell(QWidget):
             return bool(self._native_finalizer_records)
 
     def _destroy_mpv(
-        self, wait_s: float = 1.5, *, audio_lock_held: bool = False,
+        self, wait_s: float = 0.75, *, audio_lock_held: bool = False,
         shutdown_deadline: float | None = None,
     ) -> None:
         """Terminate mpv while serializing against audio-arm native calls."""

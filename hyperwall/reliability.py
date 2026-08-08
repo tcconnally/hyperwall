@@ -263,6 +263,7 @@ _DECODER_FAULT_MARKERS = (
 )
 _TRANSPORT_FAULT_MARKERS = (
     "no route to host",
+    "network is unreachable",
     "connection reset",
     "connection refused",
     "connection timed out",
