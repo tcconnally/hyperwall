@@ -529,6 +529,14 @@ def test_max_concurrent_transcodes_constant():
     assert c.MAX_CONCURRENT_TRANSCODES == 4
 
 
+def test_transcode_prefetch_retry_constant_defaults():
+    from hyperwall import constants as c
+    # 2026-08-09 soak follow-up: slot-saturated prefetches retry for ~32s
+    # (8s x 4) instead of being dropped into a cold start.
+    assert c.TRANSCODE_PREFETCH_RETRY_S == 8
+    assert c.TRANSCODE_PREFETCH_RETRY_ATTEMPTS == 4
+
+
 def test_macos_16gb_uses_conservative_cache_defaults():
     from hyperwall.constants import cache_defaults_for_platform
     assert cache_defaults_for_platform("darwin", 16 * 1024) == (256, 2_048)

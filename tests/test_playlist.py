@@ -116,6 +116,49 @@ def test_shuffle_is_invoked():
     assert calls["n"] == 2
 
 
+# ── session-quarantine skip set (2026-08-09 soak follow-up) ────────────────
+
+def test_peek_returns_front_without_consuming():
+    pm = PlaylistManager(shuffle=_noshuffle)
+    pm.set_source(_items(3))
+    assert pm.peek()["Id"] == "0"
+    assert pm.peek()["Id"] == "0"   # still there after peeking twice
+    assert pm.next()["Id"] == "0"   # consumed only by next()
+
+
+def test_next_skips_quarantined_ids():
+    pm = PlaylistManager(shuffle=_noshuffle)
+    pm.set_source(_items(5))
+    got = [pm.next(skip_ids={"1", "3"})["Id"] for _ in range(5)]
+    # Quarantined items are never drawn while the skip set covers them.
+    assert "1" not in got and "3" not in got
+
+
+def test_next_skip_ids_still_serves_everything_else_once():
+    pm = PlaylistManager(shuffle=_noshuffle)
+    pm.set_source(_items(4))
+    seen = set()
+    for _ in range(4):
+        seen.add(pm.next(skip_ids={"2"})["Id"])
+    assert seen == {"0", "1", "3"}
+
+
+def test_next_skip_ids_all_skipped_fails_open():
+    pm = PlaylistManager(shuffle=_noshuffle)
+    pm.set_source(_items(3))
+    item = pm.next(skip_ids={"0", "1", "2"})
+    assert item is not None  # never None on a non-empty pool
+    assert item["Id"] in {"0", "1", "2"}
+
+
+def test_next_skip_ids_persists_across_refill():
+    pm = PlaylistManager(shuffle=_noshuffle)
+    pm.set_source(_items(2))
+    first = pm.next(skip_ids={"0"})
+    second = pm.next(skip_ids={"0"})  # refill + fresh cycle, still skipped
+    assert first["Id"] == "1" and second["Id"] == "1"
+
+
 def run_all() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0

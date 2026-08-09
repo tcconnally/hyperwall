@@ -107,6 +107,13 @@ TRANSPORT_RETRY_MAX = _int_env("HYPERWALL_TRANSPORT_RETRY_MAX", 1, 0, 3)
 STARVATION_FAULT_EVENTS = _int_env("HYPERWALL_STARVATION_FAULT_EVENTS", 3, 2, 10)
 STARVATION_FAULT_TOTAL_S = _int_env("HYPERWALL_STARVATION_FAULT_S", 20, 5, 120)
 
+# Transcode prefetch deferral (2026-08-09 soak follow-up): when every
+# transcode slot is busy the prefetch is requeued and retried on a timer
+# instead of being dropped (a dropped prefetch cold-starts at advance →
+# cache starvation). 0 disables either knob, restoring the old skip.
+TRANSCODE_PREFETCH_RETRY_S = _int_env("HYPERWALL_TRANSCODE_PREFETCH_RETRY_S", 8, 0, 120)
+TRANSCODE_PREFETCH_RETRY_ATTEMPTS = _int_env("HYPERWALL_TRANSCODE_PREFETCH_RETRY_ATTEMPTS", 4, 0, 24)
+
 def _physical_memory_mb() -> int | None:
     """Return host physical memory without spawning a platform command."""
     try:

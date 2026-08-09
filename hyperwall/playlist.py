@@ -65,11 +65,22 @@ class PlaylistManager:
         self._shuffle(shuffled)
         self._queues[group] = deque(shuffled)
 
-    def next(self, group: str = DEFAULT_GROUP) -> Item | None:
+    def next(
+        self,
+        group: str = DEFAULT_GROUP,
+        skip_ids: set[str] | None = None,
+    ) -> Item | None:
         """Return the next item for a group, or None if the pool is empty.
 
         Pops from the group's live queue, refilling+reshuffling from the pool
         when the queue is exhausted (starts a fresh de-dup cycle).
+
+        skip_ids: item IDs to skip (session-quarantined resources). Skipped
+        items rotate to the back of the queue — they stay in rotation, so a
+        later draw can still serve them if the caller's skip set shrinks, but
+        no skipped item is consumed while the set covers it. If the entire
+        live queue is skipped (pathological), fail open with the first
+        candidate rather than returning None on a non-empty pool.
         """
         if not self._pools.get(group):
             return None
@@ -77,7 +88,23 @@ class PlaylistManager:
         if not q:
             self._refill(group)
             q = self._queues[group]
-        return q.popleft()
+        if not skip_ids:
+            return q.popleft()
+        for _ in range(len(q)):
+            item = q.popleft()
+            if item.get("Id") not in skip_ids:
+                return item
+            q.append(item)  # rotate: quarantined items stay in the queue
+        # The whole live queue is quarantined — start a fresh cycle from the
+        # pool instead of serving a quarantined item at a cycle boundary.
+        self._refill(group)
+        q = self._queues[group]
+        for _ in range(len(q)):
+            item = q.popleft()
+            if item.get("Id") not in skip_ids:
+                return item
+            q.append(item)
+        return q.popleft()  # whole pool skipped — fail open
 
     def push_front(self, group: str, item: Item) -> None:
         """Return a reserved item to the front of a group's live queue."""
@@ -85,3 +112,13 @@ class PlaylistManager:
             return
         q = self._queues.setdefault(group, deque())
         q.appendleft(item)
+
+    def peek(self, group: str = DEFAULT_GROUP) -> Item | None:
+        """Return the group's next item without consuming it (or None)."""
+        if not self._pools.get(group):
+            return None
+        q = self._queues.get(group)
+        if not q:
+            self._refill(group)
+            q = self._queues[group]
+        return q[0]

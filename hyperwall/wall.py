@@ -47,6 +47,8 @@ from .constants import (
     STATS_ENABLED,
     STATS_COUNTER_PROPS,
     STATS_INFO_PROPS,
+    TRANSCODE_PREFETCH_RETRY_ATTEMPTS,
+    TRANSCODE_PREFETCH_RETRY_S,
     apply_cache_budget,
     apply_env_overrides,
     effective_bitrate_budget_mbps,
@@ -207,6 +209,9 @@ class WallController:
         # (global de-dup until the pool is exhausted). Per-monitor sourcing
         # (Epic 4) assigns cells to different groups.
         self.playlists = PlaylistManager()
+        # Session-scoped quarantine set: item IDs that starved (or exhausted
+        # decoder recovery) this session are skipped by every playlist draw.
+        self._starvation_quarantined: set[str] = set()
         # Must match the cells' initial hidden state: True here made the
         # first C-press a no-op and /api/controls report success without
         # acting (2026-07-13 audit).
@@ -321,6 +326,7 @@ class WallController:
                     cell.cell_id = uuid.uuid4().hex
                     cell.request_next.connect(self.next_video)
                     cell.request_prev.connect(self.prev_video)
+                    cell.resource_quarantined.connect(self._on_resource_quarantined)
                     cell.request_solo.connect(self._toggle_solo)
                     cell.request_remote_solo.connect(self._remote_solo)
                     grid.addWidget(cell, r, c)
@@ -933,13 +939,119 @@ class WallController:
                 or not cell._playback_token_is_current(token)
             ):
                 return
-            item = self.playlists.next(self._cell_group(cell))
-            if item is None:
+            self._do_prefetch(cell, token)
+
+        QTimer.singleShot(0, _queue)
+
+    def _do_prefetch(
+        self,
+        cell: VideoCell,
+        token: PlaybackToken,
+        *,
+        defer_on_saturation: bool = True,
+    ) -> None:
+        """Draw, admit, and prefetch the cell's next item.
+
+        Shared by the normal post-advance arm (_queue) and the deferred
+        transcode retry. defer_on_saturation: when every transcode slot is
+        busy, requeue the item and retry on a timer (the 2026-08-09 soak
+        showed a dropped prefetch cold-starts at advance → starvation);
+        otherwise log the classic skip and leave the item queued.
+        """
+        item = self.playlists.next(
+            self._cell_group(cell),
+            skip_ids=self._starvation_quarantined,
+        )
+        if item is None:
+            return
+        # Decide admission before building the URL. _build_url intentionally
+        # demotes an over-budget AUTO transcode to DIRECT for active
+        # playback; a prefetch must instead remain queued so it does not
+        # consume an item while bypassing the transcode ceiling.
+        occupied = self._transcode_load_count(
+            cell=cell,
+            include_cell=True,
+        )
+        if self._auto_transcode_requested(item) and not allow_transcode_prefetch(
+            occupied, MAX_CONCURRENT_TRANSCODES,
+        ):
+            self.playlists.push_front(
+                self._cell_group(cell), item,
+            )
+            if defer_on_saturation:
+                logger.info(
+                    "Deferring transcoded prefetch while %d/%d "
+                    "transcode slots are active (retry in %ds).",
+                    occupied, MAX_CONCURRENT_TRANSCODES,
+                    TRANSCODE_PREFETCH_RETRY_S,
+                )
+                self._schedule_transcode_prefetch_retry(cell, token, item)
+            else:
+                logger.info(
+                    "Skipping transcoded prefetch while %d/%d "
+                    "transcode slots are active.",
+                    occupied, MAX_CONCURRENT_TRANSCODES,
+                )
+            return
+        if not self._session_admission_available():
+            self.playlists.push_front(self._cell_group(cell), item)
+            logger.error("Session admission closed; requeued prefetch item.")
+            return
+        try:
+            url, sid = self._build_url(item, prefetch=True, cell=cell)
+        except Exception as e:
+            self.playlists.push_front(
+                self._cell_group(cell), item,
+            )
+            logger.debug("Prefetch URL build declined: %s", e)
+            return
+        if not cell.prefetch(item, url, sid):
+            self.playlists.push_front(
+                self._cell_group(cell), item,
+            )
+            self.stop_emby_session(item.get("Id"), sid)
+            logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
+        else:
+            if not self._register_session(item.get("Id"), sid):
+                cell.drop_prefetch(requeue=True)
+                self.stop_emby_session(item.get("Id"), sid)
+
+    def _schedule_transcode_prefetch_retry(
+        self,
+        cell: VideoCell,
+        token: PlaybackToken,
+        item: dict,
+        attempt: int = 1,
+    ) -> None:
+        """Retry a slot-saturated transcode prefetch once a slot frees.
+
+        Bounded by TRANSCODE_PREFETCH_RETRY_ATTEMPTS (disabled entirely when
+        the interval/attempts env is 0, restoring the old skip). Each retry
+        re-checks that the cell still wants this playback token and that the
+        item is still the group's next candidate — if the cell advanced or
+        another draw consumed the item, the retry stops.
+        """
+        if (
+            TRANSCODE_PREFETCH_RETRY_S <= 0
+            or TRANSCODE_PREFETCH_RETRY_ATTEMPTS <= 0
+            or attempt > TRANSCODE_PREFETCH_RETRY_ATTEMPTS
+        ):
+            return
+
+        def _retry(attempt: int = attempt) -> None:
+            if (
+                self._shutdown_requested
+                or cell._mpv is None
+                or not cell._playback_token_is_current(token)
+            ):
                 return
-            # Decide admission before building the URL. _build_url intentionally
-            # demotes an over-budget AUTO transcode to DIRECT for active
-            # playback; a prefetch must instead remain queued so it does not
-            # consume an item while bypassing the transcode ceiling.
+            if (
+                cell._prefetch_request_token is not None
+                and cell._prefetch_request_token != token
+            ):
+                return  # a newer prefetch request owns the cell
+            if self.playlists.peek(self._cell_group(cell)) is not item:
+                return  # superseded or consumed by another draw
             occupied = self._transcode_load_count(
                 cell=cell,
                 include_cell=True,
@@ -947,39 +1059,25 @@ class WallController:
             if self._auto_transcode_requested(item) and not allow_transcode_prefetch(
                 occupied, MAX_CONCURRENT_TRANSCODES,
             ):
-                logger.info(
-                    "Skipping transcoded prefetch while %d/%d "
-                    "transcode slots are active.",
-                    occupied, MAX_CONCURRENT_TRANSCODES,
-                )
-                self.playlists.push_front(
-                    self._cell_group(cell), item,
-                )
+                if attempt < TRANSCODE_PREFETCH_RETRY_ATTEMPTS:
+                    logger.info(
+                        "Transcoded prefetch still deferred "
+                        "(%d/%d slots) — retry %d/%d.",
+                        occupied, MAX_CONCURRENT_TRANSCODES,
+                        attempt, TRANSCODE_PREFETCH_RETRY_ATTEMPTS,
+                    )
+                    self._schedule_transcode_prefetch_retry(
+                        cell, token, item, attempt + 1,
+                    )
                 return
-            if not self._session_admission_available():
-                self.playlists.push_front(self._cell_group(cell), item)
-                logger.error("Session admission closed; requeued prefetch item.")
-                return
-            try:
-                url, sid = self._build_url(item, prefetch=True, cell=cell)
-            except Exception as e:
-                self.playlists.push_front(
-                    self._cell_group(cell), item,
-                )
-                logger.debug("Prefetch URL build declined: %s", e)
-                return
-            if not cell.prefetch(item, url, sid):
-                self.playlists.push_front(
-                    self._cell_group(cell), item,
-                )
-                self.stop_emby_session(item.get("Id"), sid)
-                logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
-            else:
-                if not self._register_session(item.get("Id"), sid):
-                    cell.drop_prefetch(requeue=True)
-                    self.stop_emby_session(item.get("Id"), sid)
+            # A slot is free — prefetch now. defer_on_saturation=False so a
+            # re-saturation here ends the chain (classic skip, item stays
+            # queued for a cold start rather than retrying forever).
+            self._do_prefetch(cell, token, defer_on_saturation=False)
 
-        QTimer.singleShot(0, _queue)
+        QTimer.singleShot(
+            TRANSCODE_PREFETCH_RETRY_S * 1000, _retry,
+        )
 
     def run_on_main(self, fn: Any) -> None:
         """Queue a callable onto the GUI thread (safe from any thread)."""
@@ -1052,13 +1150,21 @@ class WallController:
             self._arm_prefetch(cell)
             self.sync_broadcast_cell_update(cell)
             return
-        item = self.playlists.next(self._cell_group(cell))
+        item = self.playlists.next(
+            self._cell_group(cell),
+            skip_ids=self._starvation_quarantined,
+        )
         if item is None:
             return
         if prev:
             cell.history.append(prev)
         self._hand_off(cell, item)
         self.sync_broadcast_cell_update(cell)
+
+    def _on_resource_quarantined(self, item: dict) -> None:
+        """Add a quarantined resource to the session skip set."""
+        if item and item.get("Id"):
+            self._starvation_quarantined.add(item["Id"])
 
     @traced("wall.prev_video")
     def prev_video(self, cell: VideoCell) -> None:

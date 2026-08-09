@@ -214,6 +214,7 @@ class VideoCell(QWidget):
     request_next = pyqtSignal(object, bool)
     request_prev = pyqtSignal(object)
     request_solo = pyqtSignal(object)
+    resource_quarantined = pyqtSignal(object)
     request_remote_solo = pyqtSignal(object)
     _sig_eof = pyqtSignal(object, str)
     _sig_track_done = pyqtSignal(object)
@@ -2456,6 +2457,7 @@ class VideoCell(QWidget):
             )
             self._resource_quarantined = True
             self._track_done = True
+            self._notify_resource_quarantined()
             self._request_next_throttled(False)
             return
         if plan["action"] == "fallback-software":
@@ -2605,6 +2607,7 @@ class VideoCell(QWidget):
                         )
                         self._resource_quarantined = True
                         self._track_done = True
+                        self._notify_resource_quarantined()
                         self._request_next_throttled(False)
             if self._buffering_card:
                 self._buffering_card = False
@@ -2724,6 +2727,17 @@ class VideoCell(QWidget):
         else:
             self._track_done = True
             self._request_next_throttled(False)
+
+    def _notify_resource_quarantined(self) -> None:
+        """Tell the wall a resource is quarantined so it can skip re-picks.
+
+        The wall keeps a session-scoped set of quarantined item IDs and
+        filters them out of every draw; per-cell flags alone would let a
+        quarantined resource be re-picked and re-freeze moments later.
+        """
+        item = self.current_item or {}
+        if item.get("Id"):
+            self.resource_quarantined.emit(item)
 
     def _request_next_throttled(
         self,
