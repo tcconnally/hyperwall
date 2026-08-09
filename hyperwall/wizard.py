@@ -6,6 +6,7 @@ Monitor + library + grid layout selection dialog.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -24,6 +25,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+logger = logging.getLogger("HyperWall")
+
 from . import VERSION_SHORT
 from . import theme
 from .constants import (
@@ -33,7 +36,11 @@ from .constants import (
     normalize_display_layout,
 )
 from .displays import display_identity, restore_display_settings
-from .wizard_logic import grid_for_role_switch, update_last_selected_grid
+from .wizard_logic import (
+    grid_for_role_switch,
+    resolve_saved_grid,
+    update_last_selected_grid,
+)
 
 
 class _GridPreview(QWidget):
@@ -242,10 +249,11 @@ class SetupWizard(QDialog):
                 if self._using_stable_settings
                 else dict(self._saved_display_layouts.get(s.name(), {}))
             )
+            rows, cols = self._saved_grid_for(s, role)
             display_layout = normalize_display_layout({
                 "rotation": saved_layout.get("rotation", DisplayRotation.AUTO),
-                "rows": saved_layout.get("rows", default_rows),
-                "cols": saved_layout.get("cols", default_cols),
+                "rows": rows,
+                "cols": cols,
             })
             rotation_index = rotation_box.findData(display_layout["rotation"])
             rotation_box.setCurrentIndex(max(0, rotation_index))
@@ -371,11 +379,6 @@ class SetupWizard(QDialog):
             if self._using_stable_settings
             else {}
         )
-        saved_layout = (
-            dict(saved_settings)
-            if self._using_stable_settings
-            else dict(self._saved_display_layouts.get(self._screen_map[label].name(), {}))
-        )
         saved_role = saved_settings.get("role")
         if not self._using_stable_settings:
             saved_role = self._saved_display_roles.get(self._screen_map[label].name())
@@ -384,13 +387,46 @@ class SetupWizard(QDialog):
             self._grid_defaults,
             saved_role,
             role,
-            saved_layout.get("rows"),
-            saved_layout.get("cols"),
+            *self._saved_grid_for(self._screen_map[label], role),
         )
         box = self._grid_boxes[label]
         index = box.findData((rows, cols))
         if index >= 0:
             box.setCurrentIndex(index)
+
+    def _saved_grid_for(
+        self, screen: Any, role: str,
+    ) -> tuple[int, int]:
+        """Best saved grid for a display: identity → name-keyed → role default.
+
+        Stable identity is authoritative, but the pure-fallback identity
+        (no serial/connector/EDID) embeds screen geometry, which can drift
+        between launches — so an identity miss falls back to the always-
+        written name-keyed layout map instead of the role default.
+        """
+        default_rows, default_cols = self._grid_defaults[role]
+        identity_hit = (
+            self._saved_display_settings.get(display_identity(screen))
+            if self._using_stable_settings
+            else None
+        )
+        name_layout = self._saved_display_layouts.get(screen.name())
+        if identity_hit is None and self._using_stable_settings:
+            rows, cols = resolve_saved_grid(
+                None, name_layout, (default_rows, default_cols),
+            )
+            if (rows, cols) != (default_rows, default_cols):
+                logger.info(
+                    "Display identity miss for %s — restoring "
+                    "name-keyed grid %d×%d.",
+                    screen.name(), rows, cols,
+                )
+            return rows, cols
+        return resolve_saved_grid(
+            dict(identity_hit) if isinstance(identity_hit, dict) else None,
+            name_layout,
+            (default_rows, default_cols),
+        )
 
     def _sync_selected_preview(self) -> None:
         """Show the current monitor's selected role/grid in the live preview."""

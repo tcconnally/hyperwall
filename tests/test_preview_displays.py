@@ -24,6 +24,7 @@ from hyperwall.config import HyperwallConfig
 from hyperwall.constants import DisplayRole
 from hyperwall.wizard_logic import (
     grid_for_role_switch,
+    resolve_saved_grid,
     update_last_selected_grid,
 )
 
@@ -456,6 +457,42 @@ def test_role_switch_validates_and_falls_back():
     assert grid_for_role_switch(
         {}, {}, None, DisplayRole.PREVIEW, None, None,
     ) == (2, 2)
+
+
+# ── saved-grid resolution: identity → name-keyed → role default ──
+
+def test_resolve_saved_grid_identity_wins():
+    identity = {"rows": 4, "cols": 1}
+    name = {"rows": 2, "cols": 2}
+    assert resolve_saved_grid(identity, name, (2, 2)) == (4, 1)
+
+
+def test_resolve_saved_grid_identity_miss_falls_back_to_name_keyed():
+    # The 2026-08-09 "dropdowns weren't sticky" case: stable-identity lookup
+    # missed (pure-fallback identity embeds geometry, which drifted), so the
+    # always-written name-keyed layout must win over the role default.
+    assert resolve_saved_grid(None, {"rows": 4, "cols": 1}, (2, 2)) == (4, 1)
+
+
+def test_resolve_saved_grid_all_miss_returns_role_default():
+    assert resolve_saved_grid(None, None, (3, 4)) == (3, 4)
+
+
+def test_resolve_saved_grid_rejects_invalid_values():
+    assert resolve_saved_grid(
+        {"rows": 0, "cols": 7}, {"rows": "x", "cols": None}, (2, 2),
+    ) == (2, 2)
+    assert resolve_saved_grid(
+        {"rows": True, "cols": 3}, None, (2, 2),
+    ) == (2, 2)
+    # Name-keyed layout wins when the identity layout is present but invalid.
+    assert resolve_saved_grid(
+        {"rows": 9, "cols": 1}, {"rows": 4, "cols": 2}, (2, 2),
+    ) == (4, 2)
+
+
+def test_resolve_saved_grid_invalid_role_default_falls_to_2x2():
+    assert resolve_saved_grid(None, None, (0, 9)) == (2, 2)
 
 
 # ── runner ──

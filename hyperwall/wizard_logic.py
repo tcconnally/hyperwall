@@ -64,6 +64,49 @@ def grid_for_role_switch(
     return _valid_role_grid(remembered, defaults, new_role)
 
 
+def resolve_saved_grid(
+    identity_layout: Mapping[str, object] | None,
+    name_layout: Mapping[str, object] | None,
+    role_default: tuple[int, int],
+) -> tuple[int, int]:
+    """Best saved grid for a display: stable-identity, then name-keyed, then role default.
+
+    Per-display settings are keyed by stable display identity, but the
+    pure-fallback identity (no serial/connector/EDID — common on docked
+    USB-C displays) includes screen geometry, so an identity miss between
+    launches is possible. The name-keyed layout map is written on every
+    initialize and its key (the screen name) is far more stable, so it
+    backs the identity lookup instead of silently dropping to the role
+    default (2026-08-09: wizard grid dropdowns reverted to role defaults
+    after an identity miss).
+    """
+    for layout in (identity_layout, name_layout):
+        if not isinstance(layout, Mapping):
+            continue
+        rows = layout.get("rows")
+        cols = layout.get("cols")
+        if (
+            isinstance(rows, int)
+            and not isinstance(rows, bool)
+            and isinstance(cols, int)
+            and not isinstance(cols, bool)
+            and 1 <= rows <= 6
+            and 1 <= cols <= 6
+        ):
+            return rows, cols
+    rows, cols = role_default
+    if (
+        isinstance(rows, int)
+        and not isinstance(rows, bool)
+        and isinstance(cols, int)
+        and not isinstance(cols, bool)
+        and 1 <= rows <= 6
+        and 1 <= cols <= 6
+    ):
+        return rows, cols
+    return (2, 2)
+
+
 def _valid_role_grid(
     remembered: Mapping[str, tuple[int, int]],
     defaults: Mapping[str, tuple[int, int]],
