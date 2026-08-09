@@ -100,6 +100,13 @@ OUTAGE_BACKOFF_S = _int_env("HYPERWALL_OUTAGE_BACKOFF_S", 20, 5, 600)
 DECODER_FAULT_MAX = _int_env("HYPERWALL_DECODER_FAULT_MAX", 2, 1, 8)
 TRANSPORT_RETRY_MAX = _int_env("HYPERWALL_TRANSPORT_RETRY_MAX", 1, 0, 3)
 
+# Starvation fault gate (2026-08-08 soak): tracks that repeatedly run the
+# cache dry (repeat offenders froze up to 15x per run; single starvations of
+# 9-11s during server hiccups) are treated as media faults once they cross
+# either threshold — advance past the resource instead of stuttering to EOF.
+STARVATION_FAULT_EVENTS = _int_env("HYPERWALL_STARVATION_FAULT_EVENTS", 3, 2, 10)
+STARVATION_FAULT_TOTAL_S = _int_env("HYPERWALL_STARVATION_FAULT_S", 20, 5, 120)
+
 def _physical_memory_mb() -> int | None:
     """Return host physical memory without spawning a platform command."""
     try:

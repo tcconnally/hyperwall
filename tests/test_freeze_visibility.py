@@ -127,6 +127,80 @@ def test_seek_cap_is_98_percent():
     assert abs(target - 98.0) < 0.01, f"expected 98.0 (0.98 cap), got {target}"
 
 
+def _starve(cell, ctx, cycles):
+    for _ in range(cycles):
+        cell._handle_buffering(ctx, True)
+        cell._handle_buffering(ctx, False)
+
+
+def test_starvation_fault_advances_after_repeat_episodes():
+    """A track that starves STARVATION_FAULT_EVENTS times is a media fault:
+    the cell quarantines the resource and advances instead of stuttering on."""
+    from hyperwall.constants import STARVATION_FAULT_EVENTS
+    cell = _make_cell()
+    cell._cache_buffering_state = False
+    cell._last_seek_ts = 0.0  # never classified as a post-seek refill
+    cell.current_item = {"Name": "repeat_offender"}
+    advances = []
+    cell.request_next.connect(lambda _c, _r: advances.append(1))
+    ctx = _context(cell, cell._mpv_gen)
+
+    _starve(cell, ctx, STARVATION_FAULT_EVENTS - 1)
+    assert cell._starvation_track_events == STARVATION_FAULT_EVENTS - 1
+    assert cell._starvation_fault_scheduled is False
+    assert cell._track_done is False
+    assert not advances, "threshold must not fire early"
+
+    _starve(cell, ctx, 1)
+    assert cell._starvation_track_events == STARVATION_FAULT_EVENTS
+    assert cell._starvation_fault_scheduled is True
+    assert cell._resource_quarantined is True
+    assert cell._track_done is True
+    assert advances == [1], "exactly one advance request at the threshold"
+
+
+def test_starvation_fault_advances_on_cumulative_time():
+    """A single long starvation crossing STARVATION_FAULT_TOTAL_S is also a
+    fault — the events threshold alone would miss 2 x 12s episodes."""
+    import hyperwall.cell as cell_mod
+    from hyperwall.constants import STARVATION_FAULT_TOTAL_S
+    cell = _make_cell()
+    cell._cache_buffering_state = False
+    cell._last_seek_ts = 0.0
+    cell.current_item = {"Name": "slow_server_track"}
+    advances = []
+    cell.request_next.connect(lambda _c, _r: advances.append(1))
+
+    real = cell_mod._time.monotonic
+    clock = iter([1000.0, 1000.0 + STARVATION_FAULT_TOTAL_S + 5.0, 2000.0])
+    cell_mod._time.monotonic = lambda: next(clock)
+    try:
+        cell._handle_buffering(_context(cell, cell._mpv_gen), True)
+        cell._handle_buffering(_context(cell, cell._mpv_gen), False)
+    finally:
+        cell_mod._time.monotonic = real
+
+    assert cell._starvation_track_events == 1
+    assert cell._starvation_track_total_s >= STARVATION_FAULT_TOTAL_S
+    assert cell._starvation_fault_scheduled is True
+    assert cell._resource_quarantined is True
+    assert advances == [1]
+
+
+def test_starvation_counters_reset_per_track():
+    cell = _make_cell()
+    cell._cache_buffering_state = False
+    cell._last_seek_ts = 0.0
+    ctx = _context(cell, cell._mpv_gen)
+    cell._handle_buffering(ctx, True)
+    cell._handle_buffering(ctx, False)
+    assert cell._starvation_track_events == 1
+    cell._begin_track({"Id": "y", "Name": "n"})
+    assert cell._starvation_track_events == 0
+    assert cell._starvation_track_total_s == 0.0
+    assert cell._starvation_fault_scheduled is False
+
+
 def run_all() -> int:
     if not _PYQT:
         print("  SKIP  PyQt6/Windows unavailable — freeze tests run on the "

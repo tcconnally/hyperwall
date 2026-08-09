@@ -13,6 +13,7 @@ Six concerns (Epic 2 / #7 + the 2026-07-11 stampede/lockup reviews):
   - retry desync         → apply_jitter()
   - outage detection     → is_systemic_outage()
   - mpv event decoding   → end_file_reason()
+  - starvation faults    → starvation_fault_reached()
 """
 
 from __future__ import annotations
@@ -400,3 +401,20 @@ def escalation_plan(attempt: int, max_retries: int) -> dict:
             "delay_s": 2 ** attempt,
         }
     return {"action": "skip", "transcode": False, "delay_s": 0}
+
+
+def starvation_fault_reached(
+    track_events: int,
+    track_total_s: float,
+    *,
+    max_events: int = 3,
+    max_total_s: float = 20.0,
+) -> bool:
+    """A track crossed the cache-starvation fault threshold.
+
+    Either repeated short starvations (measured 2026-08-08: repeat offenders
+    froze up to 15x per run) or one long one (single 9-11s episodes during
+    server hiccups) means the serve is bad — the caller should advance past
+    the resource instead of stuttering to its natural end.
+    """
+    return track_events >= max_events or track_total_s >= max_total_s

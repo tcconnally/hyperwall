@@ -33,7 +33,7 @@ from .constants import (
     normalize_display_layout,
 )
 from .displays import display_identity, restore_display_settings
-from .wizard_logic import update_last_selected_grid
+from .wizard_logic import grid_for_role_switch, update_last_selected_grid
 
 
 class _GridPreview(QWidget):
@@ -379,13 +379,16 @@ class SetupWizard(QDialog):
         saved_role = saved_settings.get("role")
         if not self._using_stable_settings:
             saved_role = self._saved_display_roles.get(self._screen_map[label].name())
-        if saved_role == role:
-            rows = saved_layout.get("rows", self._grid_defaults[role][0])
-            cols = saved_layout.get("cols", self._grid_defaults[role][1])
-        else:
-            rows, cols = self._grid_defaults.get(role, (2, 2))
+        rows, cols = grid_for_role_switch(
+            self._last_selected_grids,
+            self._grid_defaults,
+            saved_role,
+            role,
+            saved_layout.get("rows"),
+            saved_layout.get("cols"),
+        )
         box = self._grid_boxes[label]
-        index = box.findData((int(rows), int(cols)))
+        index = box.findData((rows, cols))
         if index >= 0:
             box.setCurrentIndex(index)
 

@@ -33,3 +33,54 @@ def update_last_selected_grid(
         return updated
     updated[role] = (rows, cols)
     return updated
+
+
+def grid_for_role_switch(
+    remembered: Mapping[str, tuple[int, int]],
+    defaults: Mapping[str, tuple[int, int]],
+    saved_role: object,
+    new_role: object,
+    saved_rows: object,
+    saved_cols: object,
+) -> tuple[int, int]:
+    """Return the grid a monitor's dropdown should show when its role changes.
+
+    A monitor that already had the new role keeps its own saved layout;
+    otherwise it inherits the role's most recent selection this session.
+    Launch-time defaults are only a fallback — a stale default must never
+    clobber a grid the user picked minutes ago (2026-08-08: role toggles
+    silently reverted in-session grid choices to last session's values).
+    """
+    if saved_role == new_role:
+        if (
+            isinstance(saved_rows, int)
+            and not isinstance(saved_rows, bool)
+            and isinstance(saved_cols, int)
+            and not isinstance(saved_cols, bool)
+            and 1 <= saved_rows <= 6
+            and 1 <= saved_cols <= 6
+        ):
+            return saved_rows, saved_cols
+    return _valid_role_grid(remembered, defaults, new_role)
+
+
+def _valid_role_grid(
+    remembered: Mapping[str, tuple[int, int]],
+    defaults: Mapping[str, tuple[int, int]],
+    role: object,
+) -> tuple[int, int]:
+    """First valid (rows, cols) for a role from remembered, then defaults."""
+    for source in (remembered, defaults):
+        value = source.get(role)  # type: ignore[arg-type]
+        if (
+            isinstance(value, tuple)
+            and len(value) == 2
+            and isinstance(value[0], int)
+            and not isinstance(value[0], bool)
+            and isinstance(value[1], int)
+            and not isinstance(value[1], bool)
+            and 1 <= value[0] <= 6
+            and 1 <= value[1] <= 6
+        ):
+            return int(value[0]), int(value[1])
+    return (2, 2)

@@ -22,7 +22,10 @@ except ImportError:
 
 from hyperwall.config import HyperwallConfig
 from hyperwall.constants import DisplayRole
-from hyperwall.wizard_logic import update_last_selected_grid
+from hyperwall.wizard_logic import (
+    grid_for_role_switch,
+    update_last_selected_grid,
+)
 
 
 # ── constants / config ──
@@ -413,6 +416,46 @@ def test_solo_mode_round_trip():
 
     for win in wall.windows:
         win.close()
+
+
+# ── wizard role-switch grid selection ──
+
+def test_role_switch_inherits_session_grid_not_stale_default():
+    """Switching a monitor to a role it never had must use the role's most
+    recent in-session selection, never a stale launch-time default (the
+    2026-08-08 'grid dropdown didn't stay static' regression)."""
+    remembered = {DisplayRole.WALL: (4, 1), DisplayRole.PREVIEW: (3, 4)}
+    defaults = {DisplayRole.WALL: (2, 2), DisplayRole.PREVIEW: (3, 4)}
+    assert grid_for_role_switch(
+        remembered, defaults, DisplayRole.WALL, DisplayRole.PREVIEW,
+        None, None,
+    ) == (3, 4)
+    assert grid_for_role_switch(
+        remembered, defaults, DisplayRole.PREVIEW, DisplayRole.WALL,
+        None, None,
+    ) == (4, 1)
+
+
+def test_role_switch_keeps_monitors_own_saved_layout():
+    """A monitor that already had the new role keeps its own saved layout."""
+    remembered = {DisplayRole.WALL: (4, 1), DisplayRole.PREVIEW: (3, 4)}
+    defaults = {DisplayRole.WALL: (2, 2), DisplayRole.PREVIEW: (3, 4)}
+    assert grid_for_role_switch(
+        remembered, defaults, DisplayRole.WALL, DisplayRole.WALL, 2, 2,
+    ) == (2, 2)
+
+
+def test_role_switch_validates_and_falls_back():
+    remembered = {DisplayRole.WALL: (4, 1), DisplayRole.PREVIEW: (3, 4)}
+    defaults = {DisplayRole.WALL: (2, 2), DisplayRole.PREVIEW: (3, 4)}
+    # Invalid saved values fall through to the session selection.
+    assert grid_for_role_switch(
+        remembered, defaults, DisplayRole.WALL, DisplayRole.WALL, "x", None,
+    ) == (4, 1)
+    # Empty state falls back to the canonical default.
+    assert grid_for_role_switch(
+        {}, {}, None, DisplayRole.PREVIEW, None, None,
+    ) == (2, 2)
 
 
 # ── runner ──

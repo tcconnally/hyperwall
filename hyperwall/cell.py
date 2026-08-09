@@ -59,6 +59,8 @@ from .constants import (
     DECODER_FAULT_MAX,
     MAX_RETRIES,
     MOUSE_IDLE_MS,
+    STARVATION_FAULT_EVENTS,
+    STARVATION_FAULT_TOTAL_S,
     MPV_LOG_NOISE,
     MPV_OPTS,
     OUTAGE_BACKOFF_S,
@@ -83,6 +85,7 @@ from .reliability import (
     escalation_plan,
     is_stalled,
     should_park,
+    starvation_fault_reached,
     transport_recovery_plan,
 )
 from . import theme
@@ -258,6 +261,14 @@ class VideoCell(QWidget):
         self._freeze_count = 0
         self._freeze_total_s = 0.0
         self._freeze_postseek_count = 0
+        # Starvation fault gate: a track that keeps running the cache dry is a
+        # serve-side problem, not a track worth stuttering through. Per-track
+        # counters reset in _begin_track; crossing the thresholds makes
+        # _handle_buffering advance past the resource (2026-08-08 soak: repeat
+        # offenders like f3v0r_gimme_1 froze 15x before finishing).
+        self._starvation_track_events = 0
+        self._starvation_track_total_s = 0.0
+        self._starvation_fault_scheduled = False
         self._last_seek_ts = 0.0
         self._buffering_card = False
         self._retry_count = 0
@@ -1166,6 +1177,9 @@ class VideoCell(QWidget):
             self._transport_recovery_scheduled = False
             self._transport_resource_quarantined = False
             self._resource_quarantined = False
+            self._starvation_track_events = 0
+            self._starvation_track_total_s = 0.0
+            self._starvation_fault_scheduled = False
         self._pending_next = False
         self._pending_next_token = None
         self._prefetch_request_token = None
@@ -2568,6 +2582,30 @@ class VideoCell(QWidget):
                     dur, tag,
                     (self.current_item or {}).get("Name", "?"), state,
                 )
+                if tag == "cache starvation":
+                    self._starvation_track_events += 1
+                    self._starvation_track_total_s += dur
+                    if (
+                        not self._starvation_fault_scheduled
+                        and not self._track_done
+                        and starvation_fault_reached(
+                            self._starvation_track_events,
+                            self._starvation_track_total_s,
+                            max_events=STARVATION_FAULT_EVENTS,
+                            max_total_s=STARVATION_FAULT_TOTAL_S,
+                        )
+                    ):
+                        self._starvation_fault_scheduled = True
+                        logger.error(
+                            "Starvation fault on '%s': %d episodes / %.0fs "
+                            "cumulative — quarantining resource and advancing.",
+                            (self.current_item or {}).get("Name", "?"),
+                            self._starvation_track_events,
+                            self._starvation_track_total_s,
+                        )
+                        self._resource_quarantined = True
+                        self._track_done = True
+                        self._request_next_throttled(False)
             if self._buffering_card:
                 self._buffering_card = False
                 self._hide_overlay()

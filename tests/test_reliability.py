@@ -24,6 +24,7 @@ from hyperwall.reliability import (  # noqa: E402
     is_systemic_outage,
     scale_demuxer_mb,
     should_park,
+    starvation_fault_reached,
     transport_recovery_plan,
     PlaybackToken,
     playback_token_is_current,
@@ -563,6 +564,32 @@ def test_apply_cache_budget_scales_readahead():
     assert four["demuxer_readahead_secs"] == 60   # unchanged at 4 cells
     assert eight["demuxer_readahead_secs"] == 30  # burst-aware at 8
     assert eight["cache_secs"] == 30              # follows readahead
+
+
+# ── starvation fault threshold ───────────────────────────────────────────────
+
+def test_starvation_events_threshold():
+    # 3 short starvations = fault (2026-08-08: repeat offenders froze 15x).
+    assert not starvation_fault_reached(0, 0.0)
+    assert not starvation_fault_reached(2, 5.0)
+    assert starvation_fault_reached(3, 5.0)
+    assert starvation_fault_reached(15, 60.0)
+
+
+def test_starvation_time_threshold():
+    # One long starvation = fault even when episodes < events threshold.
+    assert not starvation_fault_reached(1, 19.9)
+    assert starvation_fault_reached(1, 20.0)
+    # Two 12s episodes: events (2) < 3, but cumulative time crosses 20s.
+    assert not starvation_fault_reached(2, 12.0)
+    assert starvation_fault_reached(2, 24.0)
+
+
+def test_starvation_thresholds_are_configurable():
+    assert not starvation_fault_reached(4, 0.0, max_events=5)
+    assert starvation_fault_reached(4, 0.0, max_events=4)
+    assert not starvation_fault_reached(0, 30.0, max_total_s=60.0)
+    assert starvation_fault_reached(0, 30.0, max_total_s=30.0)
 
 
 def run_all() -> int:
