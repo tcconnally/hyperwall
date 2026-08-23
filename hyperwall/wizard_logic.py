@@ -2,7 +2,33 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+
+
+def normalize_grid_value(value: object) -> tuple[int, int] | None:
+    if not isinstance(value, (tuple, list)) or len(value) != 2:
+        return None
+    rows, cols = value
+    if (
+        isinstance(rows, bool)
+        or isinstance(cols, bool)
+        or not isinstance(rows, int)
+        or not isinstance(cols, int)
+        or not 1 <= rows <= 6
+        or not 1 <= cols <= 6
+    ):
+        return None
+    return rows, cols
+
+
+def grid_index_for_value(values: Iterable[object], value: object) -> int:
+    target = normalize_grid_value(value)
+    if target is None:
+        return -1
+    for index, candidate in enumerate(values):
+        if normalize_grid_value(candidate) == target:
+            return index
+    return -1
 
 
 def update_last_selected_grid(

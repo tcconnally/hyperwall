@@ -1,7 +1,7 @@
 """Tests for the preview-display / solo-fullscreen feature.
 
-Pure-logic tests run everywhere. Qt construction tests follow the project
-convention and only run on Windows (where PyQt6 + offscreen are available).
+Pure-logic tests run everywhere. Wizard Qt tests run wherever PyQt6 +
+offscreen are available; wall/solo construction remains Windows-only.
 """
 import json
 import os
@@ -16,14 +16,18 @@ try:
     from PyQt6.QtWidgets import QApplication
 
     _app = QApplication.instance() or QApplication([])
+    _HAS_PYQT = True
     _PYQT = os.name == "nt"
-except ImportError:
+except (ImportError, RuntimeError):
+    _HAS_PYQT = False
     _PYQT = False
 
 from hyperwall.config import HyperwallConfig
 from hyperwall.constants import DisplayRole
 from hyperwall.wizard_logic import (
     grid_for_role_switch,
+    grid_index_for_value,
+    normalize_grid_value,
     resolve_saved_grid,
     update_last_selected_grid,
 )
@@ -60,6 +64,10 @@ def test_invalid_last_selected_grid_does_not_replace_default():
     assert updated == remembered
 
 
+def test_grid_index_matches_qt_sequence_shape():
+    assert grid_index_for_value([[1, 1], [2, 2], [3, 4]], (2, 2)) == 1
+
+
 def test_wizard_wires_grid_changes_to_last_selected_defaults():
     wizard_source = (
         Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
@@ -67,6 +75,16 @@ def test_wizard_wires_grid_changes_to_last_selected_defaults():
     assert "self._remember_grid_selection(label)" in wizard_source
     assert "update_last_selected_grid" in wizard_source
     assert "self._last_selected_grids" in wizard_source
+
+def test_wizard_uses_qt_safe_grid_index_lookup():
+    wizard_source = (
+        Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    ).read_text(encoding="utf-8")
+    assert "self._grid_index_for(" in wizard_source
+    assert "grid_box.findData((" not in wizard_source
+    assert "currentData()[0]" not in wizard_source
+    assert "currentData()[1]" not in wizard_source
+
 
 def test_wizard_uses_qt_item_view_selection_enum():
     wizard_source = (
@@ -159,8 +177,10 @@ def test_wizard_settings_persist_preview_role_and_grid_for_all_monitors():
     source = wizard.read_text(encoding="utf-8")
     assert 'for l in self._screen_map' in source
     assert 'self._role_boxes[l].currentData()' in source
-    assert 'self._grid_boxes[l].currentData()[0]' in source
-    assert 'self._grid_boxes[l].currentData()[1]' in source
+    assert 'self._grid_for_label(l)[0]' in source
+    assert 'self._grid_for_label(l)[1]' in source
+    assert 'currentData()[0]' not in source
+    assert 'currentData()[1]' not in source
 
 
 def test_wizard_role_change_reloads_that_monitor_grid_preview():
@@ -245,6 +265,58 @@ def test_config_invalid_stable_display_settings_use_defaults():
         "rows": 6,
         "cols": 1,
     }
+
+
+def test_wizard_restores_each_monitor_grid_between_sessions():
+    if not globals().get("_HAS_PYQT", False):
+        raise AssertionError("SKIP")
+
+    from PyQt6.QtCore import QRect
+    from hyperwall.wizard import SetupWizard
+
+    class _FakeScreen:
+        def __init__(self, name, geometry):
+            self._name = name
+            self._geometry = geometry
+
+        def name(self):
+            return self._name
+
+        def geometry(self):
+            return self._geometry
+
+    screens = [
+        _FakeScreen("External", QRect(0, 0, 2560, 1440)),
+        _FakeScreen("Portrait", QRect(2560, 0, 1440, 2560)),
+    ]
+    first = SetupWizard(screens, ["Movies"])
+    labels = list(first._screen_map)
+    for label, value in zip(labels, ((2, 2), (4, 1))):
+        first._grid_boxes[label].setCurrentIndex(
+            (value[0] - 1) * 6 + value[1] - 1
+        )
+    saved = first.get_settings()
+    first.close()
+    first.deleteLater()
+    _app.processEvents()
+
+    second = SetupWizard(
+        screens,
+        ["Movies"],
+        last_display_layouts=saved["display_layouts"],
+        last_display_settings=saved["display_settings"],
+    )
+    try:
+        restored = [
+            normalize_grid_value(second._grid_boxes[label].currentData())
+            for label in labels
+        ]
+        assert restored == [(2, 2), (4, 1)]
+    finally:
+        second.close()
+        second.deleteLater()
+        _app.processEvents()
+
 
 
 # ── WallController construction (Windows/Qt only) ──

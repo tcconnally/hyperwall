@@ -38,6 +38,8 @@ from .constants import (
 from .displays import display_identity, restore_display_settings
 from .wizard_logic import (
     grid_for_role_switch,
+    grid_index_for_value,
+    normalize_grid_value,
     resolve_saved_grid,
     update_last_selected_grid,
 )
@@ -272,10 +274,11 @@ class SetupWizard(QDialog):
                     )
             grid_box.setToolTip("Videos per display: rows × columns.")
             grid_box.setMinimumWidth(_s(74))
-            grid_index = grid_box.findData(
-                (display_layout["rows"], display_layout["cols"])
+            grid_index = self._grid_index_for(
+                grid_box, (display_layout["rows"], display_layout["cols"])
             )
-            grid_box.setCurrentIndex(max(0, grid_index))
+            if grid_index >= 0:
+                grid_box.setCurrentIndex(grid_index)
             self._grid_boxes[label_text] = grid_box
             grid_box.currentIndexChanged.connect(
                 lambda _index, item=item, label=label_text: (
@@ -390,9 +393,25 @@ class SetupWizard(QDialog):
             *self._saved_grid_for(self._screen_map[label], role),
         )
         box = self._grid_boxes[label]
-        index = box.findData((rows, cols))
+        index = self._grid_index_for(box, (rows, cols))
         if index >= 0:
             box.setCurrentIndex(index)
+
+    @staticmethod
+    def _grid_index_for(box: QComboBox, value: tuple[int, int]) -> int:
+        target = normalize_grid_value(value)
+        if target is None:
+            return -1
+        index = grid_index_for_value(
+            (box.itemData(index) for index in range(box.count())),
+            target,
+        )
+        if index >= 0:
+            return index
+        return box.findText(
+            f"{target[0]} × {target[1]}",
+            Qt.MatchFlag.MatchExactly,
+        )
 
     def _saved_grid_for(
         self, screen: Any, role: str,
@@ -438,17 +457,16 @@ class SetupWizard(QDialog):
             self.lbl_preview.setText("No monitors detected")
             return
 
-        value = self._grid_boxes[label].currentData()
-        if isinstance(value, tuple) and len(value) == 2:
-            rows, cols = int(value[0]), int(value[1])
-            role = self._role_boxes[label].currentData()
-            role_name = "Preview" if role == DisplayRole.PREVIEW else "Wall"
-            screen = self._screen_map[label]
-            self.preview.set_grid(rows, cols)
-            self.lbl_preview.setText(
-                f"{screen.name()} · {role_name} · {rows} × {cols} "
-                f"({rows * cols} cells)"
-            )
+        value = self._grid_for_label(label)
+        rows, cols = value
+        role = self._role_boxes[label].currentData()
+        role_name = "Preview" if role == DisplayRole.PREVIEW else "Wall"
+        screen = self._screen_map[label]
+        self.preview.set_grid(rows, cols)
+        self.lbl_preview.setText(
+            f"{screen.name()} · {role_name} · {rows} × {cols} "
+            f"({rows * cols} cells)"
+        )
 
     def get_settings(self) -> dict[str, Any]:
         """Return the selected configuration."""
@@ -473,8 +491,8 @@ class SetupWizard(QDialog):
             "display_layouts": {
                 self._screen_map[l].name(): {
                     "rotation": self._rotation_boxes[l].currentData(),
-                    "rows": self._grid_boxes[l].currentData()[0],
-                    "cols": self._grid_boxes[l].currentData()[1],
+                    "rows": self._grid_for_label(l)[0],
+                    "cols": self._grid_for_label(l)[1],
                 }
                 for l in self._screen_map
             },
@@ -485,23 +503,29 @@ class SetupWizard(QDialog):
                         "selected": self._screen_items[l].isSelected(),
                         "role": self._role_boxes[l].currentData(),
                         "rotation": self._rotation_boxes[l].currentData(),
-                        "rows": self._grid_boxes[l].currentData()[0],
-                        "cols": self._grid_boxes[l].currentData()[1],
+                        "rows": self._grid_for_label(l)[0],
+                        "cols": self._grid_for_label(l)[1],
                     }
                     for l in self._screen_map
                 },
             },
         }
 
+    def _grid_for_label(self, label: str) -> tuple[int, int]:
+        value = normalize_grid_value(self._grid_boxes[label].currentData())
+        if value is not None:
+            return value
+        role = self._role_boxes[label].currentData()
+        fallback = normalize_grid_value(self._grid_defaults.get(role, (2, 2)))
+        return fallback or (2, 2)
+
     def _grid_for_role(self, role: str) -> tuple[int, int]:
         """Return the most recently selected grid for a role."""
-        remembered = self._last_selected_grids.get(role)
-        if isinstance(remembered, tuple) and len(remembered) == 2:
-            return int(remembered[0]), int(remembered[1])
-        fallback = self._grid_defaults.get(role, (2, 2))
+        remembered = normalize_grid_value(self._last_selected_grids.get(role))
+        if remembered is not None:
+            return remembered
+        fallback = normalize_grid_value(self._grid_defaults.get(role, (2, 2)))
         for label, box in self._role_boxes.items():
             if box.currentData() == role:
-                value = self._grid_boxes[label].currentData()
-                if isinstance(value, tuple) and len(value) == 2:
-                    return int(value[0]), int(value[1])
-        return fallback
+                return self._grid_for_label(label)
+        return fallback or (2, 2)
