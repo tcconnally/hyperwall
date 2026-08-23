@@ -56,6 +56,10 @@ def _make_cell():
     cell.show()
     _app.processEvents()
     cell._mpv = _FakeMpv()
+    # Native controls require the same admitted playback identity a real
+    # loaded cell has; a bare fake mpv makes seek callbacks return early.
+    cell.current_item = {"Id": "fixture-item", "Name": "fixture"}
+    cell._stream_url = "fixture-stream"
     cell._duration_s = 100.0
     cell._played_anything = True
     return cell

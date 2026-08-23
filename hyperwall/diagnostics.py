@@ -11,6 +11,7 @@ import math
 import os
 import re
 import stat
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +124,41 @@ def _reject_existing_symlink_children(root: Path) -> None:
     for child in children:
         if child.is_symlink():
             raise ValueError(f"path contains symlink child: {child}")
+
+
+def force_private_permissions(path: str | Path, mode: int) -> None:
+    """Enforce owner-only diagnostic permissions on every supported OS."""
+    # Preserve an already-constructed Path; this also keeps callers that
+    # pass a POSIX Path stable when platform detection is mocked in tests.
+    target = path if isinstance(path, Path) else Path(path)
+    if os.name == "nt":
+        # chmod is still a useful writable-bit check on Windows; the ACL is
+        # the privacy boundary, because Windows does not model 0700/0600 as
+        # POSIX permission bits.
+        target.chmod(mode)
+        principal = os.environ.get("USERNAME", "").strip()
+        if not principal:
+            raise PermissionError("cannot identify the Windows diagnostic owner")
+        result = subprocess.run(
+            [
+                "icacls",
+                os.fspath(target),
+                "/inheritance:r",
+                "/grant:r",
+                f"{principal}:F",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            raise PermissionError(f"private ACL enforcement failed for {target}")
+        return
+    target.chmod(mode)
+    actual = target.stat().st_mode & 0o777
+    if actual != mode:
+        raise PermissionError(f"private mode enforcement failed for {target}")
 
 
 def redact_json_value(value: Any) -> Any:
@@ -599,9 +635,7 @@ def write_redacted_copy(source: str | Path, destination: str | Path) -> None:
     _reject_symlink_components(destination_path.parent)
     if destination_path.parent.is_symlink():
         raise ValueError("redacted destination parent must not be a symlink")
-    destination_path.parent.chmod(0o700)
-    if (destination_path.parent.stat().st_mode & 0o777) != 0o700:
-        raise PermissionError(f"private mode enforcement failed for {destination_path.parent}")
+    force_private_permissions(destination_path.parent, 0o700)
     source_fd = os.open(source_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     with os.fdopen(source_fd, "r", encoding="utf-8", errors="replace") as source_file:
         text = source_file.read()
@@ -629,7 +663,7 @@ def write_redacted_copy(source: str | Path, destination: str | Path) -> None:
     destination_fd = os.open(destination_path, flags, 0o600)
     with os.fdopen(destination_fd, "w", encoding="utf-8") as destination_file:
         destination_file.write(text)
-    destination_path.chmod(0o600)
+    force_private_permissions(destination_path, 0o600)
 
 
 def redact_tree(report_dir: str | Path, destination: str | Path) -> None:
@@ -644,7 +678,7 @@ def redact_tree(report_dir: str | Path, destination: str | Path) -> None:
         _reject_existing_symlink_children(target)
     target.mkdir(parents=True, exist_ok=True, mode=0o700)
     _reject_symlink_components(target)
-    target.chmod(0o700)
+    force_private_permissions(target, 0o700)
     allowed_suffixes = {".env", ".json", ".jsonl", ".log", ".txt"}
     for path in source.iterdir():
         if path.is_symlink() or not path.is_file() or path.suffix.lower() not in allowed_suffixes:

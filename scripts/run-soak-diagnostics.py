@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from hyperwall.diagnostics import analyze_run, redact_tree  # noqa: E402
+from hyperwall.diagnostics import analyze_run, redact_tree, force_private_permissions  # noqa: E402
 
 
 DEFAULT_DECODERS = ("videotoolbox", "videotoolbox-copy")
@@ -241,10 +241,7 @@ def _safe_env_manifest(env: object) -> dict[str, object]:
 def _force_private_permissions(path: Path) -> None:
     """Keep diagnostic manifests/logs private on shared machines."""
     mode = 0o700 if path.is_dir() else 0o600
-    path.chmod(mode)
-    actual = path.stat().st_mode & 0o777
-    if actual != mode:
-        raise PermissionError(f"private mode enforcement failed for {path}")
+    force_private_permissions(path, mode)
 
 
 def _base_env(report_dir: Path, minutes: int, dwell: int) -> dict[str, str]:
