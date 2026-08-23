@@ -38,6 +38,10 @@ from hyperwall.diagnostics import analyze_run, redact_tree  # noqa: E402
 
 DEFAULT_DECODERS = ("videotoolbox", "videotoolbox-copy")
 TEXT_ARTIFACTS = {"hyperwall.log", "run.env", "vm_stat.log", "nettop.log", "powermetrics.log"}
+_SOURCE_HEALTH_PATHS = {
+    "emby": ("/System/Info/Public",),
+    "jellyfin": ("/health",),
+}
 
 
 def _timestamp() -> str:
@@ -112,9 +116,10 @@ def _configured_setting(name: str, default: str = "") -> str:
 
 def _source_health(root: Path, timeout: float) -> dict[str, object]:
     url = _configured_url()
+    backend = _configured_backend()
     result: dict[str, object] = {
         "url_configured": bool(url),
-        "backend": _configured_backend(),
+        "backend": backend,
         "endpoint": _safe_endpoint_label(url),
         "endpoint_hash": (
             hashlib.sha256(url.encode()).hexdigest()[:12] if url else None
@@ -139,7 +144,9 @@ def _source_health(root: Path, timeout: float) -> dict[str, object]:
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}), _NoRedirect()
     )
-    for suffix in ("/System/Info/Public", "/health"):
+    for suffix in _SOURCE_HEALTH_PATHS.get(
+        backend, ("/System/Info/Public",)
+    ):
         target = url + suffix
         check: dict[str, object] = {"path": suffix}
         t0 = time.monotonic()
@@ -224,6 +231,7 @@ def _safe_env_manifest(env: object) -> dict[str, object]:
     keys = (
         "HYPERWALL_STATS", "HYPERWALL_PERFTRACE", "HYPERWALL_SOAK_MINUTES",
         "HYPERWALL_SOAK_DWELL_S", "HYPERWALL_SOAK_PROFILE", "HYPERWALL_HWDEC",
+        "HYPERWALL_CACHE_BUDGET_MB", "HYPERWALL_DEMUXER_PER_CELL_MB",
         "HYPERWALL_NO_RELAUNCH", "HYPERWALL_NO_LOG_SETUP", "LC_NUMERIC",
     )
     values: dict[str, object] = dict(env) if isinstance(env, dict) else {}
@@ -271,6 +279,7 @@ def _write_run_metadata(
     decoder: str,
     minutes: int,
     dwell: int,
+    env: dict[str, str],
 ) -> None:
     metadata = {
         "phase": phase,
@@ -278,7 +287,7 @@ def _write_run_metadata(
         "minutes": minutes,
         "dwell_seconds": dwell,
         "image_capture": False,
-        "environment": _safe_env_manifest(os.environ),
+        "environment": _safe_env_manifest(env),
         "started_at": datetime.now(timezone.utc).isoformat(),
         "git_commit": subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
@@ -298,16 +307,17 @@ def _run_live_phase(
 ) -> int:
     phase_dir.mkdir(parents=True, exist_ok=True)
     _force_private_permissions(phase_dir)
+    env = _base_env(phase_dir, minutes, dwell)
+    env["HYPERWALL_HWDEC"] = decoder
     _write_run_metadata(
         phase_dir / "runner.json",
         phase=phase_dir.name,
         decoder=decoder,
         minutes=minutes,
         dwell=dwell,
+        env=env,
     )
     _force_private_permissions(phase_dir / "runner.json")
-    env = _base_env(phase_dir, minutes, dwell)
-    env["HYPERWALL_HWDEC"] = decoder
     command = ["bash", "soak_wall.sh", str(minutes)]
     print(
         f"Starting phase {phase_dir.name}: decoder={decoder}, minutes={minutes}",

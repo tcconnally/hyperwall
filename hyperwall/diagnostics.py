@@ -165,10 +165,15 @@ def parse_app_log(text: str) -> dict[str, Any]:
     counts["freeze_count"] = 0
     freeze_seconds = 0.0
     max_loop_stall: list[float] = []
+    active_loop_stall: list[float] = []
+    shutdown_loop_stall: list[float] = []
     max_slow_slot: list[float] = []
+    shutdown_started = False
     stats: list[dict[str, Any]] = []
     malformed_numeric = 0
     for line in text.splitlines():
+        if re.search(r"Shutdown requested\.", line):
+            shutdown_started = True
         for key, pattern in _LOG_PATTERNS.items():
             match = pattern.search(line)
             if match:
@@ -180,6 +185,10 @@ def parse_app_log(text: str) -> dict[str, Any]:
                             malformed_numeric += 1
                         elif key == "loop_stalls":
                             max_loop_stall.append(value)
+                            if shutdown_started:
+                                shutdown_loop_stall.append(value)
+                            else:
+                                active_loop_stall.append(value)
                         else:
                             max_slow_slot.append(value)
                     except (TypeError, ValueError, OverflowError):
@@ -224,7 +233,10 @@ def parse_app_log(text: str) -> dict[str, Any]:
                 except (TypeError, ValueError, OverflowError):
                     malformed_numeric += 1
     counts["freeze_seconds"] = round(freeze_seconds, 1)
-    counts["max_loop_stall_ms"] = _max_or_zero(max_loop_stall)
+    counts["max_loop_stall_ms"] = _max_or_zero(active_loop_stall)
+    counts["max_loop_stall_ms_including_shutdown"] = _max_or_zero(max_loop_stall)
+    counts["shutdown_loop_stalls"] = len(shutdown_loop_stall)
+    counts["max_shutdown_loop_stall_ms"] = _max_or_zero(shutdown_loop_stall)
     counts["max_slow_slot_ms"] = _max_or_zero(max_slow_slot)
     counts["stats"] = stats
     counts["malformed_numeric_fields"] = malformed_numeric
@@ -265,6 +277,14 @@ def parse_soak_jsonl(text: str) -> dict[str, Any]:
         duration = None
     invariant_value = finish.get("invariant_violations") if finish else None
     invariant = invariant_value
+    metric_values = [
+        value
+        for value in (baseline.get("ws_metric"), resources.get("ws_metric"))
+        if isinstance(value, str) and value
+    ]
+    ws_metric = None
+    if metric_values:
+        ws_metric = metric_values[0] if len(set(metric_values)) == 1 else "mixed"
     result: dict[str, Any] = {
         "record_count": len(records),
         "malformed_records": malformed,
@@ -272,6 +292,7 @@ def parse_soak_jsonl(text: str) -> dict[str, Any]:
         "samples": samples,
         "baseline_ws_mb": baseline_ws,
         "final_ws_mb": final_ws,
+        "ws_metric": ws_metric,
         "duration_seconds": duration,
         "invariant_violations": invariant,
         "finish_event_present": bool(finish),
@@ -311,6 +332,9 @@ def _safe_children(root: Path, pattern: str) -> list[Path]:
 
 def _valid_resource_map(value: Any) -> bool:
     if not isinstance(value, dict):
+        return False
+    metric = value.get("ws_metric")
+    if metric is not None and metric not in {"peak_rss_mb", "working_set_mb"}:
         return False
     for key in ("ws_mb", "private_mb", "threads"):
         if key in value and not _finite_number(value[key], nonnegative=True):
@@ -445,12 +469,27 @@ def analyze_run(report_dir: str | Path) -> dict[str, Any]:
         "GUI stalls above 500 ms block the responsiveness gate.",
     )
     growth = manifest.get("working_set_growth_mb")
+    growth_is_large = isinstance(growth, (int, float)) and growth > 1024
+    peak_rss_only = manifest.get("ws_metric") == "peak_rss_mb"
+    growth_status = (
+        "WARNING"
+        if growth_is_large and peak_rss_only
+        else "BLOCK"
+        if growth_is_large
+        else "WARNING"
+        if growth is None
+        else "PASS"
+    )
+    growth_note = (
+        "Peak RSS is a high-water mark; corroborate with current RSS or allocator "
+        "evidence before calling it a leak."
+        if peak_rss_only
+        else "Growth above 1 GiB requires investigation; missing RSS is not zero."
+    )
     gates["working_set_growth_mb"] = _gate(
-        "BLOCK" if isinstance(growth, (int, float)) and growth > 1024 else (
-            "WARNING" if growth is None else "PASS"
-        ),
+        growth_status,
         growth,
-        "Growth above 1 GiB requires investigation; missing RSS is not zero.",
+        growth_note,
     )
     invariant = manifest.get("invariant_violations")
     invariant_number: int | float | None = None
@@ -496,6 +535,7 @@ def analyze_run(report_dir: str | Path) -> dict[str, Any]:
         or manifest.get("invariant_violations") is None
         or not _finite_number(manifest.get("sample_count", 0), nonnegative=True)
         or manifest.get("sample_count", 0) < 1
+        or manifest.get("ws_metric") == "mixed"
         or not _valid_event_shape({
             "baseline": {"ws_mb": manifest.get("baseline_ws_mb")},
             "resources": {"ws_mb": manifest.get("final_ws_mb")},

@@ -69,13 +69,15 @@ class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
     ] if os.name == "nt" else []
 
 
-def _resource_snapshot() -> dict[str, int]:
+def _resource_snapshot() -> dict[str, int | str]:
     """Working set / private bytes / GDI / USER / threads for this process.
 
-    GDI/USER counts are Windows-only; POSIX gets RSS from getrusage.
+    GDI/USER counts are Windows-only; POSIX gets a peak RSS high-water mark
+    from getrusage, which is labeled explicitly for offline analysis.
     """
-    out: dict[str, int] = {}
+    out: dict[str, int | str] = {}
     if os.name != "nt":
+        out["ws_metric"] = "peak_rss_mb"
         try:
             import resource
             rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -109,6 +111,7 @@ def _resource_snapshot() -> dict[str, int]:
         pmc = _PROCESS_MEMORY_COUNTERS()
         pmc.cb = ctypes.sizeof(pmc)
         if psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb):
+            out["ws_metric"] = "working_set_mb"
             out["ws_mb"] = pmc.WorkingSetSize // (1024 * 1024)
             out["private_mb"] = pmc.PagefileUsage // (1024 * 1024)
         out["gdi"] = u32.GetGuiResources(h, 0)   # GR_GDIOBJECTS
