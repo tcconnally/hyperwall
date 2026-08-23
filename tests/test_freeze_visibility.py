@@ -66,10 +66,11 @@ def _make_cell():
 
 
 def _context(cell, gen=None, track=None):
+    item_id = (cell.current_item or {}).get("Id")
     return (
         cell._mpv_gen if gen is None else gen,
         cell._track_generation if track is None else track,
-        None,
+        item_id,
         cell._stream_url,
         None,
     )
