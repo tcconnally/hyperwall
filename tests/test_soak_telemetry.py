@@ -50,6 +50,15 @@ def test_soak_emits_machine_readable_manifest():
     assert "path.chmod(0o600)" in source
 
 
+def test_soak_resource_metric_identifies_posix_peak_rss():
+    source = open(
+        os.path.join(os.path.dirname(__file__), "..", "hyperwall", "soak.py"),
+        encoding="utf-8",
+    ).read()
+    assert "ws_metric" in source
+    assert "peak_rss_mb" in source
+
+
 def test_macos_soak_launcher_collects_system_telemetry():
     path = os.path.join(os.path.dirname(__file__), "..", "soak_wall.sh")
     source = open(path, encoding="utf-8").read()

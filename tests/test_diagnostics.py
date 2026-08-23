@@ -22,6 +22,19 @@ from hyperwall.diagnostics import (  # noqa: E402
 )
 
 
+def _load_runner_module():
+    import importlib.util
+
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "scripts", "run-soak-diagnostics.py"
+    )
+    spec = importlib.util.spec_from_file_location("runner_test_module", path)
+    assert spec is not None and spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    return runner
+
+
 def test_runner_disables_image_capture_and_has_no_capture_commands():
     source = open(
         os.path.join(
@@ -160,6 +173,139 @@ def test_source_health_records_latency_without_response_body():
         encoding="utf-8",
     ).read()
     assert "latency_ms" in source
+
+
+def test_emby_source_health_uses_public_info_without_unrelated_health_probe():
+    runner = _load_runner_module()
+    calls = []
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _Opener:
+        def open(self, request, timeout):
+            calls.append((request.full_url, timeout))
+            return _Response()
+
+    original_url = runner._configured_url
+    original_backend = runner._configured_backend
+    original_builder = runner.urllib.request.build_opener
+    try:
+        runner._configured_url = lambda: "http://emby.example:8096"
+        runner._configured_backend = lambda: "emby"
+        runner.urllib.request.build_opener = lambda *_args: _Opener()
+        result = runner._source_health(Path("."), 1.0)
+    finally:
+        runner._configured_url = original_url
+        runner._configured_backend = original_backend
+        runner.urllib.request.build_opener = original_builder
+
+    assert result["status"] == "PASS"
+    assert [url.rsplit("/", 1)[-1] for url, _ in calls] == ["Public"]
+    assert [check["path"] for check in result["checks"]] == [
+        "/System/Info/Public"
+    ]
+
+
+def test_runner_metadata_records_effective_phase_environment():
+    runner = _load_runner_module()
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory, "runner.json")
+        runner._write_run_metadata(
+            path,
+            phase="phase-01-no",
+            decoder="no",
+            minutes=5,
+            dwell=20,
+            env={
+                "HYPERWALL_HWDEC": "no",
+                "HYPERWALL_CACHE_BUDGET_MB": "1024",
+                "UNSAFE_SECRET": "must-not-be-recorded",
+            },
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["environment"]["HYPERWALL_HWDEC"] == "no"
+    assert payload["environment"]["HYPERWALL_CACHE_BUDGET_MB"] == "1024"
+    assert "UNSAFE_SECRET" not in payload["environment"]
+
+
+def test_shutdown_stall_is_not_used_as_playback_responsiveness_failure():
+    parsed = parse_app_log(
+        "\n".join(
+            [
+                "[12:00:00] WARNING PERF loop stall: main thread blocked ~180ms",
+                "[12:00:01] INFO Shutdown requested.",
+                "[12:00:02] WARNING PERF loop stall: main thread blocked ~1062ms",
+            ]
+        )
+    )
+
+    assert parsed["max_loop_stall_ms"] == 180.0
+    assert parsed["max_shutdown_loop_stall_ms"] == 1062.0
+    assert parsed["shutdown_loop_stalls"] == 1
+
+
+def test_peak_rss_growth_is_investigation_warning_not_leak_proof():
+    with tempfile.TemporaryDirectory() as directory:
+        Path(directory, "hyperwall.log").write_text(
+            "[12:00:00] INFO ready\n", encoding="utf-8"
+        )
+        Path(directory, "hyperwall_stats_a.json").write_text(
+            json.dumps(
+                {
+                    "cells": [
+                        {
+                            "cell": 0,
+                            "totals": {},
+                            "info": {},
+                            "freezes": 0,
+                            "freeze_seconds": 0,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        Path(directory, "hyperwall_soak_a.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "event": "start",
+                            "baseline": {"ws_mb": 234, "ws_metric": "peak_rss_mb"},
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "event": "sample",
+                            "wall_seconds": 1,
+                            "resources": {"ws_mb": 2000, "ws_metric": "peak_rss_mb"},
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "event": "finish",
+                            "wall_seconds": 2,
+                            "resources": {"ws_mb": 3561, "ws_metric": "peak_rss_mb"},
+                            "invariant_violations": 0,
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result = analyze_run(directory)
+
+    assert result["manifest"]["ws_metric"] == "peak_rss_mb"
+    assert result["gates"]["working_set_growth_mb"]["status"] == "WARNING"
 
 
 def test_runner_refuses_startup_cleanup_mode():
@@ -386,6 +532,32 @@ def test_redaction_masks_home_paths():
     safe = redact_text("path=/Users/thomas/hyperwall/report.log")
     assert "/Users/thomas" not in safe
     assert "/Users/<user>/hyperwall/report.log" in safe
+
+
+def test_windows_private_permissions_uses_owner_acl():
+    from unittest import mock
+
+    from hyperwall import diagnostics
+
+    with tempfile.TemporaryDirectory() as directory:
+        target = Path(directory)
+        with (
+            mock.patch.object(diagnostics.os, "name", "nt"),
+            mock.patch.dict(os.environ, {"USERNAME": "fixture-user"}, clear=False),
+            mock.patch.object(
+                diagnostics.subprocess, "run", return_value=mock.Mock(returncode=0)
+            ) as run,
+        ):
+            diagnostics.force_private_permissions(target, 0o700)
+
+        assert run.call_args.args[0] == [
+            "icacls",
+            str(target),
+            "/inheritance:r",
+            "/grant:r",
+            "fixture-user:F",
+        ]
+        assert run.call_args.kwargs["check"] is False
 
 
 def test_redacted_tree_excludes_unexpected_binary_artifacts():

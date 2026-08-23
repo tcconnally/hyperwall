@@ -35,8 +35,9 @@ PIDS=()
   printf 'started_at=%s\n' "$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"
   printf 'host='; sw_vers
   printf 'hardware='; system_profiler SPHardwareDataType 2>/dev/null || true
-  printf 'env=HYPERWALL_SOAK_MINUTES=%s HYPERWALL_SOAK_DWELL_S=%s HYPERWALL_SOAK_PROFILE=%s\n' \
-    "$HYPERWALL_SOAK_MINUTES" "$HYPERWALL_SOAK_DWELL_S" "$HYPERWALL_SOAK_PROFILE"
+  printf 'env=HYPERWALL_SOAK_MINUTES=%s HYPERWALL_SOAK_DWELL_S=%s HYPERWALL_SOAK_PROFILE=%s HYPERWALL_HWDEC=%s HYPERWALL_CACHE_BUDGET_MB=%s HYPERWALL_DEMUXER_PER_CELL_MB=%s\n' \
+    "$HYPERWALL_SOAK_MINUTES" "$HYPERWALL_SOAK_DWELL_S" "$HYPERWALL_SOAK_PROFILE" \
+    "${HYPERWALL_HWDEC:-}" "${HYPERWALL_CACHE_BUDGET_MB:-}" "${HYPERWALL_DEMUXER_PER_CELL_MB:-}"
 } > "$REPORT_DIR/run.env"
 
 sample_vm() {
