@@ -75,6 +75,13 @@ def _int_env(name: str, default: int, lo: int, hi: int) -> int:
         return default
 
 
+# Serialize queued demuxer starts so eight cells do not fill their caches at
+# the same instant. 0 is an explicit diagnostic escape hatch.
+PREFETCH_MIN_INTERVAL_MS = _int_env(
+    "HYPERWALL_PREFETCH_INTERVAL_MS", 500, 0, 5_000
+)
+
+
 STALL_TIMEOUT_S = _int_env("HYPERWALL_STALL_TIMEOUT_S", 20, 3, 600)
 WATCHDOG_INTERVAL_MS = _int_env("HYPERWALL_WATCHDOG_MS", 5_000, 1_000, 60_000)
 

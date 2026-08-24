@@ -48,14 +48,34 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _run(command: list[str], *, cwd: Path = ROOT, output: Path | None = None) -> int:
+def _run(
+    command: list[str],
+    *,
+    cwd: Path = ROOT,
+    output: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
     print("$ " + " ".join(command), flush=True)
     if output is None:
-        return subprocess.run(command, cwd=cwd, check=False).returncode
+        return subprocess.run(command, cwd=cwd, env=env, check=False).returncode
     with output.open("w", encoding="utf-8") as handle:
         return subprocess.run(
-            command, cwd=cwd, stdout=handle, stderr=subprocess.STDOUT, check=False,
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            check=False,
         ).returncode
+
+
+def _repo_test_env() -> dict[str, str]:
+    """Run repository checks without live-soak configuration overrides."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("HYPERWALL_")
+    }
 
 
 def _run_repo_tests(root: Path, report_dir: Path) -> int:
@@ -66,9 +86,12 @@ def _run_repo_tests(root: Path, report_dir: Path) -> int:
             report_dir / "compileall.log",
         ),
     ]
+    repo_env = _repo_test_env()
     failures = 0
     for command, output in checks:
-        failures += int(_run(command, cwd=root, output=output) != 0)
+        failures += int(
+            _run(command, cwd=root, output=output, env=repo_env) != 0
+        )
     return failures
 
 

@@ -236,6 +236,43 @@ def test_runner_metadata_records_effective_phase_environment():
     assert "UNSAFE_SECRET" not in payload["environment"]
 
 
+def test_repo_tests_do_not_inherit_soak_overrides():
+    runner = _load_runner_module()
+    observed_envs = []
+
+    def fake_run(command, *, cwd=runner.ROOT, output=None, env=None):
+        observed_envs.append(dict(env) if env is not None else None)
+        return 0
+
+    original_run = runner._run
+    names = (
+        "HYPERWALL_CACHE_BUDGET_MB",
+        "HYPERWALL_DEMUXER_PER_CELL_MB",
+        "HYPERWALL_HWDEC",
+    )
+    previous = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names:
+            os.environ[name] = "soak-override"
+        runner._run = fake_run
+        with tempfile.TemporaryDirectory() as directory:
+            assert runner._run_repo_tests(Path(directory), Path(directory)) == 0
+    finally:
+        runner._run = original_run
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    assert len(observed_envs) == 2
+    assert all(env is not None for env in observed_envs)
+    assert all(
+        not any(name.startswith("HYPERWALL_") for name in env)
+        for env in observed_envs
+    )
+
+
 def test_shutdown_stall_is_not_used_as_playback_responsiveness_failure():
     parsed = parse_app_log(
         "\n".join(

@@ -16,9 +16,13 @@ sys.path.insert(0, REPO_ROOT)
 from hyperwall.reliability import (  # noqa: E402
     apply_jitter,
     classify_playback_fault,
+    context_for_prefetch_fault,
+    context_for_unscoped_fault,
     count_recent,
     decoder_recovery_plan,
     end_file_reason,
+    is_malformed_stream_fault,
+    is_prefetch_fault,
     escalation_plan,
     is_stalled,
     is_systemic_outage,
@@ -28,6 +32,7 @@ from hyperwall.reliability import (  # noqa: E402
     transport_recovery_plan,
     PlaybackToken,
     playback_token_is_current,
+    prefetch_slot,
 )
 
 
@@ -84,6 +89,21 @@ def test_old_failures_age_out_of_window():
 
 # ── scale_demuxer_mb ──────────────────────────────────────────────────────────
 
+def test_prefetch_interval_constant_is_importable_and_bounded():
+    from hyperwall.constants import PREFETCH_MIN_INTERVAL_MS
+    assert 0 <= PREFETCH_MIN_INTERVAL_MS <= 5_000
+
+
+def test_prefetch_slot_staggers_burst_starts():
+    delay, next_ready = prefetch_slot(10.0, 0.0, interval_s=0.5)
+    assert delay == 0.0
+    assert next_ready == 10.5
+
+    delay, next_ready = prefetch_slot(10.0, next_ready, interval_s=0.5)
+    assert delay == 0.5
+    assert next_ready == 11.0
+
+
 def test_single_cell_gets_full_per_cell():
     assert scale_demuxer_mb(1, per_cell_mb=512, total_budget_mb=3072) == 512
 
@@ -118,6 +138,51 @@ def test_zero_cells_is_safe():
 
 # ── decoder / transport fault containment ────────────────────────────────────
 
+def test_prefetch_fault_policy_only_targets_malformed_pending_media():
+    assert is_prefetch_fault(
+        "decoder", "moov atom not found", has_prefetch=True, switching=False,
+    )
+    assert not is_prefetch_fault(
+        "decoder", "h264: error while decoding MB 1",
+        has_prefetch=True, switching=False,
+    )
+    assert not is_prefetch_fault(
+        "decoder", "moov atom not found",
+        has_prefetch=True, switching=True,
+    )
+    assert not is_prefetch_fault(
+        "transport", "moov atom not found",
+        has_prefetch=True, switching=False,
+    )
+
+
+    context = (3, 8, "item-2", "stream-2", "session-2")
+    assert context_for_prefetch_fault(
+        "decoder", "moov atom not found", context,
+        generation=3, switching=False,
+    ) == context
+    assert context_for_prefetch_fault(
+        "decoder", "moov atom not found", context,
+        generation=2, switching=False,
+    ) is None
+
+
+def test_unscoped_fault_uses_current_context_only():
+    context = (3, 7, "item-1", "stream-1", "session-1")
+    assert context_for_unscoped_fault(
+        "decoder", context, generation=3, switching=False,
+    ) == context
+    assert context_for_unscoped_fault(
+        "decoder", context, generation=2, switching=False,
+    ) is None
+    assert context_for_unscoped_fault(
+        "decoder", context, generation=3, switching=True,
+    ) is None
+    assert context_for_unscoped_fault(
+        "other", context, generation=3, switching=False,
+    ) is None
+
+
 def test_fault_classifier_separates_decoder_and_transport_failures():
     assert classify_playback_fault(
         "hardware accelerator failed to decode picture"
@@ -126,6 +191,29 @@ def test_fault_classifier_separates_decoder_and_transport_failures():
         "Connection reset by peer while reading partial file"
     ) == "transport"
     assert classify_playback_fault("audio device underrun detected") == "other"
+
+
+def test_malformed_stream_signatures_are_decoder_faults():
+    for message in (
+        "moov atom not found",
+        "Failed to recognize file format",
+        "hevc: VPS 0 does not exist",
+        "h264: non-existing SPS 0 referenced in buffering period",
+        "h264: error while decoding MB 105 32, bytestream -15",
+    ):
+        assert classify_playback_fault(message) == "decoder", message
+
+
+def test_malformed_stream_faults_skip_without_a_second_retry():
+    assert is_malformed_stream_fault(
+        "h264: error while decoding MB 105, bytestream -15"
+    )
+    assert decoder_recovery_plan(
+        1, hardware_decode=False, max_faults=2, malformed_stream=True,
+    )["action"] == "skip"
+    assert decoder_recovery_plan(
+        1, hardware_decode=False, max_faults=2, malformed_stream=False,
+    )["action"] == "recreate"
 
 
 def test_decoder_fault_falls_back_to_software_for_the_cell():

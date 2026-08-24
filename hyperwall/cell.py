@@ -78,6 +78,9 @@ from .constants import (
 from .reliability import (
     apply_jitter,
     classify_playback_fault,
+    context_for_prefetch_fault,
+    context_for_unscoped_fault,
+    is_malformed_stream_fault,
     PlaybackToken,
     playback_token_is_current,
     decoder_recovery_plan,
@@ -221,6 +224,8 @@ class VideoCell(QWidget):
     _sig_buffering = pyqtSignal(object, bool)
     _sig_decoder_fault = pyqtSignal(object, str)
     _sig_transport_fault = pyqtSignal(object, str)
+    _sig_prefetch_fault = pyqtSignal(object, str)
+    _sig_prefetched_advance = pyqtSignal(int, bool)
     _sig_release_retry = pyqtSignal()
 
     def __init__(self, controller: Any):
@@ -334,6 +339,18 @@ class VideoCell(QWidget):
         self._prefetched: tuple[dict[str, Any], str, str] | None = None
         self._prefetch_drop_retry_count = 0
         self._prefetch_drop_retry_scheduled = False
+        # macOS playlist advance is a native IPC operation that can block for
+        # hundreds of milliseconds while the warm demuxer switches. Keep the
+        # request identity separate from playback generations so a queued
+        # worker can be invalidated by a new play or shutdown.
+        self._prefetch_advance_serial = 0
+        self._prefetch_advance_inflight: int | None = None
+        self._prefetch_advance_token: PlaybackToken | None = None
+        self._prefetch_advance_pending: tuple[dict[str, Any], str, str] | None = None
+        # Parser logs can arrive after a malformed queued item has been
+        # removed. Suppress only that short tail so it cannot blame the live
+        # track; admitting a new prefetch clears the window.
+        self._prefetch_fault_suppression_until = 0.0
 
         # Reliability / self-healing (Epic 2)
         self._last_progress_ts = 0.0   # monotonic ts of last time-pos advance
@@ -430,6 +447,12 @@ class VideoCell(QWidget):
         )
         self._sig_transport_fault.connect(
             self._handle_transport_fault, Qt.ConnectionType.QueuedConnection
+        )
+        self._sig_prefetch_fault.connect(
+            self._handle_prefetch_fault, Qt.ConnectionType.QueuedConnection
+        )
+        self._sig_prefetched_advance.connect(
+            self._finish_prefetched_advance, Qt.ConnectionType.QueuedConnection
         )
         self._sig_release_retry.connect(
             self._retry_destroy_on_gui, Qt.ConnectionType.QueuedConnection
@@ -1089,18 +1112,57 @@ class VideoCell(QWidget):
         gen = self._mpv_gen if generation is None else generation
         if (
             resource_context is None
-            or resource_context[0] != gen
+            and fault == "decoder"
+            and is_malformed_stream_fault(text)
+            and _time.monotonic() < self._prefetch_fault_suppression_until
+        ):
+            return
+        if resource_context is None:
+            pending = self._prefetched
+            prefetch_context = (
+                (
+                    self._mpv_gen,
+                    self._track_generation + 1,
+                    pending[0].get("Id"),
+                    pending[1],
+                    pending[2],
+                )
+                if pending is not None else None
+            )
+            queued_context = context_for_prefetch_fault(
+                fault, text, prefetch_context,
+                generation=gen, switching=self._switching,
+            )
+            if queued_context is not None:
+                try:
+                    self._sig_prefetch_fault.emit(queued_context, text)
+                except Exception:
+                    pass
+                return
+            context = context_for_unscoped_fault(
+                fault,
+                self._native_active_context,
+                generation=gen,
+                switching=self._switching,
+            )
+            if context is not None:
+                track_generation = context[1]
+        else:
+            context = resource_context
+        if (
+            context is None
+            or context[0] != gen
             or (
                 track_generation is not None
-                and resource_context[1] != track_generation
+                and context[1] != track_generation
             )
         ):
             return
         try:
             if fault == "decoder":
-                self._sig_decoder_fault.emit(resource_context, text)
+                self._sig_decoder_fault.emit(context, text)
             elif fault == "transport":
-                self._sig_transport_fault.emit(resource_context, text)
+                self._sig_transport_fault.emit(context, text)
         except Exception:
             # Log callbacks run on native mpv threads and must never propagate
             # into the callback boundary during QObject teardown.
@@ -1329,6 +1391,10 @@ class VideoCell(QWidget):
             self._parked = False
             self._failure_ts.clear()
             logger.info("Parked cell manually resumed.")
+        # A regular replacement supersedes any queued asynchronous playlist
+        # advance. The worker remains daemonized but its identity check will
+        # reject the old native handle/state before it can commit.
+        self._invalidate_prefetched_advance()
         # loadfile (replace) clears the mpv playlist tail, so any queued
         # prefetch entry is gone with it (probed live 2026-07-13).
         same_resource = (
@@ -1458,6 +1524,7 @@ class VideoCell(QWidget):
             return False
         self._prefetched = (item, url, session_id)
         self._prefetched_stream_url = url
+        self._prefetch_fault_suppression_until = 0.0
         return True
 
     def _remove_prefetched_playlist_entry(
@@ -1535,6 +1602,8 @@ class VideoCell(QWidget):
         requeue: bool = True,
     ) -> bool:
         """Drop a queued resource transactionally."""
+        if self._prefetch_advance_inflight is not None:
+            self._invalidate_prefetched_advance()
         if self._prefetched is None:
             return True
         removed = self._remove_prefetched_playlist_entry(
@@ -1546,10 +1615,181 @@ class VideoCell(QWidget):
         self._forget_prefetch_after_native_clear(requeue=requeue)
         return True
 
+    def _invalidate_prefetched_advance(self) -> None:
+        """Invalidate a queued macOS playlist transition."""
+        if self._prefetch_advance_inflight is None:
+            return
+        self._prefetch_advance_serial += 1
+        self._prefetch_advance_inflight = None
+        self._prefetch_advance_token = None
+        self._prefetch_advance_pending = None
+        self._pending_native_context = None
+        self._switching = False
+
+    def _prefetched_advance_is_current(
+        self,
+        request_id: int,
+        mpv_ref: Any,
+        token: PlaybackToken,
+        pending: tuple[dict[str, Any], str, str],
+    ) -> bool:
+        return (
+            not self._closing
+            and self._prefetch_advance_inflight == request_id
+            and self._mpv is mpv_ref
+            and self._prefetch_advance_token == token
+            and self._prefetch_advance_pending == pending
+            and self._current_playback_token() == token
+            and self._prefetched == pending
+        )
+
+    def _queue_prefetched_advance(self) -> bool:
+        """Run macOS playlist advance off the Qt GUI thread."""
+        if self._closing or self._prefetched is None or self._mpv is None:
+            return False
+        if self._prefetch_advance_inflight is not None:
+            return True
+        token = self._current_playback_token()
+        pending = self._prefetched
+        if token is None or pending is None:
+            return False
+        item, url, sid = pending
+        self._cancel_audio_arm(timeout_s=0.0)
+        with self._audio_arm_lock:
+            self._prefetch_advance_serial += 1
+            request_id = self._prefetch_advance_serial
+            self._prefetch_advance_inflight = request_id
+            self._prefetch_advance_token = token
+            self._prefetch_advance_pending = pending
+        self._switching = True
+        self._track_done = False
+        self._pending_native_context = (
+            self._mpv_gen,
+            self._track_generation + 1,
+            item.get("Id"),
+            url,
+            sid,
+        )
+        mpv_ref = self._mpv
+        worker = threading.Thread(
+            target=self._prefetched_advance_worker,
+            args=(request_id, mpv_ref, token, pending),
+            name="mpv-prefetched-advance",
+            daemon=True,
+        )
+        try:
+            worker.start()
+        except Exception as e:
+            logger.warning("Prefetched advance worker could not start: %s", e)
+            self._invalidate_prefetched_advance()
+            return False
+        return True
+
+    def _prefetched_advance_worker(
+        self,
+        request_id: int,
+        mpv_ref: Any,
+        token: PlaybackToken,
+        pending: tuple[dict[str, Any], str, str],
+    ) -> None:
+        succeeded = False
+        try:
+            # The ownership lock covers the validity check and every native
+            # operation. A cancellation token without the lock leaves a TOCTOU
+            # window between checking the mpv handle and playlist-next.
+            with self._audio_arm_call_lock:
+                if not self._prefetched_advance_is_current(
+                    request_id, mpv_ref, token, pending
+                ):
+                    return
+                if STATS_ENABLED:
+                    self._flush_stats(audio_lock_held=True)
+                if self.muted and self._audio_started:
+                    mpv_ref["aid"] = "no"
+                mpv_ref.command("playlist-next")
+                mpv_ref["pause"] = False
+                succeeded = True
+        except Exception as e:
+            logger.warning("Prefetched advance failed (%s) — falling back to reload.", e)
+        finally:
+            try:
+                self._sig_prefetched_advance.emit(request_id, succeeded)
+            except Exception:
+                # Native worker callbacks must not escape into teardown.
+                pass
+
+    def _finish_prefetched_advance(
+        self, request_id: int, succeeded: bool,
+    ) -> None:
+        """Commit or cold-reload an off-thread prefetched transition."""
+        if self._prefetch_advance_inflight != request_id:
+            return
+        token = self._prefetch_advance_token
+        pending = self._prefetch_advance_pending
+        mpv_ref = self._mpv
+        self._prefetch_advance_inflight = None
+        self._prefetch_advance_token = None
+        self._prefetch_advance_pending = None
+        if (
+            token is None
+            or pending is None
+            or mpv_ref is None
+            or self._closing
+            or self._current_playback_token() != token
+            or self._prefetched != pending
+        ):
+            return
+        item, url, sid = pending
+        if not succeeded:
+            self._switching = False
+            self._pending_native_context = None
+            self._forget_prefetch_after_native_clear(requeue=False)
+            logger.warning(
+                "Prefetched advance failed — cold-loading the same item."
+            )
+            self.controller._hand_off(self, item)
+            self.controller.sync_broadcast_cell_update(self)
+            return
+
+        old_item_id = self._emby_item_id
+        old_session_id = self._emby_session_id
+        start_seen = (
+            self._native_active_context is not None
+            and self._native_active_context[0] == self._mpv_gen
+            and self._native_active_context[1] == self._track_generation + 1
+            and self._native_active_context[2:4] == (item.get("Id"), url)
+        )
+        self._prefetched = None
+        self._prefetched_stream_url = None
+        self._prefetch_request_token = None
+        self._prefetch_drop_retry_count = 0
+        self._stream_url = url
+        self._begin_track(item)
+        context: NativeContext = (
+            self._mpv_gen, self._track_generation, item.get("Id"), url, sid,
+        )
+        self._native_active_context = context
+        self._pending_native_context = None if start_seen else context
+        self._switching = not start_seen
+        if self.muted and self._audio_started:
+            self._audio_started = False
+        self._paused = False
+        self.btn_play.setText(_G_PAUSE)
+        if not self.muted and not self._audio_started:
+            self._enable_audio_track()
+        self._emby_session_id = sid
+        self._emby_item_id = item["Id"]
+        if old_item_id and old_session_id and old_session_id != sid:
+            self.controller.stop_emby_session(old_item_id, old_session_id)
+        self.controller._arm_prefetch(self)
+        self.controller.sync_broadcast_cell_update(self)
+
     @traced("cell.advance_to_prefetched")
     def advance_to_prefetched(self) -> bool:
         if self._closing or self._prefetched is None or self._mpv is None:
             return False
+        if sys.platform == "darwin":
+            return self._queue_prefetched_advance()
         if not self._audio_arm_call_lock.acquire(blocking=False):
             return False
         try:
@@ -1613,6 +1853,8 @@ class VideoCell(QWidget):
         self._emby_item_id = item["Id"]
         if old_item_id and old_session_id and old_session_id != sid:
             self.controller.stop_emby_session(old_item_id, old_session_id)
+        self.controller._arm_prefetch(self)
+        self.controller.sync_broadcast_cell_update(self)
         return True
 
     def _stop_qt_timers(self) -> None:
@@ -1646,6 +1888,7 @@ class VideoCell(QWidget):
         self._deferred_play = None
         if pending_play is not None and pending_play[3] is not None:
             pending_play[3](False)
+        self._invalidate_prefetched_advance()
         self.drop_prefetch(requeue=False)
         self._cancel_audio_arm(timeout_s=0.0)
         self._stop_qt_timers()
@@ -2430,6 +2673,34 @@ class VideoCell(QWidget):
             closing=self._closing,
         )
 
+    def _handle_prefetch_fault(
+        self, context: NativeContext, _message: str,
+    ) -> None:
+        """Quarantine a malformed queued resource before activation."""
+        pending = self._prefetched
+        if (
+            self._closing
+            or self._mpv is None
+            or pending is None
+            or self._prefetch_advance_inflight is not None
+        ):
+            return
+        item, url, sid = pending
+        expected = (
+            self._mpv_gen, self._track_generation + 1,
+            item.get("Id"), url, sid,
+        )
+        if context != expected:
+            return
+        logger.error(
+            "Malformed prefetched resource — quarantining before activation: %s",
+            item.get("Name", "?"),
+        )
+        self._prefetch_fault_suppression_until = _time.monotonic() + 5.0
+        self.resource_quarantined.emit(item)
+        self.drop_prefetch(requeue=False)
+
+
     def _handle_decoder_fault(
         self, context: NativeContext, _message: str,
     ) -> None:
@@ -2438,6 +2709,7 @@ class VideoCell(QWidget):
             self._closing
             or self._mpv is None
             or not self._native_context_is_current(context)
+            or self._prefetch_advance_inflight is not None
         ):
             return
         token = self._current_playback_token()
@@ -2450,6 +2722,7 @@ class VideoCell(QWidget):
             self._decoder_fault_count,
             hardware_decode=self._hardware_decode_enabled(),
             max_faults=DECODER_FAULT_MAX,
+            malformed_stream=is_malformed_stream_fault(_message),
         )
         if plan["action"] == "skip":
             logger.error(
@@ -2492,6 +2765,7 @@ class VideoCell(QWidget):
             self._closing
             or self._mpv is None
             or not self._native_context_is_current(context)
+            or self._prefetch_advance_inflight is not None
         ):
             return
         if self._resource_quarantined or self._transport_recovery_scheduled:
@@ -2799,7 +3073,12 @@ class VideoCell(QWidget):
         timestamp (full grace window), so a load that silently wedges still
         gets rescued instead of the guard flag disabling the safety net.
         """
-        if self._closing or self._mpv is None or self._parked:
+        if (
+            self._closing
+            or self._mpv is None
+            or self._parked
+            or self._prefetch_advance_inflight is not None
+        ):
             return
         if not self._played_anything:
             # Startup / EOF-before-first-frame is handled by the normal path.
