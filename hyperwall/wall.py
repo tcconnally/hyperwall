@@ -947,6 +947,8 @@ class WallController:
 
     def _arm_prefetch(self, cell: VideoCell) -> None:
         """Schedule a token-checked, globally paced playlist warmup."""
+        if self._shutdown_requested or self.in_outage():
+            return
         token = cell._current_playback_token()
         if token is None or cell._prefetch_request_token == token:
             return
@@ -958,6 +960,7 @@ class WallController:
             cell._prefetch_request_token = None
             if (
                 self._shutdown_requested
+                or self.in_outage()
                 or cell._mpv is None
                 or not cell._playback_token_is_current(token)
             ):
@@ -983,6 +986,7 @@ class WallController:
         """Run a reserved prefetch only if its playback identity survived."""
         if (
             self._shutdown_requested
+            or self.in_outage()
             or cell._mpv is None
             or not cell._playback_token_is_current(token)
         ):
@@ -1004,6 +1008,8 @@ class WallController:
         showed a dropped prefetch cold-starts at advance → starvation);
         otherwise log the classic skip and leave the item queued.
         """
+        if self._shutdown_requested or self.in_outage():
+            return
         item = self.playlists.next(
             self._cell_group(cell),
             skip_ids=self._starvation_quarantined,
@@ -1087,6 +1093,7 @@ class WallController:
         def _retry(attempt: int = attempt) -> None:
             if (
                 self._shutdown_requested
+                or self.in_outage()
                 or cell._mpv is None
                 or not cell._playback_token_is_current(token)
             ):

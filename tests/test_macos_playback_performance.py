@@ -180,6 +180,20 @@ def test_wall_does_not_rearm_prefetch_before_async_advance_finishes():
     assert "sync_broadcast_cell_update(cell)" not in fast
 
 
+def test_prefetch_is_suspended_during_systemic_outage():
+    wall = _source("hyperwall/wall.py")
+    arm_start = wall.index("    def _arm_prefetch")
+    arm_end = wall.index(chr(10) + "    def _do_prefetch", arm_start)
+    arm = wall[arm_start:arm_end]
+    assert "self.in_outage()" in arm
+    do_start = wall.index("    def _do_prefetch")
+    do_end = wall.index(chr(10) + "    def _schedule_transcode_prefetch_retry", do_start)
+    do = wall[do_start:do_end]
+    assert "self.in_outage()" in do
+    retry_start = wall.index("    def _schedule_transcode_prefetch_retry")
+    retry_end = wall.index(chr(10) + "    def run_on_main", retry_start)
+    assert "self.in_outage()" in wall[retry_start:retry_end]
+
 def test_prefetch_is_deferred_after_transition():
     source = _source("hyperwall/wall.py")
     start = source.index("    def _arm_prefetch")
