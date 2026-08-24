@@ -190,6 +190,9 @@ def test_fault_classifier_separates_decoder_and_transport_failures():
     assert classify_playback_fault(
         "Connection reset by peer while reading partial file"
     ) == "transport"
+    assert classify_playback_fault(
+        "http: Will reconnect at 123 in 0 second(s), error=Operation timed out."
+    ) == "transport"
     assert classify_playback_fault("audio device underrun detected") == "other"
 
 

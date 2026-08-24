@@ -302,6 +302,7 @@ _TRANSPORT_FAULT_MARKERS = (
     "connection reset",
     "connection refused",
     "connection timed out",
+    "operation timed out",
     "partial file",
     "failed to seek",
     "seek failed",
