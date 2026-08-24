@@ -10,7 +10,7 @@ import json
 import os
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -682,6 +682,39 @@ def test_redaction_rejects_symlinked_source_root():
             pass
         else:
             raise AssertionError("symlinked source root must be rejected")
+
+
+
+def test_macos_private_var_alias_is_allowed_but_other_symlinks_are_not():
+    from unittest import mock
+
+    from hyperwall import diagnostics
+
+    def fake_lstat(path):
+        if PurePosixPath(path) == PurePosixPath("/var"):
+            return type("Stat", (), {"st_mode": diagnostics.stat.S_IFLNK})()
+        raise FileNotFoundError(path)
+
+    for target, rejected in (("/private/var", False), ("/private/other", True)):
+        with (
+            mock.patch.object(diagnostics.sys, "platform", "darwin"),
+            mock.patch.object(diagnostics, "Path", PurePosixPath),
+            mock.patch.object(
+                diagnostics.os.path, "abspath", return_value="/var/folders/test"
+            ),
+            mock.patch.object(diagnostics.os.path, "realpath", return_value=target),
+            mock.patch.object(diagnostics.os, "lstat", side_effect=fake_lstat),
+        ):
+            try:
+                resolved = diagnostics._reject_symlink_components("/var/folders/test")
+            except ValueError as exc:
+                if not rejected:
+                    raise
+                assert "path contains symlink component: /var" in str(exc)
+            else:
+                if rejected:
+                    raise AssertionError("non-system /var symlink must be rejected")
+                assert resolved == PurePosixPath("/var/folders/test")
 
 
 def test_redacted_tree_masks_values_in_copied_text():
