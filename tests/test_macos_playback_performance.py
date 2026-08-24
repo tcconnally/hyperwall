@@ -640,6 +640,33 @@ def test_global_shutdown_retains_all_finalizer_types():
     assert "Client close exceeded global shutdown deadline" in cleanup
 
 
+def test_macos_render_teardown_keeps_ctypes_callback_alive_until_free():
+    source = _source("hyperwall/macembed.py")
+    release_start = source.index("    def release")
+    free_start = source.index("    def _free_ctx", release_start)
+    release = source[release_start:free_start]
+    assert "self._accepting_frames = False" in release
+    # python-mpv replaces/releases the CFUNCTYPE trampoline before calling
+    # the libmpv setter; doing that while the vo thread is in the old callback
+    # is a use-after-free. Keep the guarded callback installed through free().
+    assert "self._ctx.update_cb = None" not in release
+
+    free_end = source.index("\n    # ── GL plumbing", free_start)
+    free = source[free_start:free_end]
+    assert "ctx, self._ctx = self._ctx, None" in free
+    assert free.index("ctx, self._ctx = self._ctx, None") < free.index(
+        "ctx.free()"
+    )
+    assert "self._abandoned_contexts.append(ctx)" in free
+
+    abandon_start = free.index("if QOpenGLContext.currentContext() is None:")
+    abandon_end = free.index("\n        try:", abandon_start)
+    abandoned = free[abandon_start:abandon_end]
+    assert "self._abandoned_contexts.append(self._ctx)" in abandoned
+    assert abandoned.index("self._abandoned_contexts.append(self._ctx)") < abandoned.index(
+        "self._ctx = None"
+    )
+
 def run_all() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0
