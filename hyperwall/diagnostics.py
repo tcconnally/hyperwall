@@ -12,6 +12,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,13 @@ def _contains_sensitive_fragment(text: str) -> bool:
     )
 
 
+def _is_trusted_macos_var_alias(path: Path) -> bool:
+    """Allow only the fixed macOS /var -> /private/var system alias."""
+    if sys.platform != "darwin" or path != Path("/var"):
+        return False
+    return os.path.realpath(os.fspath(path)) == "/private/var"
+
+
 def _reject_symlink_components(path: str | Path) -> Path:
     """Reject symlinked path components before any read or write."""
     absolute = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
@@ -110,6 +118,8 @@ def _reject_symlink_components(path: str | Path) -> Path:
         current /= component
         try:
             if stat.S_ISLNK(os.lstat(current).st_mode):
+                if _is_trusted_macos_var_alias(current):
+                    continue
                 raise ValueError(f"path contains symlink component: {current}")
         except FileNotFoundError:
             continue
