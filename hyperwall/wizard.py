@@ -39,6 +39,7 @@ from .displays import display_identity, restore_display_settings
 from .wizard_logic import (
     grid_for_role_switch,
     grid_index_for_value,
+    initial_display_index,
     normalize_grid_value,
     resolve_saved_grid,
     update_last_selected_grid,
@@ -349,8 +350,12 @@ class SetupWizard(QDialog):
         layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         if screens:
-            initial_index = 0
-            if not self._using_stable_settings:
+            if self._using_stable_settings:
+                initial_index = initial_display_index(
+                    (display_identity(screen) for screen in screens),
+                    self._saved_display_settings,
+                )
+            else:
                 initial_index = next(
                     (
                         index for index, screen in enumerate(screens)
@@ -501,6 +506,7 @@ class SetupWizard(QDialog):
                 **{
                     display_identity(self._screen_map[l]): {
                         "selected": self._screen_items[l].isSelected(),
+                        "current": self.list_disp.currentItem() is self._screen_items[l],
                         "role": self._role_boxes[l].currentData(),
                         "rotation": self._rotation_boxes[l].currentData(),
                         "rows": self._grid_for_label(l)[0],

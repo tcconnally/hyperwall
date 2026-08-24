@@ -68,6 +68,29 @@ def test_grid_index_matches_qt_sequence_shape():
     assert grid_index_for_value([[1, 1], [2, 2], [3, 4]], (2, 2)) == 1
 
 
+def test_current_monitor_selection_restores_by_stable_identity():
+    from hyperwall.wizard_logic import initial_display_index
+
+    identities = ["screen-a", "screen-b"]
+    settings = {
+        "screen-a": {"selected": True, "current": False},
+        "screen-b": {"selected": True, "current": True},
+    }
+
+    assert initial_display_index(identities, settings) == 1
+
+
+def test_current_monitor_selection_falls_back_to_first_selected_identity():
+    from hyperwall.wizard_logic import initial_display_index
+
+    identities = ["screen-a", "screen-b"]
+    settings = {
+        "screen-a": {"selected": False},
+        "screen-b": {"selected": True},
+    }
+
+    assert initial_display_index(identities, settings) == 1
+
 def test_wizard_wires_grid_changes_to_last_selected_defaults():
     wizard_source = (
         Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
@@ -219,6 +242,12 @@ def test_wizard_uses_stable_identity_for_selection_and_settings_restore():
     assert '"selected": self._screen_items[l].isSelected()' in source
 
 
+def test_wizard_restores_and_persists_current_monitor_selection():
+    wizard = Path(__file__).resolve().parents[1] / "hyperwall" / "wizard.py"
+    source = wizard.read_text(encoding="utf-8")
+    assert "initial_display_index" in source
+    assert '"current": self.list_disp.currentItem() is self._screen_items[l]' in source
+
 def test_config_can_store_stable_display_settings():
     cfg = HyperwallConfig(
         server_url="http://localhost:8096",
@@ -241,6 +270,26 @@ def test_config_can_store_stable_display_settings():
         "rows": 3,
         "cols": 2,
     }
+
+
+def test_config_preserves_current_monitor_selection():
+    cfg = HyperwallConfig(
+        server_url="http://localhost:8096",
+        username="u",
+        password="p",
+        last_display_settings=json.dumps({
+            "screen-v1:monitor-b": {
+                "selected": True,
+                "current": True,
+                "role": "wall",
+                "rotation": "auto",
+                "rows": 2,
+                "cols": 2,
+            }
+        }),
+    )
+
+    assert cfg.display_settings()["screen-v1:monitor-b"]["current"] is True
 
 
 def test_config_invalid_stable_display_settings_use_defaults():

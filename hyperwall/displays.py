@@ -82,7 +82,11 @@ def normalize_display_settings(
         "rows": data.get("rows", defaults[0]),
         "cols": data.get("cols", defaults[1]),
     })
-    return {"selected": selected, "role": role, **layout}
+    result = {"selected": selected, "role": role, **layout}
+    current = data.get("current")
+    if isinstance(current, bool):
+        result["current"] = current
+    return result
 
 
 def restore_display_settings(
