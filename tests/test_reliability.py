@@ -379,6 +379,13 @@ def test_min_cells_floor_on_small_majority():
     assert is_systemic_outage(ev, 100.0, window_s=45, total_cells=4)
 
 
+def test_outage_retry_budget_parks_after_maximum():
+    from hyperwall.reliability import outage_recovery_plan
+
+    assert outage_recovery_plan(3, 3)["action"] == "retry"
+    assert outage_recovery_plan(4, 3)["action"] == "park"
+
+
 def test_outage_constants_defaults():
     from hyperwall import constants as c
     assert c.OUTAGE_WINDOW_S == 45

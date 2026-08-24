@@ -43,6 +43,7 @@ from .constants import (
     DisplayRole,
     OUTAGE_MIN_CELLS,
     OUTAGE_WINDOW_S,
+    SESSION_CLEANUP_RETRY_S,
     PREFETCH_MIN_INTERVAL_MS,
     STREAM_START_STAGGER_MS,
     STATS_ENABLED,
@@ -237,6 +238,12 @@ class WallController:
         self._session_lock = threading.Lock()
         self._session_stop_inflight: set[str] = set()
         self._stopped_session_ids: deque[str] = deque(maxlen=4096)
+        self._session_cleanup_timer = QTimer()
+        self._session_cleanup_timer.setInterval(SESSION_CLEANUP_RETRY_S * 1000)
+        self._session_cleanup_timer.timeout.connect(
+            self._retry_deferred_session_cleanup
+        )
+        self._session_cleanup_timer.start()
 
         # Cross-thread → GUI-thread marshaling (used by the web remote).
         # Must be constructed on the main thread so queued calls land here.
@@ -733,9 +740,9 @@ class WallController:
         self, item_id: str, session_id: str,
     ) -> None:
         ledger = self._session_cleanup_ledger
-        if session_id in self._session_registry:
-            # The registry itself is the durable record for an active session.
-            return
+        # A stop request can target a still-active registry entry. Keep a
+        # second pending record so the retry timer can revisit it without
+        # dropping the durable active-session record prematurely.
         if session_id in ledger:
             ledger[session_id] = item_id
             return
@@ -750,10 +757,20 @@ class WallController:
     def _session_admission_available(self) -> bool:
         with self._session_lock:
             return (
-                len(self._session_registry)
-                + len(self._session_cleanup_ledger)
+                len(set(self._session_registry)
+                    | set(self._session_cleanup_ledger))
                 < self._session_cleanup_limit
             )
+
+    def _retry_deferred_session_cleanup(self) -> None:
+        """Retry pending server-session stops after outages or failures."""
+        if self._shutdown_requested or self._cleaned_up:
+            return
+        with self._session_lock:
+            pending = list(self._session_cleanup_ledger.items())
+        for session_id, item_id in pending:
+            self.stop_emby_session(item_id, session_id)
+
 
     def _register_session(self, item_id: str | None, session_id: str | None) -> bool:
         if not item_id or not session_id:
@@ -766,8 +783,8 @@ class WallController:
             )
             if (
                 is_new
-                and len(self._session_registry)
-                + len(self._session_cleanup_ledger)
+                and len(set(self._session_registry)
+                    | set(self._session_cleanup_ledger))
                 >= self._session_cleanup_limit
             ):
                 logger.error("Session admission closed at cleanup capacity.")
@@ -1451,6 +1468,10 @@ class WallController:
         if self._cleaned_up:
             return []
         self._cleaned_up = True
+        try:
+            self._session_cleanup_timer.stop()
+        except Exception as e:
+            logger.debug("Session cleanup timer stop failed: %s", e)
         deferred_render_cells: list[VideoCell] = []
         prefetched_sessions = [
             (p_item.get("Id"), p_sid)

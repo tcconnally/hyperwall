@@ -387,6 +387,26 @@ def test_session_stop_retries_and_keeps_registry_until_success():
     assert "except Exception" in body
 
 
+def test_systemic_outage_recovery_honors_retry_budget():
+    cell = _source("hyperwall/cell.py")
+    start = cell.index("    def _on_error")
+    body = cell[start:]
+    assert "outage_recovery_plan" in body
+    assert "self._parked = True" in body
+    assert "CRASH_LOOP_COOLDOWN_S" in body
+
+def test_deferred_session_cleanup_retries_after_outage():
+    wall = _source("hyperwall/wall.py")
+    assert "SESSION_CLEANUP_RETRY_S" in wall
+    assert "self._session_cleanup_timer.timeout.connect" in wall
+    start = wall.index("    def _retry_deferred_session_cleanup")
+    end = wall.index("    def _register_session", start)
+    body = wall[start:end]
+    assert "_session_cleanup_ledger" in body
+    assert "self.stop_emby_session" in body
+    assert "self._session_cleanup_timer.stop()" in wall
+
+
 def test_windows_callback_contracts_are_generation_aware():
     freeze = _source("tests/test_freeze_visibility.py")
     audit = _source("tests/test_audit_regressions.py")

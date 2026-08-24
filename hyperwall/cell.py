@@ -87,6 +87,7 @@ from .reliability import (
     end_file_reason,
     escalation_plan,
     is_stalled,
+    outage_recovery_plan,
     should_park,
     starvation_fault_reached,
     transport_recovery_plan,
@@ -3170,10 +3171,28 @@ class VideoCell(QWidget):
             return
         self._retry_backoff_token = token
         self._retry_count += 1
-        logger.warning(
-            "Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES
-        )
         if outage:
+            outage_plan = outage_recovery_plan(
+                self._retry_count, MAX_RETRIES,
+            )
+            if outage_plan["action"] == "park":
+                self._parked = True
+                self._park_token = token
+                logger.error(
+                    "Systemic outage retry budget exhausted — parking cell "
+                    "for %ds.", CRASH_LOOP_COOLDOWN_S,
+                )
+                self._show_title_overlay(
+                    "Media unavailable — retrying soon…", sticky=True,
+                )
+                QTimer.singleShot(
+                    CRASH_LOOP_COOLDOWN_S * 1000,
+                    lambda token=token: self._unpark(token),
+                )
+                return
+            logger.warning(
+                "Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES
+            )
             delay_s = apply_jitter(OUTAGE_BACKOFF_S, random.random())
             logger.warning(
                 "Systemic outage suspected — backing off %.1fs without "
@@ -3186,6 +3205,9 @@ class VideoCell(QWidget):
                 ),
             )
             return
+        logger.warning(
+            "Playback error (attempt %d/%d)", self._retry_count, MAX_RETRIES
+        )
         plan = escalation_plan(self._retry_count, MAX_RETRIES)
         if plan["action"] == "retry":
             if plan["transcode"] and not self._force_transcode:
