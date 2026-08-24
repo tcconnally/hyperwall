@@ -390,14 +390,56 @@ def _group_exists(pgid: int) -> bool:
     return True
 
 
+def _direct_process_signal(process: subprocess.Popen, sig: signal.Signals) -> None:
+    try:
+        if sig == signal.SIGTERM:
+            process.terminate()
+        else:
+            process.kill()
+    except ProcessLookupError:
+        return
+    except PermissionError as exc:
+        print(
+            f"WARNING: direct phase-leader signal {sig.name} failed: {exc}",
+            file=sys.stderr,
+        )
+
+
+def _wait_for_process(process: subprocess.Popen, seconds: float) -> bool:
+    try:
+        process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        return False
+    except (ChildProcessError, ProcessLookupError):
+        return True
+    return True
+
+
 def _terminate_process_group(process: subprocess.Popen, pgid: int | None = None) -> None:
     pgid = process.pid if pgid is None else pgid
+    group_signal_denied = False
     for sig, wait_seconds in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 5.0)):
+        if group_signal_denied:
+            _direct_process_signal(process, sig)
+            if _wait_for_process(process, wait_seconds):
+                break
+            continue
         if _group_exists(pgid):
             try:
                 os.killpg(pgid, sig)
             except ProcessLookupError:
                 pass
+            except PermissionError as exc:
+                group_signal_denied = True
+                print(
+                    f"WARNING: process-group signal {sig.name} denied for "
+                    f"pgid={pgid}: {exc}; falling back to phase leader.",
+                    file=sys.stderr,
+                )
+                _direct_process_signal(process, sig)
+                if _wait_for_process(process, wait_seconds):
+                    break
+                continue
         deadline = time.monotonic() + wait_seconds
         while time.monotonic() < deadline and _group_exists(pgid):
             time.sleep(0.05)
@@ -406,6 +448,8 @@ def _terminate_process_group(process: subprocess.Popen, pgid: int | None = None)
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
+        pass
+    except (ChildProcessError, ProcessLookupError):
         pass
 
 

@@ -121,6 +121,25 @@ def test_runner_does_not_silently_ignore_permission_failures():
     assert "except OSError" not in source
 
 
+def test_process_group_cleanup_falls_back_after_permission_denied():
+    from unittest import mock
+
+    runner = _load_runner_module()
+    process = mock.Mock()
+    process.pid = 1234
+    process.wait.return_value = None
+    with (
+        mock.patch.object(runner, "_group_exists", side_effect=[True, False, False]),
+        mock.patch.object(
+            runner.os,
+            "killpg",
+            side_effect=PermissionError(1, "Operation not permitted"),
+        ),
+    ):
+        runner._terminate_process_group(process, process.pid)
+
+    process.terminate.assert_called_once_with()
+
 def test_permission_enforcement_raises_on_chmod_failure():
     import importlib.util
 
