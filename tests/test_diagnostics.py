@@ -134,6 +134,7 @@ def test_process_group_cleanup_falls_back_after_permission_denied():
             runner.os,
             "killpg",
             side_effect=PermissionError(1, "Operation not permitted"),
+            create=True,
         ),
     ):
         runner._terminate_process_group(process, process.pid)
