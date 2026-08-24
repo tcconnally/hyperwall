@@ -10,7 +10,7 @@ import json
 import os
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -691,13 +691,17 @@ def test_macos_private_var_alias_is_allowed_but_other_symlinks_are_not():
     from hyperwall import diagnostics
 
     def fake_lstat(path):
-        if Path(path) == Path("/var"):
+        if PurePosixPath(path) == PurePosixPath("/var"):
             return type("Stat", (), {"st_mode": diagnostics.stat.S_IFLNK})()
         raise FileNotFoundError(path)
 
     for target, rejected in (("/private/var", False), ("/private/other", True)):
         with (
             mock.patch.object(diagnostics.sys, "platform", "darwin"),
+            mock.patch.object(diagnostics, "Path", PurePosixPath),
+            mock.patch.object(
+                diagnostics.os.path, "abspath", return_value="/var/folders/test"
+            ),
             mock.patch.object(diagnostics.os.path, "realpath", return_value=target),
             mock.patch.object(diagnostics.os, "lstat", side_effect=fake_lstat),
         ):
@@ -710,7 +714,7 @@ def test_macos_private_var_alias_is_allowed_but_other_symlinks_are_not():
             else:
                 if rejected:
                     raise AssertionError("non-system /var symlink must be rejected")
-                assert resolved == Path("/var/folders/test")
+                assert resolved == PurePosixPath("/var/folders/test")
 
 
 def test_redacted_tree_masks_values_in_copied_text():
