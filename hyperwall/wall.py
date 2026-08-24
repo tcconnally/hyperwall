@@ -43,6 +43,7 @@ from .constants import (
     DisplayRole,
     OUTAGE_MIN_CELLS,
     OUTAGE_WINDOW_S,
+    PREFETCH_MIN_INTERVAL_MS,
     STREAM_START_STAGGER_MS,
     STATS_ENABLED,
     STATS_COUNTER_PROPS,
@@ -63,6 +64,7 @@ from .reliability import (
     gate_auto_transcode,
     is_systemic_outage,
     PlaybackToken,
+    prefetch_slot,
     transcode_load_count,
 )
 from .urls import build_stream_url, tag_names
@@ -244,6 +246,10 @@ class WallController:
         # failure, consulted by cells to decide whether to escalate.
         self._failure_events: deque[tuple[float, int]] = deque(maxlen=512)
         self._last_outage_log_ts = 0.0
+        # Monotonic watermark for global queued-prefetch admission. This is
+        # intentionally controller-wide: all cells share the same link/cache
+        # pressure, so per-cell timers cannot prevent a wall-wide burst.
+        self._prefetch_next_ready_ts = 0.0
         self._mpv_opts_effective: dict[str, Any] = {}
 
         # Emergency escape
@@ -923,7 +929,7 @@ class WallController:
         )
 
     def _arm_prefetch(self, cell: VideoCell) -> None:
-        """Schedule a playlist warmup after the active GUI transition returns."""
+        """Schedule a token-checked, globally paced playlist warmup."""
         token = cell._current_playback_token()
         if token is None or cell._prefetch_request_token == token:
             return
@@ -939,9 +945,32 @@ class WallController:
                 or not cell._playback_token_is_current(token)
             ):
                 return
-            self._do_prefetch(cell, token)
+            delay_s, self._prefetch_next_ready_ts = prefetch_slot(
+                _time.monotonic(),
+                self._prefetch_next_ready_ts,
+                interval_s=PREFETCH_MIN_INTERVAL_MS / 1000.0,
+            )
+            if delay_s <= 0.0:
+                self._do_prefetch_if_current(cell, token)
+                return
+            QTimer.singleShot(
+                max(1, int(delay_s * 1000)),
+                lambda c=cell, t=token: self._do_prefetch_if_current(c, t),
+            )
 
         QTimer.singleShot(0, _queue)
+
+    def _do_prefetch_if_current(
+        self, cell: VideoCell, token: PlaybackToken,
+    ) -> None:
+        """Run a reserved prefetch only if its playback identity survived."""
+        if (
+            self._shutdown_requested
+            or cell._mpv is None
+            or not cell._playback_token_is_current(token)
+        ):
+            return
+        self._do_prefetch(cell, token)
 
     def _do_prefetch(
         self,
@@ -1139,16 +1168,22 @@ class WallController:
             )
             return
         prev = cell.current_item
+        # A macOS prefetched advance is queued on a daemon worker. Ignore a
+        # duplicate EOF/input event until its queued completion commits; the
+        # completion owns history-adjacent cleanup, re-arm, and sync.
+        if getattr(cell, "_prefetch_advance_inflight", None) is not None:
+            logger.debug("Prefetched advance already in flight; ignoring next.")
+            return
         # Fast path: the next item is already queued and warmed on this
-        # cell's mpv playlist — the advance is a ~60ms cut, not a cold open.
+        # cell playlist — the advance is a ~60ms cut, not a cold open.
+        prefetched = cell._prefetched
         if cell.advance_to_prefetched():
             if prev:
                 cell.history.append(prev)
             logger.info(
-                "[PREFETCH→] %s", (cell.current_item or {}).get("Name"),
+                "[PREFETCH→] %s",
+                (prefetched[0] if prefetched else cell.current_item or {}).get("Name"),
             )
-            self._arm_prefetch(cell)
-            self.sync_broadcast_cell_update(cell)
             return
         item = self.playlists.next(
             self._cell_group(cell),

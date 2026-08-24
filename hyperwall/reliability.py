@@ -129,6 +129,23 @@ def scale_readahead_s(n_cells: int, base_s: int = 60, floor_s: int = 10) -> int:
     return max(floor_s, int(base_s * 4 / n))
 
 
+def prefetch_slot(
+    now: float,
+    next_ready: float,
+    *,
+    interval_s: float,
+) -> tuple[float, float]:
+    """Reserve the next serialized prefetch-start slot.
+
+    Returns ``(delay_s, new_next_ready)``. The calculation is pure so the
+    controller can pace burst starts without sleeping or blocking Qt; callers
+    must revalidate their playback token when the delayed slot fires.
+    """
+    current = float(now)
+    ready = max(current, float(next_ready))
+    return max(0.0, ready - current), ready + max(0.0, float(interval_s))
+
+
 def scale_bitrate_budget_mbps(
     n_cells: int, base_mbps: int, link_mbps: int = 800,
 ) -> int:
@@ -253,6 +270,16 @@ def is_systemic_outage(
 # Keep these markers deliberately narrow. They are used on mpv log text from
 # multiple codecs/backends, so a generic "error" must never trigger a player
 # recreation on its own.
+_MALFORMED_STREAM_MARKERS = (
+    "data partitioning is not implemented",
+    "moov atom not found",
+    "failed to recognize file format",
+    "vps 0 does not exist",
+    "sps 0 does not exist",
+    "non-existing sps",
+    "non-existing pps",
+    "bytestream",
+)
 _DECODER_FAULT_MARKERS = (
     "hardware accelerator failed",
     "vt decoder cb: output image buffer is null",
@@ -260,7 +287,7 @@ _DECODER_FAULT_MARKERS = (
     "missing reference picture",
     "co located pocs",
     "invalid nal unit",
-    "data partitioning is not implemented",
+    *_MALFORMED_STREAM_MARKERS,
 )
 _TRANSPORT_FAULT_MARKERS = (
     "no route to host",
@@ -291,11 +318,84 @@ def classify_playback_fault(message: str) -> str:
     return "other"
 
 
+def is_malformed_stream_fault(message: str) -> bool:
+    """Return whether a decoder log identifies unrecoverable media bytes."""
+    text = str(message or "").lower()
+    return any(marker in text for marker in _MALFORMED_STREAM_MARKERS)
+
+
+def is_prefetch_fault(
+    fault: str,
+    message: str,
+    *,
+    has_prefetch: bool,
+    switching: bool,
+) -> bool:
+    """Whether an unscoped log is a malformed queued-prefetch fault."""
+    return (
+        fault == "decoder"
+        and has_prefetch
+        and not switching
+        and is_malformed_stream_fault(message)
+    )
+
+
+def context_for_prefetch_fault(
+    fault: str,
+    message: str,
+    prefetch_context: tuple[object, ...] | None,
+    *,
+    generation: int,
+    switching: bool,
+) -> tuple[object, ...] | None:
+    """Return a queued-resource context only for a safe prefetch fault."""
+    if not is_prefetch_fault(
+        fault, message, has_prefetch=prefetch_context is not None,
+        switching=switching,
+    ):
+        return None
+    if prefetch_context is None:
+        return None
+    try:
+        if prefetch_context[0] != generation:
+            return None
+    except (IndexError, TypeError):
+        return None
+    return prefetch_context
+
+
+def context_for_unscoped_fault(
+    fault: str,
+    active_context: tuple[object, ...] | None,
+    *,
+    generation: int,
+    switching: bool,
+) -> tuple[object, ...] | None:
+    """Return the active resource for a fault with no event identity.
+
+    mpv log callbacks carry the mpv generation but not the playlist entry.
+    Attribution is therefore safe only while a matching active context exists
+    and the cell is not between playlist resources. Unknown messages and stale
+    generations remain unscoped rather than being sent into recovery.
+    """
+    if fault not in {"decoder", "transport"} or switching:
+        return None
+    if active_context is None:
+        return None
+    try:
+        if active_context[0] != generation:
+            return None
+    except (IndexError, TypeError):
+        return None
+    return active_context
+
+
 def decoder_recovery_plan(
     fault_count: int,
     *,
     hardware_decode: bool,
     max_faults: int = 2,
+    malformed_stream: bool = False,
 ) -> dict[str, object]:
     """Choose a bounded per-cell response to decoder faults.
 
@@ -307,6 +407,8 @@ def decoder_recovery_plan(
     limit = max(1, int(max_faults))
     if hardware_decode:
         return {"action": "fallback-software", "hwdec": "no"}
+    if malformed_stream:
+        return {"action": "skip", "hwdec": "no"}
     if count < limit:
         return {"action": "recreate", "hwdec": "no"}
     return {"action": "skip", "hwdec": "no"}

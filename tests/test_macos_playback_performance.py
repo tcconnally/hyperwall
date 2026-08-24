@@ -123,6 +123,42 @@ def test_wall_shutdown_stops_vo_before_gl_release():
     assert "_session_registry" in wall
 
 
+def test_async_prefetch_transition_blocks_stale_recovery_paths():
+    cell = _source("hyperwall/cell.py")
+    for name, end_marker in ((
+        "_handle_prefetch_fault", "\n    def _handle_decoder_fault",
+    ), (
+        "_handle_decoder_fault", "\n    def _recover_current_decoder",
+    ), (
+        "_handle_transport_fault", "\n    def _retry_transport_resource",
+    ), (
+        "_check_stall", "\n    def _record_failure_and_maybe_park",
+    )):
+        start = cell.index(f"    def {name}(")
+        end = cell.index(end_marker, start)
+        assert "_prefetch_advance_inflight" in cell[start:end], name
+
+
+def test_macos_prefetched_advance_is_queued_off_gui_thread():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def advance_to_prefetched(")
+    end = source.index("\n    def _advance_to_prefetched_impl", start)
+    body = source[start:end]
+    assert "_queue_prefetched_advance" in body
+    assert "playlist-next" not in body
+    assert "sys.platform == \"darwin\"" in body
+
+
+def test_wall_does_not_rearm_prefetch_before_async_advance_finishes():
+    source = _source("hyperwall/wall.py")
+    start = source.index("    def next_video(")
+    end = source.index("\n    def _on_resource_quarantined", start)
+    body = source[start:end]
+    fast = body[body.index("if cell.advance_to_prefetched()"):body.index("item = self.playlists.next", body.index("if cell.advance_to_prefetched()"))]
+    assert "_arm_prefetch(cell)" not in fast
+    assert "sync_broadcast_cell_update(cell)" not in fast
+
+
 def test_prefetch_is_deferred_after_transition():
     source = _source("hyperwall/wall.py")
     start = source.index("    def _arm_prefetch")
@@ -130,6 +166,21 @@ def test_prefetch_is_deferred_after_transition():
     body = source[start:end]
     assert "QTimer.singleShot(0," in body
     assert "def _queue" in body
+
+
+def test_prefetch_starts_are_globally_slot_paced():
+    wall = _source("hyperwall/wall.py")
+    constants = _source("hyperwall/constants.py")
+    reliability = _source("hyperwall/reliability.py")
+    assert "PREFETCH_MIN_INTERVAL_MS" in constants
+    assert "prefetch_slot" in reliability
+    start = wall.index("    def _arm_prefetch")
+    end = wall.index("\n    def _do_prefetch", start)
+    body = wall[start:end]
+    assert "prefetch_slot" in body
+    assert "_prefetch_next_ready_ts" in body
+    assert "_do_prefetch_if_current" in body
+    assert "QTimer.singleShot(0, _queue)" in body
 
 
 def test_prefetch_hls_is_not_used_for_playback_concurrency_accounting():
@@ -174,6 +225,60 @@ def test_decoder_faults_have_per_cell_software_fallback_path():
     assert "_handle_decoder_fault" in cell
     assert "_force_software_decode" in cell
     assert '"hwdec"] = "no"' in cell or '"hwdec": "no"' in cell
+
+
+def test_late_malformed_prefetch_log_tail_is_suppressed():
+    cell = _source("hyperwall/cell.py")
+    start = cell.index("    def _mpv_log(")
+    end = cell.index("\n    # ── Qt events", start)
+    log_body = cell[start:end]
+    assert "_prefetch_fault_suppression_until" in log_body
+    assert "is_malformed_stream_fault(text)" in log_body
+    start = cell.index("    def _handle_prefetch_fault(")
+    end = cell.index("\n    def _handle_decoder_fault", start)
+    handler = cell[start:end]
+    assert "_prefetch_fault_suppression_until" in handler
+    assert "_time.monotonic()" in handler
+
+
+def test_malformed_prefetch_logs_quarantine_queued_resource():
+    cell = _source("hyperwall/cell.py")
+    assert "context_for_prefetch_fault" in cell
+    assert "_sig_prefetch_fault" in cell
+    assert "_handle_prefetch_fault" in cell
+    start = cell.index("    def _mpv_log(")
+    end = cell.index("\n    # ── Qt events", start)
+    body = cell[start:end]
+    assert "context_for_prefetch_fault" in body
+    assert "_sig_prefetch_fault.emit" in body
+    start = cell.index("    def _handle_prefetch_fault(")
+    end = cell.index("\n    def _handle_decoder_fault", start)
+    body = cell[start:end]
+    assert "resource_quarantined.emit" in body
+    assert "drop_prefetch(requeue=False)" in body
+
+
+def test_unscoped_mpv_logs_use_active_resource_context():
+    reliability = _source("hyperwall/reliability.py")
+    cell = _source("hyperwall/cell.py")
+    assert "context_for_unscoped_fault" in reliability
+    start = cell.index("    def _mpv_log(")
+    end = cell.index("\n    # ── Qt events", start)
+    body = cell[start:end]
+    assert "context_for_unscoped_fault" in body
+    assert "self._native_active_context" in body
+    assert "self._switching" in body
+
+
+def test_decoder_handler_passes_malformed_stream_state_to_plan():
+    cell = _source("hyperwall/cell.py")
+    reliability = _source("hyperwall/reliability.py")
+    assert "is_malformed_stream_fault" in reliability
+    start = cell.index("    def _handle_decoder_fault(")
+    end = cell.index("\n    def _recover_current_decoder", start)
+    body = cell[start:end]
+    assert "is_malformed_stream_fault(_message)" in body
+    assert "malformed_stream=" in body
 
 
 def test_decoder_fallback_state_is_considered_before_hwdec_option():
