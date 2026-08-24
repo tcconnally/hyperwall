@@ -44,6 +44,8 @@ class MpvGLWidget(QOpenGLWidget):
         self._gl_ready = False
         self._accepting_frames = True    # shutdown silences the update cb
         self._get_proc_address: Any = None  # CFUNCTYPE — must stay alive
+        # Retain contexts abandoned after GL teardown until their mpv core exits.
+        self._abandoned_contexts: list[Any] = []
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.sig_frame_ready.connect(
             self.update, Qt.ConnectionType.QueuedConnection
@@ -86,12 +88,11 @@ class MpvGLWidget(QOpenGLWidget):
         try:
             self._accepting_frames = False
             if self._ctx is not None:
-                # Stop libmpv from invoking the callback at all. After this,
-                # no path from the vo thread touches this widget.
-                try:
-                    self._ctx.update_cb = None
-                except Exception:
-                    pass
+                # The callback body is gated above. Do not replace update_cb
+                # here. python-mpv releases the old
+                # CFUNCTYPE trampoline before its libmpv setter waits for the
+                # update lock; the vo thread can still be inside that old
+                # callback. The guarded callback remains alive through free().
                 if QThread.currentThread() is self.thread():
                     self._free_ctx()
                 else:
@@ -105,15 +106,22 @@ class MpvGLWidget(QOpenGLWidget):
             return
         self.makeCurrent()
         if QOpenGLContext.currentContext() is None:
-            # Native window already torn down (shutdown) — freeing with no
-            # current context is UB. Leak it; the process is exiting.
-            logger.debug("GL gone at release — abandoning render ctx.")
+            # The native window is already gone; freeing without a current
+            # context is UB. Keep the wrapper alive while the owning mpv core
+            # exits, or its ctypes callback trampoline could be released while
+            # libmpv is still able to invoke it.
+            logger.debug("GL gone at release — retaining render ctx.")
+            self._abandoned_contexts.append(self._ctx)
             self._ctx = None
             return
+
+        ctx, self._ctx = self._ctx, None
         try:
-            ctx, self._ctx = self._ctx, None
             ctx.free()
         except Exception as e:
+            # Keep the callback trampoline alive if the binding refuses the
+            # native free; the owning core may still invoke it.
+            self._abandoned_contexts.append(ctx)
             logger.debug("mpv render ctx free raised: %s", e)
         finally:
             self.doneCurrent()
