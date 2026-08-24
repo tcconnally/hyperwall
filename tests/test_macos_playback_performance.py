@@ -79,6 +79,27 @@ def test_audio_arm_transition_serializes_replacement():
     assert "return False" in body
 
 
+def test_macos_normal_load_is_deferred_off_gui_thread():
+    cell = _source("hyperwall/cell.py")
+    start = cell.index("    def _play_impl")
+    end = cell.index("\n    # ── gapless prefetch", start)
+    body = cell[start:end]
+    assert "_queue_async_play" in body
+    assert "sys.platform == \"darwin\"" in body
+    async_start = body.index("        if sys.platform == \"darwin\"")
+    async_end = body.index("        try:", async_start)
+    assert "self._mpv.command(\"loadfile\", url)" not in body[async_start:async_end]
+    worker_start = cell.index("    def _async_play_worker")
+    worker_end = cell.index("\n    def _finish_async_play", worker_start)
+    worker = cell[worker_start:worker_end]
+    assert "mpv_ref.command(\"loadfile\", url)" in worker
+    assert "_sig_play_finished.emit" in worker
+    assert "_async_play_is_current" in worker
+    helper_start = cell.index("    def _async_play_is_current")
+    helper_end = cell.index(chr(10) + "    def _async_play_worker", helper_start)
+    assert "not self._closing" in cell[helper_start:helper_end]
+    assert "_finish_async_play" in cell
+
 def test_non_macos_audio_arm_preserves_sync_path():
     source = _source("hyperwall/cell.py")
     start = source.index("    def _enable_audio_track(self)")

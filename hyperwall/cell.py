@@ -227,6 +227,7 @@ class VideoCell(QWidget):
     _sig_transport_fault = pyqtSignal(object, str)
     _sig_prefetch_fault = pyqtSignal(object, str)
     _sig_prefetched_advance = pyqtSignal(int, bool)
+    _sig_play_finished = pyqtSignal(int, bool)
     _sig_release_retry = pyqtSignal()
 
     def __init__(self, controller: Any):
@@ -352,6 +353,11 @@ class VideoCell(QWidget):
         # removed. Suppress only that short tail so it cannot blame the live
         # track; admitting a new prefetch clears the window.
         self._prefetch_fault_suppression_until = 0.0
+        # Reused macOS loadfile runs off the GUI thread; the request token
+        # rejects stale workers after replacement or shutdown.
+        self._async_play_serial = 0
+        self._async_play_inflight: int | None = None
+        self._async_play_pending: tuple[int, PlaybackToken, Any, str, Any | None] | None = None
 
         # Reliability / self-healing (Epic 2)
         self._last_progress_ts = 0.0   # monotonic ts of last time-pos advance
@@ -454,6 +460,9 @@ class VideoCell(QWidget):
         )
         self._sig_prefetched_advance.connect(
             self._finish_prefetched_advance, Qt.ConnectionType.QueuedConnection
+        )
+        self._sig_play_finished.connect(
+            self._finish_async_play, Qt.ConnectionType.QueuedConnection
         )
         self._sig_release_retry.connect(
             self._retry_destroy_on_gui, Qt.ConnectionType.QueuedConnection
@@ -1288,6 +1297,110 @@ class VideoCell(QWidget):
         self._loading_pulse.stop()
         self._title_overlay.hide()
 
+    def _invalidate_async_play(self) -> None:
+        pending = self._async_play_pending
+        if self._async_play_inflight is None and pending is None:
+            return
+        self._async_play_serial += 1
+        self._async_play_inflight = None
+        self._async_play_pending = None
+        if pending is not None and pending[4] is not None:
+            pending[4](False)
+
+    def _queue_async_play(
+        self, token: PlaybackToken, url: str, on_started: Any | None,
+    ) -> bool:
+        if self._closing or self._mpv is None:
+            return False
+        mpv_ref = self._mpv
+        self._async_play_serial += 1
+        request_id = self._async_play_serial
+        self._async_play_inflight = request_id
+        self._async_play_pending = (
+            request_id, token, mpv_ref, url, on_started,
+        )
+        worker = threading.Thread(
+            target=self._async_play_worker,
+            args=(request_id, mpv_ref, token, url),
+            name="mpv-async-play",
+            daemon=True,
+        )
+        try:
+            worker.start()
+        except Exception as e:
+            self._async_play_inflight = None
+            self._async_play_pending = None
+            logger.warning("Async play worker could not start: %s", e)
+            return False
+        return True
+
+    def _async_play_is_current(
+        self, request_id: int, mpv_ref: Any, token: PlaybackToken,
+    ) -> bool:
+        return (
+            not self._closing
+            and self._async_play_inflight == request_id
+            and self._mpv is mpv_ref
+            and self._current_playback_token() == token
+        )
+
+    def _async_play_worker(
+        self, request_id: int, mpv_ref: Any, token: PlaybackToken, url: str,
+    ) -> None:
+        succeeded = False
+        try:
+            with self._audio_arm_call_lock:
+                if not self._async_play_is_current(request_id, mpv_ref, token):
+                    return
+                mpv_ref["mute"] = self.muted
+                mpv_ref.command("loadfile", url)
+                mpv_ref["pause"] = False
+                succeeded = True
+        except Exception as e:
+            logger.warning("Async play loadfile failed: %s", e)
+        finally:
+            try:
+                self._sig_play_finished.emit(request_id, succeeded)
+            except Exception:
+                pass
+
+    def _finish_async_play(self, request_id: int, succeeded: bool) -> None:
+        if self._async_play_inflight != request_id:
+            return
+        pending = self._async_play_pending
+        if pending is None:
+            return
+        self._async_play_inflight = None
+        self._async_play_pending = None
+        _, token, mpv_ref, url, on_started = pending
+        current = (
+            not self._closing
+            and self._mpv is mpv_ref
+            and self._current_playback_token() == token
+        )
+        if not current:
+            if on_started is not None:
+                on_started(False)
+            return
+        if not succeeded:
+            self._switching = False
+            failed_context: NativeContext = self._pending_native_context or (
+                self._mpv_gen, self._track_generation, token.item_id, url,
+                self._emby_session_id,
+            )
+            self._sig_eof.emit(failed_context, "error")
+            if on_started is not None:
+                on_started(False)
+            return
+        self._forget_prefetch_after_native_clear(requeue=True)
+        self._paused = False
+        self.btn_play.setText(_G_PAUSE)
+        if not self.muted and not self._audio_started:
+            self._enable_audio_track()
+        if on_started is not None:
+            on_started(True)
+
+
     def _defer_play_until_audio_idle(
         self,
         item: dict[str, Any],
@@ -1351,11 +1464,13 @@ class VideoCell(QWidget):
                 on_started(False)
             return False
         if not self._audio_arm_call_lock.acquire(blocking=False):
+            if sys.platform == "darwin":
+                self._invalidate_async_play()
             self._defer_play_until_audio_idle(
                 item, url, preserve_failure_state, on_started, session_id,
             )
             return True  # admitted for deferred execution
-        started = False
+        started: bool | None = False
         try:
             # The worker either owns the call lock (in which case we returned
             # above) or is waiting to acquire it. Invalidate it before the
@@ -1363,13 +1478,14 @@ class VideoCell(QWidget):
             self._cancel_audio_arm(timeout_s=0.0)
             started = self._play_impl(
                 item, url, preserve_failure_state=preserve_failure_state,
+                on_started=on_started,
                 session_id=session_id,
             )
         finally:
             self._audio_arm_call_lock.release()
-        if on_started is not None:
+        if on_started is not None and started is not None:
             on_started(started)
-        return started
+        return True if started is None else started
 
 
     def _play_impl(
@@ -1378,8 +1494,9 @@ class VideoCell(QWidget):
         url: str,
         *,
         preserve_failure_state: bool = False,
+        on_started: Any | None = None,
         session_id: str | None = None,
-    ) -> bool:
+    ) -> bool | None:
         """Load a video into this cell."""
         if self._closing:
             return False
@@ -1392,6 +1509,7 @@ class VideoCell(QWidget):
             self._parked = False
             self._failure_ts.clear()
             logger.info("Parked cell manually resumed.")
+        self._invalidate_async_play()
         # A regular replacement supersedes any queued asynchronous playlist
         # advance. The worker remains daemonized but its identity check will
         # reject the old native handle/state before it can commit.
@@ -1466,6 +1584,12 @@ class VideoCell(QWidget):
             url,
             session_id or self._emby_session_id,
         )
+        if sys.platform == "darwin" and not need_create:
+            token = self._current_playback_token()
+            if token is None or not self._queue_async_play(token, url, on_started):
+                self._switching = False
+                return False
+            return None
         try:
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
@@ -1883,6 +2007,7 @@ class VideoCell(QWidget):
     def prepare_shutdown(self) -> None:
         """Quiesce GUI-owned state before mpv is released off-thread."""
         self._closing = True
+        self._invalidate_async_play()
         self._pending_next = False
         self._pending_next_token = None
         pending_play = self._deferred_play
