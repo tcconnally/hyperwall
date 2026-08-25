@@ -13,6 +13,7 @@ import logging
 import os
 import threading
 import time as _time
+from dataclasses import replace
 import uuid
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -59,7 +60,9 @@ from .constants import (
     SCRIPT_DIR,
 )
 from .emby import EmbyClient, ContentLoader
-from .urls import needs_transcode as _needs_transcode_pure
+from .playback_plan import PlaybackPlan, PlaybackPolicy, plan_playback
+from .resource_governor import ResourceGovernor
+from .session_broker import EmbySessionBroker, SessionRecord
 from .reliability import (
     allow_transcode_prefetch,
     gate_auto_transcode,
@@ -68,7 +71,7 @@ from .reliability import (
     prefetch_slot,
     transcode_load_count,
 )
-from .urls import build_stream_url, tag_names
+from .urls import build_stream_url_for_plan, tag_names
 from .playlist import PlaylistManager, DEFAULT_GROUP
 
 logger = logging.getLogger("HyperWall")
@@ -227,17 +230,10 @@ class WallController:
         self._api_pool_closed = False
         self._cleaned_up = False
         self._shutdown_requested = False
-        self._session_registry: dict[str, str] = {}
-        self._session_registry_limit = max(
+        session_registry_limit = max(
             64, len(screens) * max(1, grid_rows * grid_cols) * 8,
         )
-        self._session_cleanup_limit = max(
-            128, self._session_registry_limit * 2,
-        )
-        self._session_cleanup_ledger: dict[str, str] = {}
-        self._session_lock = threading.Lock()
-        self._session_stop_inflight: set[str] = set()
-        self._stopped_session_ids: deque[str] = deque(maxlen=4096)
+        session_cleanup_limit = max(128, session_registry_limit * 2)
         self._session_cleanup_timer = QTimer()
         self._session_cleanup_timer.setInterval(SESSION_CLEANUP_RETRY_S * 1000)
         self._session_cleanup_timer.timeout.connect(
@@ -258,6 +254,7 @@ class WallController:
         # pressure, so per-cell timers cannot prevent a wall-wide burst.
         self._prefetch_next_ready_ts = 0.0
         self._mpv_opts_effective: dict[str, Any] = {}
+        self._resource_governor = ResourceGovernor(MAX_CONCURRENT_TRANSCODES)
 
         # Emergency escape
         self._escape_filter = EmergencyKeyFilter(
@@ -281,6 +278,19 @@ class WallController:
         # its own fill-bursts at 8 cells. Readahead depth is scaled inside
         # apply_cache_budget; the direct-play bitrate cap scales here.
         self._bitrate_budget_mbps = effective_bitrate_budget_mbps(n_cells)
+        self._playback_policy = PlaybackPolicy(
+            auto_transcode=os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1",
+            max_fps=MAX_DIRECT_FPS,
+            max_bitrate_mbps=self._bitrate_budget_mbps,
+        )
+        self._session_broker = EmbySessionBroker(
+            client=self.client,
+            submit=self._submit_api,
+            in_outage=self.in_outage,
+            governor=self._resource_governor,
+            registry_limit=session_registry_limit,
+            cleanup_limit=session_cleanup_limit,
+        )
         logger.info(
             "MPV cache budget: %d cells → demuxer_max_bytes=%s, "
             "readahead=%ss, direct-play bitrate cap=%s Mbps",
@@ -670,13 +680,9 @@ class WallController:
         cell: "VideoCell | None" = None,
         include_cell: bool = False,
     ) -> int:
-        """Count current and queued HLS loads consuming server capacity.
-
-        A pending mpv playlist entry can already have opened its HLS demuxer,
-        so it must count against the transcode ceiling even before playback
-        advances to it.  A replacement load excludes its own old cell state;
-        a prefetch includes the target cell's current and queued state.
-        """
+        governor = getattr(self, "_resource_governor", None)
+        if governor is not None:
+            return governor.active_server_transcodes
         streams = []
         for other in self.cells:
             if other is cell and not include_cell:
@@ -685,209 +691,151 @@ class WallController:
             streams.append((getattr(other, "_prefetched_stream_url", None), True))
         return transcode_load_count(streams)
 
-    def _auto_transcode_requested(self, item: dict[str, Any]) -> bool:
-        """Return whether the item exceeds the configured direct-play budget."""
-        return _needs_transcode_pure(
+    def _plan_for_item(
+        self,
+        item: dict[str, Any],
+        *,
+        force_transcode: bool = False,
+    ) -> PlaybackPlan:
+        policy = getattr(self, "_playback_policy", None)
+        if not isinstance(policy, PlaybackPolicy):
+            policy = PlaybackPolicy(
+                auto_transcode=os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1",
+                max_fps=MAX_DIRECT_FPS,
+                max_bitrate_mbps=getattr(self, "_bitrate_budget_mbps", 60),
+            )
+        opts = getattr(self, "_mpv_opts_effective", {}) or {}
+        decoder = str(opts.get("hwdec", MPV_OPTS.get("hwdec", "no")))
+        plan = plan_playback(
             item,
-            auto_transcode=os.environ.get(
-                "HYPERWALL_AUTO_TRANSCODE", "1") == "1",
-            max_fps=MAX_DIRECT_FPS,
-            max_bitrate_mbps=self._bitrate_budget_mbps,
+            policy=policy,
+            client_decoder=decoder,
         )
+        if force_transcode:
+            plan = replace(
+                plan,
+                server_mode="server_transcode",
+                requires_transcode_lease=True,
+                reason="forced_transcode",
+            )
+        return plan
+
+    def _auto_transcode_requested(self, item: dict[str, Any]) -> bool:
+        return self._plan_for_item(item).requires_transcode_lease
+
+    def _admit_playback_plan(
+        self,
+        plan: PlaybackPlan,
+        lease_key: str,
+        *,
+        prefetch: bool = False,
+        force_transcode: bool = False,
+    ) -> PlaybackPlan | None:
+        if not plan.requires_transcode_lease:
+            return plan
+        broker = getattr(self, "_session_broker", None)
+        governor = getattr(self, "_resource_governor", None)
+        admitted = (
+            broker.admit(plan, lease_key)
+            if broker is not None
+            else governor is None or governor.acquire(plan, lease_key)
+        )
+        if admitted:
+            return plan
+        if prefetch or force_transcode:
+            return None
+        return replace(
+            plan,
+            server_mode="direct",
+            requires_transcode_lease=False,
+            reason="transcode_capacity_unavailable",
+        )
+
+    def _build_playback_request(
+        self,
+        item: dict[str, Any],
+        *,
+        force_transcode: bool = False,
+        prefetch: bool = False,
+        plan: PlaybackPlan | None = None,
+        session_id: str | None = None,
+    ) -> tuple[str, str, PlaybackPlan]:
+        iid = item["Id"]
+        key = self.client.access_token
+        base = self.client.server_url
+        sid = session_id or uuid.uuid4().hex
+        resolved_plan = plan or self._plan_for_item(
+            item,
+            force_transcode=force_transcode,
+        )
+        url = build_stream_url_for_plan(
+            base=base,
+            item_id=iid,
+            api_key=key,
+            session_id=sid,
+            plan=resolved_plan,
+            static=self.client.backend.requires_static_true,
+        )
+        tag = "TRANSCODE" if resolved_plan.requires_transcode_lease else "DIRECT"
+        if prefetch:
+            tag += "/prefetch"
+        logger.info(
+            "Playback plan: %s server=%s client=%s reason=%s",
+            tag,
+            resolved_plan.server_mode,
+            resolved_plan.client_decoder,
+            resolved_plan.reason,
+        )
+        return url, sid, resolved_plan
 
     def _build_url(
         self, item: dict[str, Any], force_transcode: bool = False,
         prefetch: bool = False, cell: "VideoCell | None" = None,
     ) -> tuple[str, str]:
-        iid = item["Id"]
-        key = self.client.access_token
-        base = self.client.server_url
-        sid = uuid.uuid4().hex
-
-        auto_transcode = self._auto_transcode_requested(item)
-        # Concurrency gate: a forced retry (failed direct) must transcode, but
-        # an AUTO escalation defers to direct-play when the transcode engine is
-        # already busy — never stampede greg's media engine (2026-07-15).
-        gated = False
-        if force_transcode:
-            transcode = True
-        else:
-            occupied = self._transcode_load_count(
-                cell=cell,
-                include_cell=prefetch,
-            )
-            transcode = gate_auto_transcode(
-                auto_transcode, occupied, MAX_CONCURRENT_TRANSCODES,
-            )
-            gated = auto_transcode and not transcode
-        url = build_stream_url(
-            base=base, item_id=iid, api_key=key,
-            session_id=sid, transcode=transcode,
-            static=self.client.backend.requires_static_true,
+        url, sid, _plan = self._build_playback_request(
+            item,
+            force_transcode=force_transcode,
+            prefetch=prefetch,
         )
-        if transcode:
-            tag = "TRANSCODE/retry" if force_transcode else "TRANSCODE/auto"
-        else:
-            tag = "DIRECT/gated" if gated else "DIRECT"
-        if prefetch:
-            tag += "/prefetch"
-        logger.info("[%s] %s", tag, item.get("Name"))
         return url, sid
 
     # ── session management ────────────────────────────────────────────────
 
-    def _retain_session_cleanup_locked(
-        self, item_id: str, session_id: str,
-    ) -> None:
-        ledger = self._session_cleanup_ledger
-        # A stop request can target a still-active registry entry. Keep a
-        # second pending record so the retry timer can revisit it without
-        # dropping the durable active-session record prematurely.
-        if session_id in ledger:
-            ledger[session_id] = item_id
-            return
-        if len(ledger) >= self._session_cleanup_limit:
-            logger.critical(
-                "Session cleanup capacity exhausted; admission must remain "
-                "closed until an unresolved stop succeeds."
-            )
-            return
-        ledger[session_id] = item_id
-
     def _session_admission_available(self) -> bool:
-        with self._session_lock:
-            return (
-                len(set(self._session_registry)
-                    | set(self._session_cleanup_ledger))
-                < self._session_cleanup_limit
-            )
+        return self._session_broker.admission_available()
 
     def _retry_deferred_session_cleanup(self) -> None:
-        """Retry pending server-session stops after outages or failures."""
         if self._shutdown_requested or self._cleaned_up:
             return
-        with self._session_lock:
-            pending = list(self._session_cleanup_ledger.items())
-        for session_id, item_id in pending:
-            self.stop_emby_session(item_id, session_id)
+        self._session_broker.retry_pending()
 
-
-    def _register_session(self, item_id: str | None, session_id: str | None) -> bool:
+    def _register_session(
+        self,
+        item_id: str | None,
+        session_id: str | None,
+        plan: PlaybackPlan | None = None,
+    ) -> bool:
         if not item_id or not session_id:
             return False
-        evicted: list[tuple[str, str]] = []
-        with self._session_lock:
-            is_new = (
-                session_id not in self._session_registry
-                and session_id not in self._session_cleanup_ledger
+        result = self._session_broker.register(
+            SessionRecord(item_id, session_id, plan),
+        )
+        for evicted in result.evicted:
+            logger.error("Session registry bound reached; forcing cleanup.")
+            self.stop_emby_session(
+                evicted.item_id,
+                evicted.session_id,
+                plan=evicted.plan,
             )
-            if (
-                is_new
-                and len(set(self._session_registry)
-                    | set(self._session_cleanup_ledger))
-                >= self._session_cleanup_limit
-            ):
-                logger.error("Session admission closed at cleanup capacity.")
-                return False
-            self._session_registry[session_id] = item_id
-            self._session_cleanup_ledger.pop(session_id, None)
-            try:
-                self._stopped_session_ids.remove(session_id)
-            except ValueError:
-                pass
-            limit = getattr(self, "_session_registry_limit", 4096)
-            while len(self._session_registry) > limit:
-                old_session, old_item = next(iter(self._session_registry.items()))
-                self._session_registry.pop(old_session, None)
-                self._retain_session_cleanup_locked(old_item, old_session)
-                evicted.append((old_item, old_session))
-        for old_item, old_session in evicted:
-            logger.error(
-                "Session registry bound reached; forcing cleanup for %s",
-                old_session[:8],
-            )
-            self.stop_emby_session(old_item, old_session)
-        return True
+        return result.accepted
 
     def stop_emby_session(
-        self, item_id: str | None, session_id: str | None,
+        self,
+        item_id: str | None,
+        session_id: str | None,
+        plan: PlaybackPlan | None = None,
     ) -> None:
-        if not item_id or not session_id:
-            return
-        with self._session_lock:
-            if (
-                session_id in self._stopped_session_ids
-                or session_id in self._session_stop_inflight
-            ):
-                return
-            # During a systemic outage, skip the API call entirely — every
-            # stop-session POST would time out (5s connect + 5s retry), and
-            # with only 4 pool workers the wall can't admit new sessions.
-            # Retain in the cleanup ledger for a future retry or shutdown.
-            if self.in_outage():
-                self._retain_session_cleanup_locked(item_id, session_id)
-                logger.debug(
-                    "Stop-session %s deferred during systemic outage.",
-                    session_id[:8],
-                )
-                return
-            self._session_stop_inflight.add(session_id)
-
-        def _worker() -> None:
-            success = False
-            last_error: Exception | None = None
-            for attempt in range(2):
-                try:
-                    r = self.client.post(
-                        "/Sessions/Playing/Stopped",
-                        json={
-                            "ItemId": item_id,
-                            "PlaySessionId": session_id,
-                            "PositionTicks": 0,
-                        },
-                        timeout=5,
-                    )
-                    if 200 <= r.status_code < 300:
-                        success = True
-                        logger.info(
-                            "Session stop %s -> HTTP %d",
-                            session_id[:8], r.status_code,
-                        )
-                        break
-                    last_error = RuntimeError(
-                        f"HTTP {r.status_code} from stop-session"
-                    )
-                    logger.warning(
-                        "Stop-session %s rejected (attempt %d/2): HTTP %d",
-                        session_id[:8], attempt + 1, r.status_code,
-                    )
-                except Exception as e:
-                    last_error = e
-                    logger.warning(
-                        "Stop-session %s failed (attempt %d/2): %s",
-                        session_id[:8], attempt + 1, e,
-                    )
-                if attempt == 0:
-                    _time.sleep(0.1)
-            with self._session_lock:
-                self._session_stop_inflight.discard(session_id)
-                if success:
-                    self._session_registry.pop(session_id, None)
-                    self._session_cleanup_ledger.pop(session_id, None)
-                    self._stopped_session_ids.append(session_id)
-                else:
-                    self._retain_session_cleanup_locked(item_id, session_id)
-            if not success and last_error is not None:
-                logger.error(
-                    "Stop-session %s remains registered after retries: %s",
-                    session_id[:8], last_error,
-                )
-
-        future = self._submit_api(_worker, "stop-session")
-        if future is None:
-            with self._session_lock:
-                self._session_stop_inflight.discard(session_id)
-                self._retain_session_cleanup_locked(item_id, session_id)
+        self._session_broker.stop(item_id, session_id, plan=plan)
 
     def _submit_api(self, fn: callable, label: str) -> Any:
         if self._api_pool_closed:
@@ -917,17 +865,33 @@ class WallController:
             self.playlists.push_front(self._cell_group(cell), item)
             logger.error("Session admission closed; requeued handoff item.")
             return
-        url, sid = self._build_url(item, force_transcode, cell=cell)
+        sid = uuid.uuid4().hex
+        plan = self._plan_for_item(item, force_transcode=force_transcode)
+        plan = self._admit_playback_plan(
+            plan,
+            sid,
+            force_transcode=force_transcode,
+        )
+        if plan is None:
+            self.playlists.push_front(self._cell_group(cell), item)
+            logger.warning("Playback plan deferred: no transcode capacity.")
+            return
+        url, sid, plan = self._build_playback_request(
+            item,
+            force_transcode=force_transcode,
+            plan=plan,
+            session_id=sid,
+        )
 
         def _on_started(started: bool) -> None:
             if not started:
                 # The candidate may have been rejected during shutdown or a
                 # native load failure. Do not stop the still-playing old
                 # session; only clean up the candidate we created here.
-                self.stop_emby_session(item.get("Id"), sid)
+                self.stop_emby_session(item.get("Id"), sid, plan=plan)
                 return
-            if not self._register_session(item.get("Id"), sid):
-                self.stop_emby_session(item.get("Id"), sid)
+            if not self._register_session(item.get("Id"), sid, plan=plan):
+                self.stop_emby_session(item.get("Id"), sid, plan=plan)
                 return
             cell._emby_session_id = sid
             cell._emby_item_id = item["Id"]
@@ -1049,8 +1013,20 @@ class WallController:
             self.playlists.push_front(self._cell_group(cell), item)
             logger.error("Session admission closed; requeued prefetch item.")
             return
+        sid = uuid.uuid4().hex
+        plan = self._plan_for_item(item)
+        plan = self._admit_playback_plan(plan, sid, prefetch=True)
+        if plan is None:
+            self.playlists.push_front(self._cell_group(cell), item)
+            self._schedule_transcode_prefetch_retry(cell, token, item)
+            return
         try:
-            url, sid = self._build_url(item, prefetch=True, cell=cell)
+            url, sid, plan = self._build_playback_request(
+                item,
+                prefetch=True,
+                plan=plan,
+                session_id=sid,
+            )
         except Exception as e:
             self.playlists.push_front(
                 self._cell_group(cell), item,
@@ -1061,12 +1037,12 @@ class WallController:
             self.playlists.push_front(
                 self._cell_group(cell), item,
             )
-            self.stop_emby_session(item.get("Id"), sid)
+            self.stop_emby_session(item.get("Id"), sid, plan=plan)
             logger.debug("Prefetch declined for %s.", item.get("Name", "?"))
         else:
-            if not self._register_session(item.get("Id"), sid):
+            if not self._register_session(item.get("Id"), sid, plan=plan):
                 cell.drop_prefetch(requeue=True)
-                self.stop_emby_session(item.get("Id"), sid)
+                self.stop_emby_session(item.get("Id"), sid, plan=plan)
 
     def _schedule_transcode_prefetch_retry(
         self,
@@ -1555,11 +1531,12 @@ class WallController:
             self.stop_emby_session(c._emby_item_id, c._emby_session_id)
         for p_item_id, p_sid in prefetched_sessions:
             self.stop_emby_session(p_item_id, p_sid)
-        with self._session_lock:
-            registered_sessions = dict(self._session_cleanup_ledger)
-            registered_sessions.update(self._session_registry)
-        for session_id, item_id in registered_sessions.items():
-            self.stop_emby_session(item_id, session_id)
+        for record in self._session_broker.shutdown_records():
+            self.stop_emby_session(
+                record.item_id,
+                record.session_id,
+                plan=record.plan,
+            )
 
         # Flush stats
         if STATS_ENABLED:

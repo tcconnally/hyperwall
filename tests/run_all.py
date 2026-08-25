@@ -21,6 +21,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 SUITES = [
     "run_repo_guards",
     "test_reliability",
+    "test_playback_plan",
+    "test_playback_state",
+    "test_session_broker",
     "test_urls",
     "test_config",
     "test_preview_displays",

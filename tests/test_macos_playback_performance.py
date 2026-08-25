@@ -141,7 +141,7 @@ def test_wall_shutdown_stops_vo_before_gl_release():
     assert "c._release_render_context_on_gui()" in body
     assert "shutdown_deadline" in body
     assert "timeout=min(2.0" in body
-    assert "_session_registry" in wall
+    assert "_session_broker" in wall
 
 
 def test_async_prefetch_transition_blocks_stale_recovery_paths():
@@ -218,7 +218,7 @@ def test_prefetch_starts_are_globally_slot_paced():
     assert "QTimer.singleShot(0, _queue)" in body
 
 
-def test_prefetch_hls_is_not_used_for_playback_concurrency_accounting():
+def test_playback_plan_owns_server_capacity_accounting():
     reliability = _source("hyperwall/reliability.py")
     wall = _source("hyperwall/wall.py")
     assert "transcode_load_count" in reliability
@@ -227,17 +227,16 @@ def test_prefetch_hls_is_not_used_for_playback_concurrency_accounting():
     assert "_prefetched_stream_url" in _source("hyperwall/cell.py")
 
     start = wall.index("    def _transcode_load_count")
-    end = wall.index("    def _build_url", start)
+    end = wall.index("    def _plan_for_item", start)
     accounting = wall[start:end]
-    assert "_stream_url" in accounting
-    assert "_prefetched_stream_url" in accounting
-    assert "transcode_load_count(streams)" in accounting
+    assert "_resource_governor" in accounting
+    assert "active_server_transcodes" in accounting
 
-    start = wall.index("    def _build_url")
+    start = wall.index("    def _build_playback_request")
     end = wall.index("\n    # ── session management", start)
-    build_url = wall[start:end]
-    assert "include_cell=prefetch" in build_url
-    assert "occupied" in build_url
+    build_request = wall[start:end]
+    assert "build_stream_url_for_plan" in build_request
+    assert "resolved_plan.server_mode" in build_request
 
 
 def test_prefetch_admission_does_not_demote_heavy_candidate_to_direct():
@@ -246,7 +245,7 @@ def test_prefetch_admission_does_not_demote_heavy_candidate_to_direct():
     end = wall.index("\n    def run_on_main", start)
     body = wall[start:end]
     admission = body.index("if self._auto_transcode_requested(item)")
-    build = body.index("url, sid = self._build_url", admission)
+    build = body.index("url, sid, plan = self._build_playback_request", admission)
     assert admission < build
     assert body.index("self.playlists.push_front", admission) < build
 
@@ -416,10 +415,11 @@ def test_session_stop_retries_and_keeps_registry_until_success():
     start = wall.index("    def stop_emby_session")
     end = wall.index("\n    def _submit_api", start)
     body = wall[start:end]
-    assert "_session_stop_inflight" in body
-    assert "status_code < 300" in body
-    assert "_session_registry.pop" in body
-    assert "except Exception" in body
+    assert "self._session_broker.stop" in body
+    broker = _source("hyperwall/session_broker.py")
+    assert "status_code < 300" in broker
+    assert "_registry.pop" in broker
+    assert "except Exception" in broker
 
 
 def test_systemic_outage_recovery_honors_retry_budget():
@@ -437,8 +437,8 @@ def test_deferred_session_cleanup_retries_after_outage():
     start = wall.index("    def _retry_deferred_session_cleanup")
     end = wall.index("    def _register_session", start)
     body = wall[start:end]
-    assert "_session_cleanup_ledger" in body
-    assert "self.stop_emby_session" in body
+    assert "self._session_broker.retry_pending()" in body
+    assert "self._session_broker" in wall
     assert "self._session_cleanup_timer.stop()" in wall
 
 
@@ -621,14 +621,12 @@ def test_prefetched_handoff_stops_previous_session():
 
 def test_session_registry_is_bounded_and_evictions_cleanup():
     wall = _source("hyperwall/wall.py")
-    assert "_session_registry_limit" in wall
-    assert "_session_cleanup_ledger" in wall
-    assert "_retain_session_cleanup_locked" in wall
-    start = wall.index("    def _register_session")
-    end = wall.index("    def stop_emby_session", start)
-    body = wall[start:end]
-    assert "while len(self._session_registry) > limit" in body
-    assert "self.stop_emby_session(old_item, old_session)" in body
+    assert "session_registry_limit" in wall
+    assert "session_cleanup_limit" in wall
+    broker = _source("hyperwall/session_broker.py")
+    assert "self._session_broker.register" in wall
+    assert "while len(self._registry) > self._registry_limit" in broker
+    assert "result.evicted" in wall
 
 
 def test_delayed_native_retries_are_playback_token_bound():
@@ -676,8 +674,9 @@ def test_end_file_errors_reach_bound_recovery_handlers():
 
 def test_cleanup_capacity_does_not_evict_unresolved_records():
     wall = _source("hyperwall/wall.py")
-    assert "Session cleanup capacity exhausted" in wall
-    assert "pop(oldest" not in wall
+    broker = _source("hyperwall/session_broker.py")
+    assert "Session cleanup capacity exhausted" in broker
+    assert "pop(oldest" not in broker
     assert "Session admission closed" in wall
 
 

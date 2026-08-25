@@ -94,6 +94,11 @@ from .reliability import (
 )
 from . import theme
 from .perftrace import traced
+from .playback_state import (
+    CellPlaybackController,
+    PlaybackEvent,
+    PlaybackIdentity,
+)
 from .urls import tag_names
 
 logger = logging.getLogger("HyperWall")
@@ -233,6 +238,7 @@ class VideoCell(QWidget):
     def __init__(self, controller: Any):
         super().__init__()
         self.controller = controller
+        self._playback_controller = CellPlaybackController()
         self.current_item: dict[str, Any] | None = None
         self.history: deque[dict[str, Any]] = deque(maxlen=50)
         self.looping = False
@@ -621,6 +627,10 @@ class VideoCell(QWidget):
                             None,
                         )
             self._native_active_context = context
+            self._playback_controller.transition(
+                PlaybackEvent.LOAD_STARTED,
+                self._playback_state_identity(context),
+            )
             if pending is not None and context == pending:
                 self._pending_native_context = None
             self._switching = False
@@ -1584,6 +1594,10 @@ class VideoCell(QWidget):
             url,
             session_id or self._emby_session_id,
         )
+        self._playback_controller.transition(
+            PlaybackEvent.LOAD_REQUESTED,
+            self._playback_state_identity(self._pending_native_context),
+        )
         if sys.platform == "darwin" and not need_create:
             token = self._current_playback_token()
             if token is None or not self._queue_async_play(token, url, on_started):
@@ -1795,6 +1809,14 @@ class VideoCell(QWidget):
             url,
             sid,
         )
+        self._playback_controller.transition(
+            PlaybackEvent.ADVANCE_REQUESTED,
+            self._current_playback_state_identity(),
+        )
+        self._playback_controller.transition(
+            PlaybackEvent.LOAD_REQUESTED,
+            self._playback_state_identity(self._pending_native_context),
+        )
         mpv_ref = self._mpv
         worker = threading.Thread(
             target=self._prefetched_advance_worker,
@@ -1955,6 +1977,14 @@ class VideoCell(QWidget):
             _url,
             sid,
         )
+        self._playback_controller.transition(
+            PlaybackEvent.ADVANCE_REQUESTED,
+            self._current_playback_state_identity(),
+        )
+        self._playback_controller.transition(
+            PlaybackEvent.LOAD_REQUESTED,
+            self._playback_state_identity(self._pending_native_context),
+        )
         try:
             self._mpv.command("playlist-next")
             self._mpv["pause"] = False
@@ -2007,6 +2037,10 @@ class VideoCell(QWidget):
     def prepare_shutdown(self) -> None:
         """Quiesce GUI-owned state before mpv is released off-thread."""
         self._closing = True
+        self._playback_controller.transition(
+            PlaybackEvent.SHUTDOWN,
+            self._current_playback_state_identity(),
+        )
         self._invalidate_async_play()
         self._pending_next = False
         self._pending_next_token = None
@@ -2789,6 +2823,28 @@ class VideoCell(QWidget):
             self._stream_url,
         )
 
+    @staticmethod
+    def _playback_state_identity(
+        context: NativeContext | None,
+    ) -> PlaybackIdentity | None:
+        if context is None:
+            return None
+        return PlaybackIdentity(
+            context[0], context[1], context[2], context[3], context[4],
+        )
+
+    def _current_playback_state_identity(self) -> PlaybackIdentity | None:
+        context = self._native_active_context or self._pending_native_context
+        if context is not None:
+            return self._playback_state_identity(context)
+        return PlaybackIdentity(
+            self._mpv_gen,
+            self._track_generation,
+            (self.current_item or {}).get("Id"),
+            self._stream_url,
+            self._emby_session_id,
+        )
+
     def _playback_token_is_current(self, token: PlaybackToken) -> bool:
         return playback_token_is_current(
             token,
@@ -2843,6 +2899,10 @@ class VideoCell(QWidget):
             return
         if self._resource_quarantined:
             return
+        self._playback_controller.transition(
+            PlaybackEvent.RECOVERY_REQUESTED,
+            self._playback_state_identity(context),
+        )
         self._decoder_fault_count += 1
         plan = decoder_recovery_plan(
             self._decoder_fault_count,
@@ -2896,6 +2956,10 @@ class VideoCell(QWidget):
             return
         if self._resource_quarantined or self._transport_recovery_scheduled:
             return
+        self._playback_controller.transition(
+            PlaybackEvent.RECOVERY_REQUESTED,
+            self._playback_state_identity(context),
+        )
         token = self._current_playback_token()
         if token is None:
             return
@@ -2948,6 +3012,10 @@ class VideoCell(QWidget):
             or not self._native_context_is_current(context)
         ):
             return
+        self._playback_controller.transition(
+            PlaybackEvent.BUFFERING_STARTED if buffering else PlaybackEvent.BUFFERING_ENDED,
+            self._playback_state_identity(context),
+        )
         if buffering:
             if not self._played_anything:
                 return  # startup fill, not a mid-playback freeze
@@ -3173,6 +3241,11 @@ class VideoCell(QWidget):
         self._pending_next = False
         self._pending_next_token = None
         self._last_next_request_ts = now
+        if not is_retry:
+            self._playback_controller.transition(
+                PlaybackEvent.ADVANCE_REQUESTED,
+                self._current_playback_state_identity(),
+            )
         self.request_next.emit(self, is_retry)
 
     def _fire_pending_next(self, token: PlaybackToken) -> None:
@@ -3294,6 +3367,10 @@ class VideoCell(QWidget):
         token = self._current_playback_token()
         if token is None:
             return
+        self._playback_controller.transition(
+            PlaybackEvent.RECOVERY_REQUESTED,
+            self._current_playback_state_identity(),
+        )
         self._retry_backoff_token = token
         self._retry_count += 1
         if outage:

@@ -255,6 +255,7 @@ def _safe_env_manifest(env: object) -> dict[str, object]:
         "HYPERWALL_STATS", "HYPERWALL_PERFTRACE", "HYPERWALL_SOAK_MINUTES",
         "HYPERWALL_SOAK_DWELL_S", "HYPERWALL_SOAK_PROFILE", "HYPERWALL_HWDEC",
         "HYPERWALL_CACHE_BUDGET_MB", "HYPERWALL_DEMUXER_PER_CELL_MB",
+        "HYPERWALL_AUTO_TRANSCODE",
         "HYPERWALL_NO_RELAUNCH", "HYPERWALL_NO_LOG_SETUP", "LC_NUMERIC",
     )
     values: dict[str, object] = dict(env) if isinstance(env, dict) else {}
@@ -480,12 +481,14 @@ def _install_signal_cleanup() -> None:
 
 def _analyze_phase(phase_dir: Path) -> dict[str, object]:
     result = analyze_run(phase_dir)
-    result["redacted_artifacts"] = str(_redact_phase(phase_dir))
+    safe_dir = phase_dir.parent / (phase_dir.name + "-redacted")
+    result["redacted_artifacts"] = str(safe_dir)
     analysis_path = phase_dir / "analysis.json"
     analysis_path.write_text(
         json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8"
     )
     _force_private_permissions(analysis_path)
+    _redact_phase(phase_dir)
     return result
 
 

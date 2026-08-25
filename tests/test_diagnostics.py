@@ -1005,6 +1005,25 @@ def test_analyze_run_blocks_on_unacceptable_media_and_memory_results():
         assert result["gates"]["max_loop_stall_ms"]["status"] == "BLOCK"
 
 
+def test_runner_metadata_records_auto_transcode_mode():
+    runner = _load_runner_module()
+    manifest = runner._safe_env_manifest({"HYPERWALL_AUTO_TRANSCODE": "0"})
+    assert manifest["HYPERWALL_AUTO_TRANSCODE"] == "0"
+
+
+def test_phase_analysis_is_written_before_redaction():
+    source = open(
+        os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "run-soak-diagnostics.py"
+        ),
+        encoding="utf-8",
+    ).read()
+    start = source.index("def _analyze_phase")
+    end = source.index("\ndef main", start)
+    body = source[start:end]
+    assert body.index("analysis_path.write_text") < body.index("_redact_phase")
+
+
 def run_all() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0
