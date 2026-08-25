@@ -105,6 +105,41 @@ def _source_metrics(item: dict[str, Any]) -> tuple[float | None, float | None]:
     return fps, bitrate / 1_000_000 if bitrate is not None else None
 
 
+def is_stable_direct_candidate(
+    item: dict[str, Any],
+    *,
+    max_fps: float,
+    max_bitrate_mbps: float,
+) -> bool:
+    """Return whether an item is safe for the measured direct-only wall.
+
+    Missing metadata fails closed: the stable profile exists specifically to
+    keep malformed, high-frame-rate, and high-bitrate resources out of the
+    eight-cell software-decode pool before libmpv opens them.
+    """
+    fps, bitrate_mbps = _source_metrics(item)
+    if fps is None or bitrate_mbps is None:
+        return False
+    return fps <= max_fps and bitrate_mbps <= max_bitrate_mbps
+
+
+def filter_stable_direct_candidates(
+    items: list[dict[str, Any]],
+    *,
+    max_fps: float,
+    max_bitrate_mbps: float,
+) -> list[dict[str, Any]]:
+    """Build a direct-only pool without falling back to unsafe resources."""
+    return [
+        item for item in items
+        if is_stable_direct_candidate(
+            item,
+            max_fps=max_fps,
+            max_bitrate_mbps=max_bitrate_mbps,
+        )
+    ]
+
+
 def plan_playback(
     item: dict[str, Any],
     *,

@@ -7,7 +7,13 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hyperwall.playback_plan import PlaybackPlan, PlaybackPolicy, plan_playback
+from hyperwall.playback_plan import (
+    PlaybackPlan,
+    PlaybackPolicy,
+    filter_stable_direct_candidates,
+    is_stable_direct_candidate,
+    plan_playback,
+)
 from hyperwall.resource_governor import ResourceGovernor
 from hyperwall.urls import build_stream_url_for_plan
 
@@ -56,6 +62,42 @@ def test_auto_transcode_disabled_forces_direct_without_changing_client_decoder()
     assert plan.client_decoder == "no"
     assert plan.requires_transcode_lease is False
     assert plan.reason == "auto_transcode_disabled"
+
+
+def test_stable_direct_candidate_requires_complete_bounded_metadata():
+    assert is_stable_direct_candidate(
+        _item(fps=30, bitrate=20_000_000),
+        max_fps=30,
+        max_bitrate_mbps=20,
+    ) is True
+    assert is_stable_direct_candidate(
+        _item(fps=60, bitrate=10_000_000),
+        max_fps=30,
+        max_bitrate_mbps=20,
+    ) is False
+    assert is_stable_direct_candidate(
+        _item(fps=24, bitrate=40_000_000),
+        max_fps=30,
+        max_bitrate_mbps=20,
+    ) is False
+    assert is_stable_direct_candidate(
+        _item(),
+        max_fps=30,
+        max_bitrate_mbps=20,
+    ) is False
+
+
+def test_stable_direct_pool_excludes_heavy_and_unmeasured_items():
+    safe = _item(fps=30, bitrate=15_000_000, item_id="safe")
+    high_fps = _item(fps=60, bitrate=10_000_000, item_id="high-fps")
+    high_bitrate = _item(fps=24, bitrate=40_000_000, item_id="high-bitrate")
+    unknown = _item(item_id="unknown")
+
+    assert filter_stable_direct_candidates(
+        [safe, high_fps, high_bitrate, unknown],
+        max_fps=30,
+        max_bitrate_mbps=20,
+    ) == [safe]
 
 
 
@@ -143,6 +185,13 @@ def test_wall_controller_uses_explicit_plan_boundary():
     assert "def _build_playback_request" in wall_source
     assert "ResourceGovernor" in wall_source
     assert "_resource_governor" in wall_source
+
+
+def test_wall_controller_wires_fixed_m5_direct_only_pool():
+    wall_source = Path(__file__).resolve().parents[1].joinpath("hyperwall", "wall.py").read_text()
+    assert "stable_direct_profile_for_platform" in wall_source
+    assert "filter_stable_direct_candidates" in wall_source
+    assert "Stable direct-only profile" in wall_source
 
 
 def test_resource_governor_limits_server_transcode_leases():

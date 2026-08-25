@@ -653,6 +653,24 @@ def test_macos_8_cell_cache_is_256_mib_with_bounded_readahead():
     assert opts["cache_secs"] == 30
 
 
+def test_fixed_16gb_macos_8_cell_wall_uses_stable_direct_profile():
+    import hyperwall.constants as constants
+    from hyperwall.constants import stable_direct_profile_for_platform
+
+    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "auto") is True
+    original_probe = constants._physical_memory_mb
+    constants._physical_memory_mb = lambda: None
+    try:
+        assert stable_direct_profile_for_platform("darwin", None, 8, "auto") is True
+    finally:
+        constants._physical_memory_mb = original_probe
+    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 6, "auto") is False
+    assert stable_direct_profile_for_platform("darwin", 32 * 1024, 8, "auto") is False
+    assert stable_direct_profile_for_platform("linux", 16 * 1024, 8, "auto") is False
+    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "off") is False
+    assert stable_direct_profile_for_platform("linux", 64 * 1024, 2, "on") is True
+
+
 def test_apply_cache_budget_shape():
     from hyperwall.constants import apply_cache_budget
     out = apply_cache_budget({"demuxer_max_bytes": "512MiB", "vo": "gpu-next"}, 36)

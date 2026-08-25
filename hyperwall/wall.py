@@ -41,6 +41,8 @@ from .perftrace import traced
 from .constants import (
     MAX_DIRECT_FPS,
     MAX_CONCURRENT_TRANSCODES,
+    STABLE_DIRECT_MAX_BITRATE_MBPS,
+    STABLE_DIRECT_MAX_FPS,
     DisplayRole,
     OUTAGE_MIN_CELLS,
     OUTAGE_WINDOW_S,
@@ -58,6 +60,7 @@ from .constants import (
     effective_bitrate_budget_mbps,
     MPV_OPTS,
     normalize_display_layout,
+    stable_direct_profile_for_platform,
     SCRIPT_DIR,
 )
 from .emby import EmbyClient, ContentLoader
@@ -65,6 +68,7 @@ from .playback_plan import (
     PlaybackPlan,
     PlaybackPolicy,
     budgeted_mib,
+    filter_stable_direct_candidates,
     plan_playback,
 )
 from .resource_governor import ResourceGovernor
@@ -275,6 +279,9 @@ class WallController:
         # Memory-aware demuxer budget: now that every cell exists, scale the
         # per-cell demuxer cache so the grid total stays under CACHE_BUDGET_MB.
         n_cells = len(self.cells)
+        self._stable_direct_only = stable_direct_profile_for_platform(
+            n_cells=n_cells,
+        )
         budgeted = apply_cache_budget(apply_env_overrides(MPV_OPTS), n_cells)
         self._mpv_opts_effective = dict(budgeted)
         for cell in self.cells:
@@ -283,10 +290,20 @@ class WallController:
         # within 8s of a stream-open — the wall was starving itself with
         # its own fill-bursts at 8 cells. Readahead depth is scaled inside
         # apply_cache_budget; the direct-play bitrate cap scales here.
-        self._bitrate_budget_mbps = effective_bitrate_budget_mbps(n_cells)
+        self._bitrate_budget_mbps = (
+            STABLE_DIRECT_MAX_BITRATE_MBPS
+            if self._stable_direct_only
+            else effective_bitrate_budget_mbps(n_cells)
+        )
         self._playback_policy = PlaybackPolicy(
-            auto_transcode=os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1",
-            max_fps=MAX_DIRECT_FPS,
+            auto_transcode=(
+                False if self._stable_direct_only
+                else os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1"
+            ),
+            max_fps=(
+                STABLE_DIRECT_MAX_FPS
+                if self._stable_direct_only else MAX_DIRECT_FPS
+            ),
             max_bitrate_mbps=self._bitrate_budget_mbps,
             cache_budget_mb=budgeted_mib(budgeted.get("demuxer_max_bytes")),
             readahead_seconds=int(budgeted.get("demuxer_readahead_secs", 0) or 0),
@@ -307,6 +324,13 @@ class WallController:
             budgeted.get("demuxer_readahead_secs"),
             self._bitrate_budget_mbps,
         )
+        if self._stable_direct_only:
+            logger.info(
+                "Stable direct-only profile: 8-cell small-mac pool limited "
+                "to <=%dfps and <=%d Mbps; live transcoding disabled.",
+                STABLE_DIRECT_MAX_FPS,
+                STABLE_DIRECT_MAX_BITRATE_MBPS,
+            )
 
         for win in self.windows:
             win.showFullScreen()
@@ -654,12 +678,27 @@ class WallController:
         self.loader.start()
 
     def _on_items_loaded(self, items: list[dict[str, Any]]) -> None:
-        self.all_items = items
-        self.filtered = items[:]
+        source_items = list(items)
+        if getattr(self, "_stable_direct_only", False):
+            source_items = filter_stable_direct_candidates(
+                source_items,
+                max_fps=STABLE_DIRECT_MAX_FPS,
+                max_bitrate_mbps=STABLE_DIRECT_MAX_BITRATE_MBPS,
+            )
+            logger.info(
+                "Stable direct-only pool: admitted %d/%d items; excluded %d "
+                "heavy or unmeasured resources before playback.",
+                len(source_items), len(items), len(items) - len(source_items),
+            )
+        self.all_items = source_items
+        self.filtered = source_items[:]
         self.playlists.set_source(self.filtered, DEFAULT_GROUP)
-        logger.info("Metadata Index: %d items loaded.", len(items))
-        if not items:
-            logger.warning("No items returned — check config.ini libraries.")
+        logger.info("Metadata Index: %d items loaded.", len(source_items))
+        if not source_items:
+            logger.warning(
+                "No playable items returned — check config.ini libraries or "
+                "the stable direct-only media limits."
+            )
             for cell in self.cells:
                 # play() never runs for these cells: stop the endless
                 # LOADING pulse explicitly, and raise the label — an

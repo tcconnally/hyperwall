@@ -248,6 +248,9 @@ def test_runner_metadata_records_effective_phase_environment():
             env={
                 "HYPERWALL_HWDEC": "no",
                 "HYPERWALL_CACHE_BUDGET_MB": "1024",
+                "HYPERWALL_STABLE_DIRECT_ONLY": "on",
+                "HYPERWALL_STABLE_MAX_FPS": "30",
+                "HYPERWALL_STABLE_MAX_BITRATE_MBPS": "20",
                 "UNSAFE_SECRET": "must-not-be-recorded",
             },
         )
@@ -255,6 +258,9 @@ def test_runner_metadata_records_effective_phase_environment():
 
     assert payload["environment"]["HYPERWALL_HWDEC"] == "no"
     assert payload["environment"]["HYPERWALL_CACHE_BUDGET_MB"] == "1024"
+    assert payload["environment"]["HYPERWALL_STABLE_DIRECT_ONLY"] == "on"
+    assert payload["environment"]["HYPERWALL_STABLE_MAX_FPS"] == "30"
+    assert payload["environment"]["HYPERWALL_STABLE_MAX_BITRATE_MBPS"] == "20"
     assert "UNSAFE_SECRET" not in payload["environment"]
 
 
