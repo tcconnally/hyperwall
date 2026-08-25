@@ -94,6 +94,7 @@ from .reliability import (
 )
 from . import theme
 from .perftrace import traced
+from .playback_plan import PlaybackPlan
 from .playback_state import (
     CellPlaybackController,
     PlaybackEvent,
@@ -239,6 +240,7 @@ class VideoCell(QWidget):
         super().__init__()
         self.controller = controller
         self._playback_controller = CellPlaybackController()
+        self._playback_plan: PlaybackPlan | None = None
         self.current_item: dict[str, Any] | None = None
         self.history: deque[dict[str, Any]] = deque(maxlen=50)
         self.looping = False
@@ -304,6 +306,7 @@ class VideoCell(QWidget):
         # a warm future HLS playlist is not counted as active server work.
         self._stream_url: str | None = None
         self._prefetched_stream_url: str | None = None
+        self._prefetched_playback_plan: PlaybackPlan | None = None
         self._played_anything = False
         self._paused = False  # main-thread cache; safe to read cross-thread
         self._last_next_request_ts = 0.0
@@ -339,7 +342,7 @@ class VideoCell(QWidget):
         # a track replacement or shutdown.
         self._native_control_tokens: dict[str, int] = {}
         self._native_control_serial = 0
-        self._deferred_play: tuple[dict[str, Any], str, bool, Any | None, str | None] | None = None
+        self._deferred_play: tuple[dict[str, Any], str, bool, Any | None, str | None, PlaybackPlan | None] | None = None
         self._deferred_play_retry_scheduled = False
         self._track_generation = 0
         # (item, url, emby_session_id) queued on the live mpv playlist so
@@ -1418,6 +1421,7 @@ class VideoCell(QWidget):
         preserve_failure_state: bool = False,
         on_started: Any | None = None,
         session_id: str | None = None,
+        playback_plan: PlaybackPlan | None = None,
     ) -> None:
         """Retry a transition after a worker releases the native-call lock."""
         previous = self._deferred_play
@@ -1433,6 +1437,7 @@ class VideoCell(QWidget):
             previous[3](False)
         self._deferred_play = (
             item, url, preserve_failure_state, on_started, session_id,
+            playback_plan,
         )
         if self._deferred_play_retry_scheduled:
             return
@@ -1455,6 +1460,7 @@ class VideoCell(QWidget):
                 preserve_failure_state=pending[2],
                 on_started=pending[3],
                 session_id=pending[4],
+                playback_plan=pending[5],
             )
 
         QTimer.singleShot(50, _retry)
@@ -1468,6 +1474,7 @@ class VideoCell(QWidget):
         preserve_failure_state: bool = False,
         on_started: Any | None = None,
         session_id: str | None = None,
+        playback_plan: PlaybackPlan | None = None,
     ) -> bool:
         if self._closing:
             if on_started is not None:
@@ -1478,6 +1485,7 @@ class VideoCell(QWidget):
                 self._invalidate_async_play()
             self._defer_play_until_audio_idle(
                 item, url, preserve_failure_state, on_started, session_id,
+                playback_plan,
             )
             return True  # admitted for deferred execution
         started: bool | None = False
@@ -1490,6 +1498,7 @@ class VideoCell(QWidget):
                 item, url, preserve_failure_state=preserve_failure_state,
                 on_started=on_started,
                 session_id=session_id,
+                playback_plan=playback_plan,
             )
         finally:
             self._audio_arm_call_lock.release()
@@ -1506,6 +1515,7 @@ class VideoCell(QWidget):
         preserve_failure_state: bool = False,
         on_started: Any | None = None,
         session_id: str | None = None,
+        playback_plan: PlaybackPlan | None = None,
     ) -> bool | None:
         """Load a video into this cell."""
         if self._closing:
@@ -1520,6 +1530,8 @@ class VideoCell(QWidget):
             self._failure_ts.clear()
             logger.info("Parked cell manually resumed.")
         self._invalidate_async_play()
+        if playback_plan is not None:
+            self._playback_plan = playback_plan
         # A regular replacement supersedes any queued asynchronous playlist
         # advance. The worker remains daemonized but its identity check will
         # reject the old native handle/state before it can commit.
@@ -1635,15 +1647,31 @@ class VideoCell(QWidget):
 
     # ── gapless prefetch ──────────────────────────────────────────────────
 
-    def prefetch(self, item: dict[str, Any], url: str, session_id: str) -> bool:
+    def prefetch(
+        self,
+        item: dict[str, Any],
+        url: str,
+        session_id: str,
+        *,
+        playback_plan: PlaybackPlan | None = None,
+    ) -> bool:
         if not self._audio_arm_call_lock.acquire(blocking=False):
             return False
         try:
-            return self._prefetch_impl(item, url, session_id)
+            return self._prefetch_impl(
+                item, url, session_id, playback_plan=playback_plan,
+            )
         finally:
             self._audio_arm_call_lock.release()
 
-    def _prefetch_impl(self, item: dict[str, Any], url: str, session_id: str) -> bool:
+    def _prefetch_impl(
+        self,
+        item: dict[str, Any],
+        url: str,
+        session_id: str,
+        *,
+        playback_plan: PlaybackPlan | None = None,
+    ) -> bool:
         """Queue the next item on the live mpv playlist.
 
         With prefetch-playlist=yes, mpv opens the queued entry's demuxer as
@@ -1663,6 +1691,7 @@ class VideoCell(QWidget):
             return False
         self._prefetched = (item, url, session_id)
         self._prefetched_stream_url = url
+        self._prefetched_playback_plan = playback_plan
         self._prefetch_fault_suppression_until = 0.0
         return True
 
@@ -1695,6 +1724,7 @@ class VideoCell(QWidget):
         pending = self._prefetched
         self._prefetched = None
         self._prefetched_stream_url = None
+        self._prefetched_playback_plan = None
         self._prefetch_request_token = None
         self._prefetch_drop_retry_count = 0
         if pending is None:
@@ -1887,6 +1917,7 @@ class VideoCell(QWidget):
         ):
             return
         item, url, sid = pending
+        prefetched_plan = self._prefetched_playback_plan
         if not succeeded:
             self._switching = False
             self._pending_native_context = None
@@ -1908,10 +1939,13 @@ class VideoCell(QWidget):
         )
         self._prefetched = None
         self._prefetched_stream_url = None
+        self._prefetched_playback_plan = None
         self._prefetch_request_token = None
         self._prefetch_drop_retry_count = 0
         self._stream_url = url
         self._begin_track(item)
+        if prefetched_plan is not None:
+            self._playback_plan = prefetched_plan
         context: NativeContext = (
             self._mpv_gen, self._track_generation, item.get("Id"), url, sid,
         )
@@ -1958,6 +1992,7 @@ class VideoCell(QWidget):
         if self._prefetched is None or self._mpv is None:
             return False
         item, _url, sid = self._prefetched
+        prefetched_plan = self._prefetched_playback_plan
         old_item_id = self._emby_item_id
         old_session_id = self._emby_session_id
         if STATS_ENABLED:
@@ -2000,8 +2035,11 @@ class VideoCell(QWidget):
         self._prefetched = None
         self._stream_url = _url
         self._prefetched_stream_url = None
+        self._prefetched_playback_plan = None
         self._prefetch_request_token = None
         self._begin_track(item)
+        if prefetched_plan is not None:
+            self._playback_plan = prefetched_plan
         if not self.muted and not self._audio_started:
             self._enable_audio_track()
         self._emby_session_id = sid

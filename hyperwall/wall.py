@@ -60,7 +60,12 @@ from .constants import (
     SCRIPT_DIR,
 )
 from .emby import EmbyClient, ContentLoader
-from .playback_plan import PlaybackPlan, PlaybackPolicy, plan_playback
+from .playback_plan import (
+    PlaybackPlan,
+    PlaybackPolicy,
+    budgeted_mib,
+    plan_playback,
+)
 from .resource_governor import ResourceGovernor
 from .session_broker import EmbySessionBroker, SessionRecord
 from .reliability import (
@@ -282,6 +287,8 @@ class WallController:
             auto_transcode=os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1",
             max_fps=MAX_DIRECT_FPS,
             max_bitrate_mbps=self._bitrate_budget_mbps,
+            cache_budget_mb=budgeted_mib(budgeted.get("demuxer_max_bytes")),
+            readahead_seconds=int(budgeted.get("demuxer_readahead_secs", 0) or 0),
         )
         self._session_broker = EmbySessionBroker(
             client=self.client,
@@ -703,6 +710,16 @@ class WallController:
                 auto_transcode=os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1",
                 max_fps=MAX_DIRECT_FPS,
                 max_bitrate_mbps=getattr(self, "_bitrate_budget_mbps", 60),
+                cache_budget_mb=budgeted_mib(
+                    (getattr(self, "_mpv_opts_effective", {}) or {}).get(
+                        "demuxer_max_bytes"
+                    )
+                ),
+                readahead_seconds=int(
+                    (getattr(self, "_mpv_opts_effective", {}) or {}).get(
+                        "demuxer_readahead_secs", 0
+                    ) or 0
+                ),
             )
         opts = getattr(self, "_mpv_opts_effective", {}) or {}
         decoder = str(opts.get("hwdec", MPV_OPTS.get("hwdec", "no")))
@@ -907,6 +924,7 @@ class WallController:
             preserve_failure_state=preserve_failure_state,
             on_started=_on_started,
             session_id=sid,
+            playback_plan=plan,
         )
 
     def _arm_prefetch(self, cell: VideoCell) -> None:
@@ -1033,7 +1051,9 @@ class WallController:
             )
             logger.debug("Prefetch URL build declined: %s", e)
             return
-        if not cell.prefetch(item, url, sid):
+        if not cell.prefetch(
+            item, url, sid, playback_plan=plan,
+        ):
             self.playlists.push_front(
                 self._cell_group(cell), item,
             )
@@ -1343,6 +1363,9 @@ class WallController:
     def _dump_stats_json(self) -> None:
         cells_payload = []
         for i, c in enumerate(self.cells):
+            state_controller = getattr(c, "_playback_controller", None)
+            state = getattr(getattr(state_controller, "state", None), "value", None)
+            plan = getattr(c, "_playback_plan", None)
             cells_payload.append({
                 "cell": i,
                 "totals": dict(c._stats_total),
@@ -1351,10 +1374,14 @@ class WallController:
                 "freeze_seconds": round(c._freeze_total_s, 1),
                 "postseek_refills": c._freeze_postseek_count,
                 "last_item": (c.current_item or {}).get("Name"),
+                "playback_state": state,
+                "playback_plan": plan.as_dict() if plan is not None else None,
             })
         payload = {
             "ts": _time.strftime("%Y-%m-%dT%H:%M:%S"),
             "n_cells": len(self.cells),
+            "playback_policy": self._playback_policy.as_dict(),
+            "session_broker": self._session_broker.snapshot(),
             "mpv_opts_effective": dict(self._mpv_opts_effective),
             "env": {
                 k: os.environ.get(k)

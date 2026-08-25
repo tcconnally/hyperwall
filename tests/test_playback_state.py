@@ -93,6 +93,18 @@ def test_shutdown_is_terminal_and_rejects_late_events():
     assert controller.state is PlaybackState.CLOSED
 
 
+
+def test_shutdown_overrides_stale_identity():
+    controller = CellPlaybackController()
+    current = _identity(track=2)
+    stale = _identity(track=1)
+    controller.transition(PlaybackEvent.LOAD_REQUESTED, current)
+    changed = controller.transition(PlaybackEvent.SHUTDOWN, stale)
+
+    assert changed.accepted
+    assert controller.state is PlaybackState.CLOSED
+
+
 def test_advance_enters_draining_before_next_load():
     controller = CellPlaybackController()
     identity = _identity()
@@ -112,6 +124,29 @@ def test_video_cell_has_compatibility_state_hook():
     assert "self._playback_controller.transition" in source
     assert "PlaybackEvent.LOAD_REQUESTED" in source
     assert "PlaybackEvent.SHUTDOWN" in source
+
+
+
+def test_video_cell_carries_explicit_playback_plan():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cell = open(os.path.join(root, "hyperwall", "cell.py"), encoding="utf-8").read()
+    wall = open(os.path.join(root, "hyperwall", "wall.py"), encoding="utf-8").read()
+    assert "PlaybackPlan" in cell
+    assert "playback_plan: PlaybackPlan | None = None" in cell
+    assert "self._playback_plan = playback_plan" in cell
+    assert "self._prefetched_playback_plan" in cell
+    assert "playback_plan=plan" in wall
+
+
+
+def test_wall_stats_export_plan_state_and_broker_pressure():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    source = open(os.path.join(root, "hyperwall", "wall.py"), encoding="utf-8").read()
+    stats = source[source.index("    def _dump_stats_json"):source.index("    # ── shutdown", source.index("    def _dump_stats_json"))]
+    assert "playback_state" in stats
+    assert "playback_plan" in stats
+    assert "self._session_broker.snapshot()" in stats
+    assert "session_id" not in stats
 
 
 def run_all() -> int:

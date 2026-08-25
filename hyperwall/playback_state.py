@@ -118,7 +118,11 @@ class CellPlaybackController:
             candidate_identity = identity
         else:
             candidate_identity = self._identity
-            if identity is not None and identity != self._identity:
+            if (
+                event is not PlaybackEvent.SHUTDOWN
+                and identity is not None
+                and identity != self._identity
+            ):
                 return StateChange(previous, previous, event, self._identity, False)
         next_state = _TRANSITIONS.get(self._state, {}).get(event)
         if next_state is None:

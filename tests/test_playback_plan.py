@@ -104,6 +104,24 @@ def test_url_builder_uses_server_mode_from_plan():
 
 
 
+
+def test_plan_carries_budget_context_without_session_credentials():
+    policy = PlaybackPolicy(
+        auto_transcode=True,
+        max_fps=60.0,
+        max_bitrate_mbps=40.0,
+        cache_budget_mb=128,
+        readahead_seconds=12,
+    )
+    plan = plan_playback(_item(bitrate=20_000_000), policy=policy, client_decoder="no")
+    payload = plan.as_dict()
+
+    assert payload["cache_budget_mb"] == 128
+    assert payload["readahead_seconds"] == 12
+    assert "session_id" not in payload
+    assert "api_key" not in payload
+
+
 def test_wall_controller_uses_explicit_plan_boundary():
     wall_source = Path(__file__).resolve().parents[1].joinpath("hyperwall", "wall.py").read_text()
     assert "from .playback_plan import" in wall_source
