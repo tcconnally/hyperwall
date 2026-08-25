@@ -15,6 +15,7 @@ chmod 700 "$REPORT_DIR"
 
 export HYPERWALL_STATS=1
 export HYPERWALL_PERFTRACE=1
+export HYPERWALL_SOAK_ACTIVE=1
 export HYPERWALL_SOAK_MINUTES="$MINUTES"
 # 20 seconds / cell keeps the audio transition hot without hammering Emby.
 export HYPERWALL_SOAK_DWELL_S="${HYPERWALL_SOAK_DWELL_S:-20}"

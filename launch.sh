@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 # HyperWall — macOS launcher (script mode; the .exe/G-Sync path is Windows-only)
 set -euo pipefail
+
+# A benchmark shell may have exported soak-only variables.  Keep the normal
+# launcher from accidentally turning an everyday session into a randomized
+# self-terminating run; soak_wall.sh and the diagnostic runner set the marker
+# explicitly before invoking this script.
+if [ "${HYPERWALL_SOAK_ACTIVE:-0}" != "1" ]; then
+  unset HYPERWALL_SOAK_MINUTES
+  unset HYPERWALL_SOAK_DWELL_S
+  unset HYPERWALL_SOAK_ACTIONS
+  unset HYPERWALL_SOAK_PROFILE
+  unset HYPERWALL_SOAK_REPORT_DIR
+  unset HYPERWALL_SOAK_REPORT_ROOT
+  unset HYPERWALL_NO_RELAUNCH
+  unset HYPERWALL_NO_LOG_SETUP
+fi
+
 cd "$(dirname "$0")"
 
 # python-mpv finds libmpv via ctypes.util.find_library, which consults
