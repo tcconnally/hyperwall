@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Any
 
@@ -53,6 +53,17 @@ class PlaybackPlan:
             "cache_budget_mb": self.cache_budget_mb,
             "readahead_seconds": self.readahead_seconds,
         }
+
+    def with_client_decoder(
+        self,
+        client_decoder: str,
+        reason: str = "client_decoder_fallback",
+    ) -> PlaybackPlan:
+        return replace(
+            self,
+            client_decoder=str(client_decoder or "no").strip() or "no",
+            reason=reason,
+        )
 
 
 def _video_stream(item: dict[str, Any]) -> dict[str, Any]:

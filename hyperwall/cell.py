@@ -2959,6 +2959,8 @@ class VideoCell(QWidget):
             return
         if plan["action"] == "fallback-software":
             self._force_software_decode = True
+            if self._playback_plan is not None:
+                self._playback_plan = self._playback_plan.with_client_decoder("no")
             logger.warning(
                 "Decoder fault on cell — recreating with software decode for item."
             )

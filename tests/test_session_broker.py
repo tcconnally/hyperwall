@@ -133,6 +133,47 @@ def test_stop_requests_are_idempotent_while_in_flight():
     assert submitted == ["stop-session"]
 
 
+
+def test_registry_eviction_returns_record_for_cleanup():
+    client = _Client((204,))
+    governor = ResourceGovernor(max_server_transcodes=0)
+    broker = EmbySessionBroker(
+        client=client,
+        submit=lambda fn, label: object(),
+        in_outage=lambda: False,
+        governor=governor,
+        registry_limit=1,
+        cleanup_limit=4,
+    )
+    first = SessionRecord("item-a", "session-a", _plan(transcode=False))
+    second = SessionRecord("item-b", "session-b", _plan(transcode=False))
+    assert broker.register(first).accepted
+    result = broker.register(second)
+
+    assert result.accepted
+    assert result.evicted == (first,)
+    assert broker.records() == (second,)
+    assert broker.pending_records() == (first,)
+
+
+def test_executor_submission_failure_is_retained_for_retry():
+    broker, _client, governor, _state, _submitted = _broker((204,))
+    plan = _plan()
+    broker.admit(plan, "session-a")
+    record = SessionRecord("item", "session-a", plan)
+    broker.register(record)
+
+    def submit_raises(_fn, _label):
+        raise RuntimeError("executor closed")
+
+    broker._submit = submit_raises
+    broker.stop("item", "session-a")
+
+    assert broker.pending_records() == (record,)
+    assert broker.records() == (record,)
+    assert governor.active_server_transcodes == 1
+
+
 def run_all() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
     passed = failed = 0

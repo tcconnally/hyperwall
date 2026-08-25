@@ -58,6 +58,17 @@ def test_auto_transcode_disabled_forces_direct_without_changing_client_decoder()
     assert plan.reason == "auto_transcode_disabled"
 
 
+
+def test_client_decoder_fallback_updates_only_client_dimension():
+    plan = plan_playback(_item(bitrate=80_000_000), client_decoder="videotoolbox-copy")
+    fallback = plan.with_client_decoder("no")
+
+    assert fallback.server_mode == plan.server_mode
+    assert fallback.requires_transcode_lease == plan.requires_transcode_lease
+    assert fallback.client_decoder == "no"
+    assert fallback.reason == "client_decoder_fallback"
+
+
 def test_plan_reports_both_over_budget_dimensions():
     plan = plan_playback(
         _item(fps=120, bitrate=80_000_000),

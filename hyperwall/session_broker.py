@@ -166,7 +166,11 @@ class EmbySessionBroker:
             elif last_error is not None:
                 logger.error("Session stop remains pending after bounded retries: %s", last_error)
 
-        future = self._submit(worker, "stop-session")
+        try:
+            future = self._submit(worker, "stop-session")
+        except Exception as exc:
+            logger.debug("Session stop submission failed: %s", exc)
+            future = None
         if future is None:
             with self._lock:
                 self._stop_inflight.discard(session_id)
