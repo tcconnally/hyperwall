@@ -141,17 +141,19 @@ def cache_defaults_for_platform(
     """Choose demuxer-per-cell and aggregate cache defaults.
 
     The original 1 GiB/cell, 8 GiB aggregate defaults were tuned for a 32 GiB
-    Windows host. A 16 GiB Mac can enter compression/swap pressure long before
-    mpv reaches that ceiling because Qt, libmpv surfaces, and the desktop share
-    the same memory. Keep explicit environment overrides authoritative, but
-    start <=20 GiB macOS hosts at 256 MiB/cell and a 2 GiB aggregate ceiling.
+    Windows host. During the fixed 16 GiB M5 wall's eight-hour 8-cell run,
+    system compression grew by about 5 GiB and swap traffic reached several
+    GiB while current RSS later receded. That is pressure evidence rather than
+    leak proof, so bound the controllable cache allocation more tightly. Keep
+    explicit environment overrides authoritative, but start <=20 GiB macOS
+    hosts at 128 MiB/cell and a 1 GiB aggregate ceiling.
     """
     plat = sys.platform if platform is None else platform
     memory_mb = (
         _physical_memory_mb() if physical_memory_mb is None else physical_memory_mb
     )
     if plat == "darwin" and (memory_mb is None or memory_mb <= 20 * 1024):
-        return 256, 2_048
+        return 128, 1_024
     return 1_024, 8_192
 
 
@@ -342,7 +344,11 @@ def normalize_display_layout(raw: object | None) -> dict[str, object]:
     }
 
 
-def mpv_opts_for_platform(platform: str | None = None) -> dict[str, object]:
+def mpv_opts_for_platform(
+    platform: str | None = None,
+    *,
+    physical_memory_mb: int | None = None,
+) -> dict[str, object]:
     """Return the base MPV options adjusted for the given platform.
 
     The base opts target Windows + NVIDIA (d3d11 embed). macOS can't use
@@ -350,17 +356,27 @@ def mpv_opts_for_platform(platform: str | None = None) -> dict[str, object]:
     embedding at all (mpv maintainer, mpv-examples#29; independently
     confirmed by IPTVnator — black video surface), so cells render through
     the libmpv render API (vo=libmpv) into QOpenGLWidgets — see
-    macembed.py. Decode goes through VideoToolbox, audio through CoreAudio.
+    macembed.py. On <=20 GiB macOS hosts, software decode is the conservative
+    default: the fixed 16 GiB M5 wall's overnight soak fell back every cell
+    after repeated VideoToolbox faults. Larger Macs retain VideoToolbox, and
+    HYPERWALL_HWDEC remains authoritative.
 
-    Pure function of its argument so the platform matrix is testable
-    headlessly (tests/test_platform.py).
+    ``physical_memory_mb`` is an optional deterministic probe argument. Normal
+    application startup reads the live host memory when it is omitted.
     """
     plat = sys.platform if platform is None else platform
+    memory_mb = (
+        _physical_memory_mb() if physical_memory_mb is None else physical_memory_mb
+    )
     out = dict(_MPV_OPTS_BASE)
     if plat == "darwin":
         out["vo"] = "libmpv"           # render API — --wid unsupported on macOS
         out.pop("gpu_api", None)       # d3d11 is Windows-only
-        out["hwdec"] = "videotoolbox"  # Apple Silicon hardware decode
+        out["hwdec"] = (
+            "no"
+            if memory_mb is None or memory_mb <= 20 * 1024
+            else "videotoolbox"
+        )
         # QOpenGLWidget/report_swap supplies the display clock. Prefer
         # display-resample so the VO does not drop frames to chase a separate
         # audio clock in every cell; HYPERWALL_VIDEO_SYNC=audio remains an
