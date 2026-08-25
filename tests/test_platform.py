@@ -14,9 +14,9 @@ sys.path.insert(0, REPO_ROOT)
 
 
 def test_01_macos_opts_use_render_api():
-    """macOS: vo=libmpv (render API), videotoolbox, coreaudio, no gpu_api."""
+    """Larger macOS host: libmpv render API + VideoToolbox + CoreAudio."""
     from hyperwall.constants import mpv_opts_for_platform
-    opts = mpv_opts_for_platform("darwin")
+    opts = mpv_opts_for_platform("darwin", physical_memory_mb=24 * 1024)
     # --wid embedding is unsupported by mpv's Swift macOS backend; cells
     # render via the libmpv render API into QOpenGLWidgets (macembed.py).
     assert opts["vo"] == "libmpv", opts["vo"]
@@ -81,6 +81,13 @@ def test_06_macos_render_api_prefers_display_resample_sync():
     assert opts["video_sync"] == "display-resample"
 
 
+def test_07_small_macos_host_defaults_to_software_decode():
+    """The fixed 16 GiB M5 wall must avoid its measured VideoToolbox faults."""
+    from hyperwall.constants import mpv_opts_for_platform
+    assert mpv_opts_for_platform("darwin", physical_memory_mb=16 * 1024)["hwdec"] == "no"
+    assert mpv_opts_for_platform("darwin", physical_memory_mb=24 * 1024)["hwdec"] == "videotoolbox"
+
+
 def run_all() -> int:
     tests = [
         test_01_macos_opts_use_render_api,
@@ -89,6 +96,7 @@ def run_all() -> int:
         test_04_native_wid_masking,
         test_05_env_overrides_still_win_on_macos,
         test_06_macos_render_api_prefers_display_resample_sync,
+        test_07_small_macos_host_defaults_to_software_decode,
     ]
     failed = 0
     for test in tests:
