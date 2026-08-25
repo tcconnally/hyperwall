@@ -313,6 +313,44 @@ def test_analyze_run_accepts_matching_expected_cell_count():
     assert result["gates"]["cell_count"]["status"] == "PASS"
 
 
+def test_analyze_run_blocks_when_active_duration_is_short():
+    cells = [
+        {"cell": 0, "totals": {}, "info": {}, "freezes": 0, "freeze_seconds": 0}
+    ]
+    records = [
+        {"event": "start", "baseline": {"ws_mb": 1}},
+        {"event": "sample", "wall_seconds": 1200, "resources": {"ws_mb": 1}},
+        {
+            "event": "finish",
+            "wall_seconds": 2673,
+            "resources": {"ws_mb": 1},
+            "invariant_violations": 0,
+        },
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+        Path(directory, "hyperwall.log").write_text("ready\n", encoding="utf-8")
+        Path(directory, "hyperwall_stats_a.json").write_text(
+            json.dumps({"cells": cells}), encoding="utf-8"
+        )
+        Path(directory, "hyperwall_soak_a.jsonl").write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n",
+            encoding="utf-8",
+        )
+        result = analyze_run(directory, expected_duration_seconds=3600)
+
+    gate = result["gates"]["duration_coverage"]
+    assert gate["status"] == "BLOCK"
+    assert gate["value"]["observed_seconds"] == 2673
+    assert gate["value"]["expected_seconds"] == 3600
+
+
+def test_runner_passes_expected_duration_to_analysis():
+    runner = _load_runner_module()
+    assert runner.__file__ is not None
+    source = Path(runner.__file__).read_text(encoding="utf-8")
+    assert "expected_duration_seconds=args.minutes * 60" in source
+
+
 def test_repo_tests_do_not_inherit_soak_overrides():
     runner = _load_runner_module()
     observed_envs = []

@@ -141,19 +141,19 @@ def cache_defaults_for_platform(
     """Choose demuxer-per-cell and aggregate cache defaults.
 
     The original 1 GiB/cell, 8 GiB aggregate defaults were tuned for a 32 GiB
-    Windows host. During the fixed 16 GiB M5 wall's eight-hour 8-cell run,
-    system compression grew by about 5 GiB and swap traffic reached several
-    GiB while current RSS later receded. That is pressure evidence rather than
-    leak proof, so bound the controllable cache allocation more tightly. Keep
-    explicit environment overrides authoritative, but start <=20 GiB macOS
-    hosts at 128 MiB/cell and a 1 GiB aggregate ceiling.
+    Windows host. A 128 MiB/cell follow-up on the fixed 16 GiB M5 produced 53
+    cache-starvation freezes (426.8s) in only 44.5 active minutes. Restore the
+    prior 256 MiB/cell floor: system compression/swap remains telemetry to
+    watch, but current RSS receded and did not establish a leak. Keep explicit
+    environment overrides authoritative, and start <=20 GiB macOS hosts at
+    256 MiB/cell with a 2 GiB aggregate ceiling.
     """
     plat = sys.platform if platform is None else platform
     memory_mb = (
         _physical_memory_mb() if physical_memory_mb is None else physical_memory_mb
     )
     if plat == "darwin" and (memory_mb is None or memory_mb <= 20 * 1024):
-        return 128, 1_024
+        return 256, 2_048
     return 1_024, 8_192
 
 

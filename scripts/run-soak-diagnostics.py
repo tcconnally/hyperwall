@@ -488,8 +488,13 @@ def _analyze_phase(
     phase_dir: Path,
     *,
     expected_cells: int | None = None,
+    expected_duration_seconds: int | None = None,
 ) -> dict[str, object]:
-    result = analyze_run(phase_dir, expected_cells=expected_cells)
+    result = analyze_run(
+        phase_dir,
+        expected_cells=expected_cells,
+        expected_duration_seconds=expected_duration_seconds,
+    )
     safe_dir = phase_dir.parent / (phase_dir.name + "-redacted")
     result["redacted_artifacts"] = str(safe_dir)
     analysis_path = phase_dir / "analysis.json"
@@ -614,6 +619,7 @@ def main(argv: list[str] | None = None) -> int:
             result = _analyze_phase(
                 phase_dir,
                 expected_cells=args.expected_cells,
+                expected_duration_seconds=args.minutes * 60,
             )
             result["process_exit_code"] = code
             summary["phases"].append(result)
