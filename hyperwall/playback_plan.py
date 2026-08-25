@@ -12,6 +12,7 @@ class PlaybackPolicy:
     max_bitrate_mbps: float = 60.0
     cache_budget_mb: int = 0
     readahead_seconds: int = 0
+    aggregate_cache_budget_mb: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -20,6 +21,7 @@ class PlaybackPolicy:
             "max_bitrate_mbps": self.max_bitrate_mbps,
             "cache_budget_mb": self.cache_budget_mb,
             "readahead_seconds": self.readahead_seconds,
+            "aggregate_cache_budget_mb": self.aggregate_cache_budget_mb,
         }
 
 
@@ -34,6 +36,7 @@ class PlaybackPlan:
     source_bitrate_mbps: float | None
     cache_budget_mb: int = 0
     readahead_seconds: int = 0
+    aggregate_cache_budget_mb: int = 0
 
     def __post_init__(self) -> None:
         if self.server_mode not in {"direct", "server_transcode"}:
@@ -52,6 +55,7 @@ class PlaybackPlan:
             "source_bitrate_mbps": self.source_bitrate_mbps,
             "cache_budget_mb": self.cache_budget_mb,
             "readahead_seconds": self.readahead_seconds,
+            "aggregate_cache_budget_mb": self.aggregate_cache_budget_mb,
         }
 
     def with_client_decoder(
@@ -148,4 +152,5 @@ def plan_playback(
         source_bitrate_mbps=bitrate_mbps,
         cache_budget_mb=max(0, int(resolved.cache_budget_mb)),
         readahead_seconds=max(0, int(resolved.readahead_seconds)),
+        aggregate_cache_budget_mb=max(0, int(resolved.aggregate_cache_budget_mb)),
     )

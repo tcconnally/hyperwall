@@ -57,6 +57,8 @@ def test_soak_resource_metric_identifies_posix_peak_rss():
     ).read()
     assert "ws_metric" in source
     assert "peak_rss_mb" in source
+    assert "current_ws_mb" in source
+    assert "resident_rss_mb" in source
 
 
 def test_macos_soak_launcher_collects_system_telemetry():

@@ -300,6 +300,7 @@ def _write_run_metadata(
     decoder: str,
     minutes: int,
     dwell: int,
+    expected_cells: int | None = None,
     env: dict[str, str],
 ) -> None:
     metadata = {
@@ -307,6 +308,7 @@ def _write_run_metadata(
         "decoder": decoder,
         "minutes": minutes,
         "dwell_seconds": dwell,
+        "expected_cells": expected_cells,
         "image_capture": False,
         "environment": _safe_env_manifest(env),
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -325,6 +327,7 @@ def _run_live_phase(
     minutes: int,
     dwell: int,
     watchdog: int,
+    expected_cells: int | None = None,
 ) -> int:
     phase_dir.mkdir(parents=True, exist_ok=True)
     _force_private_permissions(phase_dir)
@@ -336,6 +339,7 @@ def _run_live_phase(
         decoder=decoder,
         minutes=minutes,
         dwell=dwell,
+        expected_cells=expected_cells,
         env=env,
     )
     _force_private_permissions(phase_dir / "runner.json")
@@ -479,8 +483,12 @@ def _install_signal_cleanup() -> None:
     signal.signal(signal.SIGTERM, handle_signal)
 
 
-def _analyze_phase(phase_dir: Path) -> dict[str, object]:
-    result = analyze_run(phase_dir)
+def _analyze_phase(
+    phase_dir: Path,
+    *,
+    expected_cells: int | None = None,
+) -> dict[str, object]:
+    result = analyze_run(phase_dir, expected_cells=expected_cells)
     safe_dir = phase_dir.parent / (phase_dir.name + "-redacted")
     result["redacted_artifacts"] = str(safe_dir)
     analysis_path = phase_dir / "analysis.json"
@@ -507,6 +515,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Seconds beyond expected phase length before kill (default: 90).",
     )
     parser.add_argument(
+        "--expected-cells", type=int, default=None,
+        help="Require this many final stats cells; mismatch blocks the phase.",
+    )
+    parser.add_argument(
         "--decoders", default=",".join(DEFAULT_DECODERS),
         help="Comma-separated decoder A/B phases; use one value to run one phase.",
     )
@@ -530,6 +542,8 @@ def main(argv: list[str] | None = None) -> int:
     _install_signal_cleanup()
     if args.minutes < 1 or args.dwell < 0 or args.watchdog_grace < 1:
         parser.error("minutes must be >=1, dwell >=0, watchdog-grace >=1")
+    if args.expected_cells is not None and args.expected_cells < 1:
+        parser.error("expected-cells must be >=1")
 
     if not args.skip_source_health:
         try:
@@ -551,6 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     _force_private_permissions(report_root)
     summary: dict[str, object] = {
         "image_capture": False,
+        "expected_cells": args.expected_cells,
         "report_root": str(report_root),
         "started_at": datetime.now(timezone.utc).isoformat(),
         "repo_tests": {"status": "SKIP"},
@@ -593,8 +608,12 @@ def main(argv: list[str] | None = None) -> int:
                 minutes=args.minutes,
                 dwell=args.dwell,
                 watchdog=args.watchdog_grace,
+                expected_cells=args.expected_cells,
             )
-            result = _analyze_phase(phase_dir)
+            result = _analyze_phase(
+                phase_dir,
+                expected_cells=args.expected_cells,
+            )
             result["process_exit_code"] = code
             summary["phases"].append(result)
             failures += int(code != 0 or result.get("verdict") != "PASS")

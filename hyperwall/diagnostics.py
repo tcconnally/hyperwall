@@ -69,6 +69,9 @@ _LOG_PATTERNS = {
     "retry_skips": re.compile(r"Max retries reached"),
     "crash_loop_guard": re.compile(r"Crash-loop guard"),
 }
+_PLAYBACK_PLAN_RE = re.compile(
+    r"Playback plan: (DIRECT|TRANSCODE)(/prefetch)?"
+)
 _FREEZE_RE = re.compile(r"FREEZE:\s*([^\s]+)\s*s")
 _FREEZE_MARKER_RE = re.compile(r"FREEZE:", re.IGNORECASE)
 _STATS_MARKER_RE = re.compile(r"\bSTATS\s+cell\b", re.IGNORECASE)
@@ -207,7 +210,7 @@ def _finite_number(value: Any, *, nonnegative: bool = False) -> bool:
 
 def parse_app_log(text: str) -> dict[str, Any]:
     """Extract reliability counters from a Hyperwall application log."""
-    counts = {key: 0 for key in _LOG_PATTERNS}
+    counts: dict[str, Any] = {key: 0 for key in _LOG_PATTERNS}
     counts["freeze_count"] = 0
     freeze_seconds = 0.0
     max_loop_stall: list[float] = []
@@ -216,6 +219,12 @@ def parse_app_log(text: str) -> dict[str, Any]:
     max_slow_slot: list[float] = []
     shutdown_started = False
     stats: list[dict[str, Any]] = []
+    playback_plan_counts = {
+        "direct": 0,
+        "direct_prefetch": 0,
+        "server_transcode": 0,
+        "server_transcode_prefetch": 0,
+    }
     malformed_numeric = 0
     for line in text.splitlines():
         if re.search(r"Shutdown requested\.", line):
@@ -239,6 +248,16 @@ def parse_app_log(text: str) -> dict[str, Any]:
                             max_slow_slot.append(value)
                     except (TypeError, ValueError, OverflowError):
                         malformed_numeric += 1
+        plan_match = _PLAYBACK_PLAN_RE.search(line)
+        if plan_match:
+            plan_key = (
+                "server_transcode"
+                if plan_match.group(1) == "TRANSCODE"
+                else "direct"
+            )
+            if plan_match.group(2):
+                plan_key += "_prefetch"
+            playback_plan_counts[plan_key] += 1
         freeze = _FREEZE_RE.search(line)
         if _FREEZE_MARKER_RE.search(line):
             if not freeze:
@@ -285,6 +304,7 @@ def parse_app_log(text: str) -> dict[str, Any]:
     counts["max_shutdown_loop_stall_ms"] = _max_or_zero(shutdown_loop_stall)
     counts["max_slow_slot_ms"] = _max_or_zero(max_slow_slot)
     counts["stats"] = stats
+    counts["playback_plan_counts"] = playback_plan_counts
     counts["malformed_numeric_fields"] = malformed_numeric
     return counts
 
@@ -316,6 +336,8 @@ def parse_soak_jsonl(text: str) -> dict[str, Any]:
     resources = resources_value if isinstance(resources_value, dict) else {}
     baseline_ws: Any = baseline.get("ws_mb")
     final_ws: Any = resources.get("ws_mb")
+    baseline_current_ws: Any = baseline.get("current_ws_mb")
+    final_current_ws: Any = resources.get("current_ws_mb")
     duration = finish.get("wall_seconds") if finish else None
     if duration is None and samples:
         duration = samples[-1].get("wall_seconds")
@@ -331,6 +353,18 @@ def parse_soak_jsonl(text: str) -> dict[str, Any]:
     ws_metric = None
     if metric_values:
         ws_metric = metric_values[0] if len(set(metric_values)) == 1 else "mixed"
+    current_metric_values = [
+        value
+        for value in (baseline.get("current_ws_metric"), resources.get("current_ws_metric"))
+        if isinstance(value, str) and value
+    ]
+    current_ws_metric = None
+    if current_metric_values:
+        current_ws_metric = (
+            current_metric_values[0]
+            if len(set(current_metric_values)) == 1
+            else "mixed"
+        )
     result: dict[str, Any] = {
         "record_count": len(records),
         "malformed_records": malformed,
@@ -339,6 +373,9 @@ def parse_soak_jsonl(text: str) -> dict[str, Any]:
         "baseline_ws_mb": baseline_ws,
         "final_ws_mb": final_ws,
         "ws_metric": ws_metric,
+        "baseline_current_ws_mb": baseline_current_ws,
+        "final_current_ws_mb": final_current_ws,
+        "current_ws_metric": current_ws_metric,
         "duration_seconds": duration,
         "invariant_violations": invariant,
         "finish_event_present": bool(finish),
@@ -353,6 +390,15 @@ def parse_soak_jsonl(text: str) -> dict[str, Any]:
         result["working_set_growth_mb"] = float(final_ws) - float(baseline_ws)
     else:
         result["working_set_growth_mb"] = None
+    if (
+        _finite_number(baseline_current_ws, nonnegative=True)
+        and _finite_number(final_current_ws, nonnegative=True)
+    ):
+        result["current_working_set_growth_mb"] = (
+            float(final_current_ws) - float(baseline_current_ws)
+        )
+    else:
+        result["current_working_set_growth_mb"] = None
     return result
 
 
@@ -382,7 +428,13 @@ def _valid_resource_map(value: Any) -> bool:
     metric = value.get("ws_metric")
     if metric is not None and metric not in {"peak_rss_mb", "working_set_mb"}:
         return False
-    for key in ("ws_mb", "private_mb", "threads"):
+    current_metric = value.get("current_ws_metric")
+    if current_metric is not None and current_metric not in {
+        "resident_rss_mb",
+        "working_set_mb",
+    }:
+        return False
+    for key in ("ws_mb", "current_ws_mb", "private_mb", "threads"):
         if key in value and not _finite_number(value[key], nonnegative=True):
             return False
     return "ws_mb" in value and _finite_number(value["ws_mb"], nonnegative=True)
@@ -422,6 +474,52 @@ def _valid_event_shape(manifest: dict[str, Any]) -> bool:
     )
 
 
+def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
+    """Return credential-free metadata from the final stats artifact."""
+    if stats_path is None:
+        return {"n_cells": None, "final_server_modes": {}}
+    try:
+        value = json.loads(stats_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {"n_cells": None, "final_server_modes": {}}
+    if not isinstance(value, dict):
+        return {"n_cells": None, "final_server_modes": {}}
+    cells = value.get("cells")
+    summary: dict[str, Any] = {
+        "n_cells": len(cells) if isinstance(cells, list) else None,
+        "final_server_modes": {},
+    }
+    reported_cells = value.get("n_cells")
+    if isinstance(reported_cells, int) and not isinstance(reported_cells, bool):
+        summary["reported_n_cells"] = reported_cells
+    modes: dict[str, int] = {}
+    if isinstance(cells, list):
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            plan = cell.get("playback_plan")
+            mode = plan.get("server_mode") if isinstance(plan, dict) else None
+            if mode in {"direct", "server_transcode"}:
+                modes[mode] = modes.get(mode, 0) + 1
+    summary["final_server_modes"] = modes
+    policy = value.get("playback_policy")
+    if isinstance(policy, dict):
+        safe_policy: dict[str, object] = {}
+        for key in (
+            "auto_transcode",
+            "max_fps",
+            "max_bitrate_mbps",
+            "cache_budget_mb",
+            "aggregate_cache_budget_mb",
+            "readahead_seconds",
+        ):
+            item = policy.get(key)
+            if isinstance(item, (bool, int, float, str)) and not isinstance(item, bytes):
+                safe_policy[key] = item
+        summary["playback_policy"] = safe_policy
+    return summary
+
+
 def _has_valid_stats(stats_path: Path | None) -> bool:
     if stats_path is None:
         return False
@@ -433,6 +531,12 @@ def _has_valid_stats(stats_path: Path | None) -> bool:
         return False
     cells = value.get("cells")
     if not isinstance(cells, list) or not cells:
+        return False
+    if "n_cells" in value and (
+        isinstance(value["n_cells"], bool)
+        or not isinstance(value["n_cells"], int)
+        or value["n_cells"] != len(cells)
+    ):
         return False
     for cell in cells:
         cell_id = cell.get("cell") if isinstance(cell, dict) else None
@@ -458,8 +562,18 @@ def _gate(status: str, value: Any, note: str) -> dict[str, Any]:
     return {"status": status, "value": value, "note": note}
 
 
-def analyze_run(report_dir: str | Path) -> dict[str, Any]:
+def analyze_run(
+    report_dir: str | Path,
+    *,
+    expected_cells: int | None = None,
+) -> dict[str, Any]:
     """Analyze a completed run and emit a machine-readable gate report."""
+    if expected_cells is not None and (
+        isinstance(expected_cells, bool)
+        or not isinstance(expected_cells, int)
+        or expected_cells < 1
+    ):
+        raise ValueError("expected_cells must be a positive integer")
     root = _reject_symlink_components(report_dir)
     if not root.is_dir():
         raise ValueError("analysis report must be a directory")
@@ -471,6 +585,7 @@ def analyze_run(report_dir: str | Path) -> dict[str, Any]:
     stats_candidates = sorted(_safe_children(root, "hyperwall_stats_*.json"))
     stats_path = stats_candidates[0] if len(stats_candidates) == 1 else None
     stats_valid = _has_valid_stats(stats_path)
+    stats_summary = _stats_summary(stats_path)
     manifest = (
         parse_soak_jsonl(jsonl_path.read_text(encoding="utf-8", errors="replace"))
         if jsonl_path else {}
@@ -494,6 +609,15 @@ def analyze_run(report_dir: str | Path) -> dict[str, Any]:
         str(stats_path) if stats_path else None,
         "A completed phase requires one valid final stats artifact.",
     )
+    if expected_cells is not None:
+        observed_cells = stats_summary.get("n_cells")
+        gates["cell_count"] = _gate(
+            "PASS"
+            if stats_valid and observed_cells == expected_cells
+            else "BLOCK",
+            {"expected": expected_cells, "observed": observed_cells},
+            "The final stats artifact must contain the expected number of cells.",
+        )
     gates["freeze_count"] = _gate(
         "BLOCK" if parsed.get("freeze_count", 0) else "WARNING" if missing_log else "PASS",
         parsed.get("freeze_count", 0),
@@ -631,6 +755,7 @@ def analyze_run(report_dir: str | Path) -> dict[str, Any]:
             "jsonl": str(jsonl_path) if jsonl_path else None,
             "stats": str(stats_path) if stats_path else None,
         },
+        "stats": stats_summary,
         "manifest": manifest,
         "log": parsed,
         "gates": gates,

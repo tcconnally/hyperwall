@@ -45,6 +45,7 @@ def test_runner_disables_image_capture_and_has_no_capture_commands():
     assert "image_capture" in source
     assert "screencapture" not in source
     assert "--skip-live" in source
+    assert "--expected-cells" in source
     assert "INCOMPLETE" in source
 
 
@@ -257,6 +258,61 @@ def test_runner_metadata_records_effective_phase_environment():
     assert "UNSAFE_SECRET" not in payload["environment"]
 
 
+
+def test_runner_metadata_records_expected_cell_count():
+    runner = _load_runner_module()
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory, "runner.json")
+        runner._write_run_metadata(
+            path,
+            phase="phase-01-no",
+            decoder="no",
+            minutes=5,
+            dwell=20,
+            expected_cells=4,
+            env={},
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["expected_cells"] == 4
+
+
+def test_analyze_run_blocks_when_expected_cell_count_mismatches():
+    cells = [
+        {"cell": index, "totals": {}, "info": {}, "freezes": 0, "freeze_seconds": 0}
+        for index in range(2)
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+        Path(directory, "hyperwall.log").write_text("ready" + chr(10), encoding="utf-8")
+        Path(directory, "hyperwall_stats_a.json").write_text(
+            json.dumps({"cells": cells}), encoding="utf-8"
+        )
+        result = analyze_run(directory, expected_cells=4)
+
+    assert result["stats"]["n_cells"] == 2
+    assert result["gates"]["cell_count"]["status"] == "BLOCK"
+    assert result["gates"]["cell_count"]["value"] == {
+        "expected": 4,
+        "observed": 2,
+    }
+
+
+def test_analyze_run_accepts_matching_expected_cell_count():
+    cells = [
+        {"cell": index, "totals": {}, "info": {}, "freezes": 0, "freeze_seconds": 0}
+        for index in range(2)
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+        Path(directory, "hyperwall.log").write_text("ready" + chr(10), encoding="utf-8")
+        Path(directory, "hyperwall_stats_a.json").write_text(
+            json.dumps({"cells": cells}), encoding="utf-8"
+        )
+        result = analyze_run(directory, expected_cells=2)
+
+    assert result["stats"]["n_cells"] == 2
+    assert result["gates"]["cell_count"]["status"] == "PASS"
+
+
 def test_repo_tests_do_not_inherit_soak_overrides():
     runner = _load_runner_module()
     observed_envs = []
@@ -292,6 +348,27 @@ def test_repo_tests_do_not_inherit_soak_overrides():
         not any(name.startswith("HYPERWALL_") for name in env)
         for env in observed_envs
     )
+
+
+
+def test_parse_app_log_counts_direct_and_transcode_plan_decisions():
+    parsed = parse_app_log(
+        chr(10).join(
+            [
+                "INFO Playback plan: DIRECT server=direct",
+                "INFO Playback plan: DIRECT/prefetch server=direct",
+                "INFO Playback plan: TRANSCODE server=server_transcode",
+                "INFO Playback plan: TRANSCODE/prefetch server=server_transcode",
+            ]
+        )
+    )
+
+    assert parsed["playback_plan_counts"] == {
+        "direct": 1,
+        "direct_prefetch": 1,
+        "server_transcode": 1,
+        "server_transcode_prefetch": 1,
+    }
 
 
 def test_shutdown_stall_is_not_used_as_playback_responsiveness_failure():
@@ -952,9 +1029,9 @@ def test_parse_soak_jsonl_tracks_baseline_samples_and_finish():
     text = "\n".join(
         json.dumps(record)
         for record in [
-            {"event": "start", "wall_seconds": 0.0, "baseline": {"ws_mb": 226, "threads": 1}},
-            {"event": "sample", "wall_seconds": 60.0, "resources": {"ws_mb": 1315, "threads": 9}},
-            {"event": "finish", "wall_seconds": 120.0, "resources": {"ws_mb": 3312, "threads": 9}, "invariant_violations": 0},
+            {"event": "start", "wall_seconds": 0.0, "baseline": {"ws_mb": 226, "threads": 1, "current_ws_mb": 220, "current_ws_metric": "resident_rss_mb"}},
+            {"event": "sample", "wall_seconds": 60.0, "resources": {"ws_mb": 1315, "current_ws_mb": 700, "current_ws_metric": "resident_rss_mb", "threads": 9}},
+            {"event": "finish", "wall_seconds": 120.0, "resources": {"ws_mb": 3312, "current_ws_mb": 900, "current_ws_metric": "resident_rss_mb", "threads": 9}, "invariant_violations": 0},
         ]
     )
     parsed = parse_soak_jsonl(text)
@@ -962,6 +1039,10 @@ def test_parse_soak_jsonl_tracks_baseline_samples_and_finish():
     assert parsed["baseline_ws_mb"] == 226
     assert parsed["final_ws_mb"] == 3312
     assert parsed["working_set_growth_mb"] == 3086
+    assert parsed["baseline_current_ws_mb"] == 220
+    assert parsed["final_current_ws_mb"] == 900
+    assert parsed["current_working_set_growth_mb"] == 680
+    assert parsed["current_ws_metric"] == "resident_rss_mb"
     assert parsed["invariant_violations"] == 0
     assert parsed["duration_seconds"] == 120.0
 

@@ -52,6 +52,7 @@ from .constants import (
     STATS_INFO_PROPS,
     TRANSCODE_PREFETCH_RETRY_ATTEMPTS,
     TRANSCODE_PREFETCH_RETRY_S,
+    CACHE_BUDGET_MB,
     apply_cache_budget,
     apply_env_overrides,
     effective_bitrate_budget_mbps,
@@ -289,6 +290,7 @@ class WallController:
             max_bitrate_mbps=self._bitrate_budget_mbps,
             cache_budget_mb=budgeted_mib(budgeted.get("demuxer_max_bytes")),
             readahead_seconds=int(budgeted.get("demuxer_readahead_secs", 0) or 0),
+            aggregate_cache_budget_mb=CACHE_BUDGET_MB,
         )
         self._session_broker = EmbySessionBroker(
             client=self.client,
@@ -719,6 +721,9 @@ class WallController:
                     (getattr(self, "_mpv_opts_effective", {}) or {}).get(
                         "demuxer_readahead_secs", 0
                     ) or 0
+                ),
+                aggregate_cache_budget_mb=getattr(
+                    self, "_aggregate_cache_budget_mb", CACHE_BUDGET_MB
                 ),
             )
         opts = getattr(self, "_mpv_opts_effective", {}) or {}
