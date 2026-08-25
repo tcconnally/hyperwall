@@ -283,6 +283,7 @@ def _base_env(report_dir: Path, minutes: int, dwell: int) -> dict[str, str]:
         "HYPERWALL_SOAK_MINUTES": str(minutes),
         "HYPERWALL_SOAK_DWELL_S": str(dwell),
         "HYPERWALL_SOAK_ACTIONS": "1",
+        "HYPERWALL_SOAK_ACTIVE": "1",
         "HYPERWALL_SOAK_PROFILE": "audio",
         "HYPERWALL_SOAK_REPORT_DIR": str(report_dir),
         "HYPERWALL_SOAK_REPORT_ROOT": str(report_dir.parent),

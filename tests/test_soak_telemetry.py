@@ -84,6 +84,21 @@ def test_soak_launcher_honors_runner_report_directory():
     assert 'HYPERWALL_SOAK_REPORT_DIR:-$REPORT_ROOT/$RUN_ID' in source
 
 
+def test_normal_launcher_clears_stale_soak_environment():
+    path = os.path.join(os.path.dirname(__file__), "..", "launch.sh")
+    source = open(path, encoding="utf-8").read()
+    assert 'HYPERWALL_SOAK_ACTIVE:-0' in source
+    assert 'unset HYPERWALL_SOAK_MINUTES' in source
+    assert 'unset HYPERWALL_SOAK_REPORT_DIR' in source
+    assert 'unset HYPERWALL_NO_LOG_SETUP' in source
+
+
+def test_soak_launcher_marks_explicit_soak_mode():
+    path = os.path.join(os.path.dirname(__file__), "..", "soak_wall.sh")
+    source = open(path, encoding="utf-8").read()
+    assert 'HYPERWALL_SOAK_ACTIVE=1' in source
+
+
 def run_all() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0
