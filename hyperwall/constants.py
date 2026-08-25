@@ -157,6 +157,46 @@ def cache_defaults_for_platform(
     return 1_024, 8_192
 
 
+def stable_direct_profile_for_platform(
+    platform: str | None = None,
+    physical_memory_mb: int | None = None,
+    n_cells: int = 0,
+    override: str | None = None,
+) -> bool:
+    """Select the fail-closed direct-play profile for the fixed M5 wall.
+
+    The 16 GiB macOS 8-cell target cannot use VideoToolbox reliably, while
+    live HLS shaping overloaded the four-slot Emby transcode path.  In auto
+    mode only that measured hardware shape is affected.  Operators can force
+    the profile on/off with HYPERWALL_STABLE_DIRECT_ONLY.
+    """
+    raw = (
+        os.environ.get("HYPERWALL_STABLE_DIRECT_ONLY")
+        if override is None else override
+    )
+    if raw is not None:
+        value = str(raw).strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+    plat = sys.platform if platform is None else platform
+    memory_mb = (
+        _physical_memory_mb() if physical_memory_mb is None else physical_memory_mb
+    )
+    return bool(
+        plat == "darwin"
+        and (memory_mb is None or memory_mb <= 20 * 1024)
+        and n_cells == 8
+    )
+
+
+STABLE_DIRECT_MAX_FPS = _int_env("HYPERWALL_STABLE_MAX_FPS", 30, 1, 240)
+STABLE_DIRECT_MAX_BITRATE_MBPS = _int_env(
+    "HYPERWALL_STABLE_MAX_BITRATE_MBPS", 20, 1, 1_000
+)
+
+
 # Direct-play budget: sources heavier than this transcode server-side. This is
 # the ONLY auto-transcode gate — the >1080p resolution gate was dropped
 # 2026-07-13 (A/B bench: 4K direct-plays with 0 drops, while the live-transcode

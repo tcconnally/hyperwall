@@ -157,6 +157,9 @@ Environment variables:
 | `HYPERWALL_NO_RELAUNCH=1` | Skip exe re-launch (script mode) |
 | `HYPERWALL_ISOLATED=1` | Force G-Sync isolation on (bypass exe-name check) |
 | `HYPERWALL_AUTO_TRANSCODE=0` | Disable auto-transcode heuristic |
+| `HYPERWALL_STABLE_DIRECT_ONLY` | Force (`1`) or disable (`0`) the fail-closed direct-only pool. Auto-enabled only for an 8-cell macOS host with <=20 GiB RAM. |
+| `HYPERWALL_STABLE_MAX_FPS` | Stable-pool frame-rate ceiling (default 30 fps) |
+| `HYPERWALL_STABLE_MAX_BITRATE_MBPS` | Stable-pool bitrate ceiling (default 20 Mbps) |
 | `HYPERWALL_STALL_TIMEOUT_S` | Stall watchdog: flag a frozen stream after N s of no progress (default 20) |
 | `HYPERWALL_WATCHDOG_MS` | Stall watchdog poll interval in ms (default 5000) |
 | `HYPERWALL_CRASHLOOP_THRESHOLD` | Failures within the window before a cell is parked (default 5) |
