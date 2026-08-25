@@ -99,6 +99,13 @@ def test_soak_launcher_marks_explicit_soak_mode():
     assert 'HYPERWALL_SOAK_ACTIVE=1' in source
 
 
+def test_macos_soak_prevents_idle_sleep_during_measurement():
+    path = os.path.join(os.path.dirname(__file__), "..", "soak_wall.sh")
+    source = open(path, encoding="utf-8").read()
+    assert "command -v caffeinate" in source
+    assert "caffeinate -dims" in source
+
+
 def run_all() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0

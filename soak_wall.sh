@@ -71,4 +71,11 @@ sample_net & PIDS+=("$!")
 sample_power & PIDS+=("$!")
 
 printf 'Hyperwall macOS audio soak: %s minutes; artifacts: %s\n' "$MINUTES" "$REPORT_DIR"
-./launch.sh 2>&1 | tee "$REPORT_DIR/hyperwall.log"
+if command -v caffeinate >/dev/null 2>&1; then
+  # Keep wall-clock duration, monotonic soak duration, and host samplers on the
+  # same measurement interval. A 2026-08-25 M5 run lost ~14m45s when idle
+  # sleep suspended the app, vm_stat, and nettop together.
+  caffeinate -dims ./launch.sh 2>&1 | tee "$REPORT_DIR/hyperwall.log"
+else
+  ./launch.sh 2>&1 | tee "$REPORT_DIR/hyperwall.log"
+fi

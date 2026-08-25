@@ -637,18 +637,18 @@ def test_transcode_prefetch_retry_constant_defaults():
 
 def test_macos_16gb_uses_conservative_cache_defaults():
     from hyperwall.constants import cache_defaults_for_platform
-    assert cache_defaults_for_platform("darwin", 16 * 1024) == (128, 1_024)
+    assert cache_defaults_for_platform("darwin", 16 * 1024) == (256, 2_048)
     assert cache_defaults_for_platform("darwin", 32 * 1024) == (1_024, 8_192)
     assert cache_defaults_for_platform("linux", 16 * 1024) == (1_024, 8_192)
 
 
-def test_macos_8_cell_cache_is_128_mib_with_bounded_readahead():
+def test_macos_8_cell_cache_is_256_mib_with_bounded_readahead():
     from hyperwall.constants import apply_cache_budget, mpv_opts_for_platform
     opts = apply_cache_budget(
         mpv_opts_for_platform("darwin"), 8,
         platform="darwin", physical_memory_mb=16 * 1024,
     )
-    assert opts["demuxer_max_bytes"] == "128MiB"
+    assert opts["demuxer_max_bytes"] == "256MiB"
     assert opts["demuxer_readahead_secs"] == 30
     assert opts["cache_secs"] == 30
 

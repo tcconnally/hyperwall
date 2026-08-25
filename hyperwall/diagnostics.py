@@ -566,6 +566,7 @@ def analyze_run(
     report_dir: str | Path,
     *,
     expected_cells: int | None = None,
+    expected_duration_seconds: int | float | None = None,
 ) -> dict[str, Any]:
     """Analyze a completed run and emit a machine-readable gate report."""
     if expected_cells is not None and (
@@ -574,6 +575,11 @@ def analyze_run(
         or expected_cells < 1
     ):
         raise ValueError("expected_cells must be a positive integer")
+    if expected_duration_seconds is not None and (
+        not _finite_number(expected_duration_seconds)
+        or expected_duration_seconds <= 0
+    ):
+        raise ValueError("expected_duration_seconds must be positive and finite")
     root = _reject_symlink_components(report_dir)
     if not root.is_dir():
         raise ValueError("analysis report must be a directory")
@@ -723,6 +729,28 @@ def analyze_run(
         },
         "A completed run requires finish duration and invariant evidence.",
     )
+    if expected_duration_seconds is not None:
+        observed_duration = manifest.get("duration_seconds") if manifest else None
+        duration_valid = _finite_number(observed_duration, nonnegative=True)
+        observed_number = (
+            float(observed_duration)
+            if duration_valid and isinstance(observed_duration, (int, float))
+            else None
+        )
+        coverage = (
+            observed_number / float(expected_duration_seconds)
+            if observed_number is not None else None
+        )
+        gates["duration_coverage"] = _gate(
+            "PASS" if coverage is not None and coverage >= 0.95 else "BLOCK",
+            {
+                "observed_seconds": observed_duration,
+                "expected_seconds": expected_duration_seconds,
+                "coverage": round(coverage, 4) if coverage is not None else None,
+            },
+            "Active soak duration must cover at least 95% of the requested interval; "
+            "sleep/suspend gaps invalidate the measurement.",
+        )
     for key, note in (
         ("playback_errors", "Playback errors must be zero."),
         ("retry_skips", "Exhausted playback retries must be zero."),
