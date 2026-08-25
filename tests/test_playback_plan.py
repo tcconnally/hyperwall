@@ -122,12 +122,14 @@ def test_plan_carries_budget_context_without_session_credentials():
         max_fps=60.0,
         max_bitrate_mbps=40.0,
         cache_budget_mb=128,
+        aggregate_cache_budget_mb=2048,
         readahead_seconds=12,
     )
     plan = plan_playback(_item(bitrate=20_000_000), policy=policy, client_decoder="no")
     payload = plan.as_dict()
 
     assert payload["cache_budget_mb"] == 128
+    assert payload["aggregate_cache_budget_mb"] == 2048
     assert payload["readahead_seconds"] == 12
     assert "session_id" not in payload
     assert "api_key" not in payload

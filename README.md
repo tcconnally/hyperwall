@@ -189,28 +189,31 @@ profiles in one run.
 
 ### One-command no-image diagnostics
 
-Run the repository checks, an unauthenticated source-health probe, and two
-short live decoder phases with offline parsing in one command:
+Run the repository checks, an unauthenticated source-health probe, and a
+short live phase with offline parsing in one command. Declare the expected
+total cell count so a saved grid cannot be mislabeled:
 
 ```bash
-python3 scripts/run-soak-diagnostics.py --minutes 10 --decoders videotoolbox,videotoolbox-copy
+python3 scripts/run-soak-diagnostics.py --minutes 10 --expected-cells 8 --decoders no
 ```
 
 The runner writes a timestamped directory under `soak_reports/`, redacts text
-copies for sharing, and returns nonzero when a measured reliability gate is
-blocked. It collects application logs, JSONL soak events, final per-cell stats,
-`vm_stat`, `nettop`, and best-effort `powermetrics`; it captures **no images,
-screenshots, or video**. Use `--decoders videotoolbox` for one phase, or
-`--skip-live` to exercise only the repository/source checks. A source-health
-failure is reported separately from a client/decoder failure. The current
-checkout still requires one manual SetupWizard acceptance per live phase; the
-runner prints this notice rather than automating GUI clicks.
+copies for sharing, and returns nonzero when a measured reliability or
+cell-count gate is blocked. It collects application logs, JSONL soak events,
+final per-cell stats, `vm_stat`, `nettop`, and best-effort `powermetrics`; it
+captures **no images, screenshots, or video**. Use `--decoders no` to isolate
+server auto-transcoding from the Mac decoder, or select another decoder for a
+separate decoder experiment. `--expected-cells 4` or `--expected-cells 8`
+blocks a phase if the final stats contain a different number of cells. A
+source-health failure is reported separately from a client/decoder failure.
+The current checkout still requires one manual SetupWizard acceptance per
+live phase; the runner prints this notice rather than automating GUI clicks.
 
 The default 10-minute phases are a pilot. Run the full soak only after the
 pilot is clean:
 
 ```bash
-python3 scripts/run-soak-diagnostics.py --minutes 60 --decoders videotoolbox
+python3 scripts/run-soak-diagnostics.py --minutes 60 --expected-cells 8 --decoders no
 ```
 
 Do not share the raw phase directories: use the `*-redacted/` copies because

@@ -60,10 +60,13 @@ therefore be incremental.
 ## Evidence emitted by stats and soak runs
 
 Per-cell stats now include `playback_state` and a credential-free
-`playback_plan`. Aggregate stats include `playback_policy` and a broker
-snapshot (`active_sessions`, `pending_stops`, `inflight_stops`, and active
-transcode count). The soak manifest preserves `HYPERWALL_AUTO_TRANSCODE`, and
-`analysis.json` is written before the redacted artifact tree is created.
+`playback_plan`. Aggregate stats include `playback_policy` (including both
+per-cell and aggregate cache ceilings) and a broker snapshot
+(`active_sessions`, `pending_stops`, `inflight_stops`, and active transcode
+count). The soak manifest preserves `HYPERWALL_AUTO_TRANSCODE`, records the
+expected cell count, and includes both peak and current resident-memory
+measurements when the platform exposes them. `analysis.json` is written before
+the redacted artifact tree is created.
 
 ## Migration rules
 
@@ -73,5 +76,7 @@ transcode count). The soak manifest preserves `HYPERWALL_AUTO_TRANSCODE`, and
 4. Route new session admission and cleanup through the broker.
 5. Keep native Qt/libmpv calls behind the existing cell ownership locks until a
    separately tested native adapter is ready.
-6. Treat the Windows/macOS GUI suites and the full repository runner as the
+6. Pass `--expected-cells` for every controlled soak; a directory name is not
+   evidence of the actual grid size.
+7. Treat the Windows/macOS GUI suites and the full repository runner as the
    acceptance gate for each migration slice.

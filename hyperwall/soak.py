@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import random
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -52,6 +53,31 @@ SOAK_REPORT_DIR = os.environ.get("HYPERWALL_SOAK_REPORT_DIR", "").strip()
 SOAK_ACTIONS = os.environ.get("HYPERWALL_SOAK_ACTIONS", "1") == "1"
 
 _RES_SAMPLE_S = 60
+
+
+def _current_rss_mb() -> int | None:
+    """Return current resident memory without confusing it with peak RSS."""
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "rss=", "-p", str(os.getpid())],
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+                check=False,
+            )
+            value = result.stdout.strip().splitlines()[0]
+            return max(0, int(value) // 1024)
+        except (IndexError, OSError, ValueError, subprocess.SubprocessError):
+            return None
+    if sys.platform.startswith("linux"):
+        try:
+            resident_pages = int(Path("/proc/self/statm").read_text().split()[1])
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            return max(0, resident_pages * page_size // (1024 * 1024))
+        except (IndexError, OSError, ValueError):
+            return None
+    return None
 
 
 class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
@@ -92,6 +118,10 @@ def _resource_snapshot() -> dict[str, int | str]:
             out["threads"] = threading.active_count()
         except Exception:
             pass
+        current_rss = _current_rss_mb()
+        if current_rss is not None:
+            out["current_ws_metric"] = "resident_rss_mb"
+            out["current_ws_mb"] = current_rss
         return out
     try:
         k32 = ctypes.windll.kernel32
@@ -113,6 +143,8 @@ def _resource_snapshot() -> dict[str, int | str]:
         if psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb):
             out["ws_metric"] = "working_set_mb"
             out["ws_mb"] = pmc.WorkingSetSize // (1024 * 1024)
+            out["current_ws_metric"] = "working_set_mb"
+            out["current_ws_mb"] = out["ws_mb"]
             out["private_mb"] = pmc.PagefileUsage // (1024 * 1024)
         out["gdi"] = u32.GetGuiResources(h, 0)   # GR_GDIOBJECTS
         out["user"] = u32.GetGuiResources(h, 1)  # GR_USEROBJECTS
@@ -319,9 +351,10 @@ class SoakController(QObject):
         snap = _resource_snapshot()
         mins = (time.monotonic() - self._t0) / 60
         logger.info(
-            "SOAK res @%.0fmin: ws=%sMB private=%sMB gdi=%s user=%s "
+            "SOAK res @%.0fmin: ws=%sMB current=%sMB private=%sMB gdi=%s user=%s "
             "threads=%s actions=%s invariant_violations=%d",
-            mins, snap.get("ws_mb"), snap.get("private_mb"),
+            mins, snap.get("ws_mb"), snap.get("current_ws_mb"),
+            snap.get("private_mb"),
             snap.get("gdi"), snap.get("user"), snap.get("threads"),
             dict(sorted(self._action_counts.items())),
             self._invariant_violations,
