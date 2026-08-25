@@ -31,6 +31,28 @@ def grid_index_for_value(values: Iterable[object], value: object) -> int:
     return -1
 
 
+def initial_display_index(
+    identities: Iterable[str],
+    settings: Mapping[str, Mapping[str, object]] | None,
+) -> int:
+    """Choose the wizard current display from persisted stable settings."""
+    ordered = list(identities)
+    saved = settings if isinstance(settings, Mapping) else {}
+    for index, identity in enumerate(ordered):
+        value = saved.get(identity)
+        if (
+            isinstance(value, Mapping)
+            and value.get("current") is True
+            and value.get("selected") is True
+        ):
+            return index
+    for index, identity in enumerate(ordered):
+        value = saved.get(identity)
+        if isinstance(value, Mapping) and value.get("selected") is True:
+            return index
+    return 0
+
+
 def update_last_selected_grid(
     remembered: Mapping[str, tuple[int, int]],
     role: object,

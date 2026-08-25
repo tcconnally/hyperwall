@@ -89,6 +89,13 @@ def should_park(
     return count_recent(times, now, window_s) >= threshold
 
 
+def outage_recovery_plan(retry_count: int, max_retries: int) -> dict[str, str]:
+    """Choose whether a systemic-outage retry should continue or park."""
+    if retry_count <= max(0, max_retries):
+        return {"action": "retry"}
+    return {"action": "park"}
+
+
 def scale_demuxer_mb(
     n_cells: int,
     *,
@@ -295,6 +302,7 @@ _TRANSPORT_FAULT_MARKERS = (
     "connection reset",
     "connection refused",
     "connection timed out",
+    "operation timed out",
     "partial file",
     "failed to seek",
     "seek failed",

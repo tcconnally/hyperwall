@@ -190,6 +190,9 @@ def test_fault_classifier_separates_decoder_and_transport_failures():
     assert classify_playback_fault(
         "Connection reset by peer while reading partial file"
     ) == "transport"
+    assert classify_playback_fault(
+        "http: Will reconnect at 123 in 0 second(s), error=Operation timed out."
+    ) == "transport"
     assert classify_playback_fault("audio device underrun detected") == "other"
 
 
@@ -377,6 +380,13 @@ def test_min_cells_floor_on_small_majority():
     assert not is_systemic_outage(ev, 100.0, window_s=45, total_cells=4)
     ev = _events("a", "b", "c")
     assert is_systemic_outage(ev, 100.0, window_s=45, total_cells=4)
+
+
+def test_outage_retry_budget_parks_after_maximum():
+    from hyperwall.reliability import outage_recovery_plan
+
+    assert outage_recovery_plan(3, 3)["action"] == "retry"
+    assert outage_recovery_plan(4, 3)["action"] == "park"
 
 
 def test_outage_constants_defaults():

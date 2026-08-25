@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .playback_plan import PlaybackPlan
+
 
 def _video_stream(item: dict[str, Any]) -> dict[str, Any]:
     """Primary video stream dict, tolerant of Emby's two shapes
@@ -146,3 +148,23 @@ def build_stream_url(
     if static:
         direct += "&static=true"
     return direct
+
+
+
+def build_stream_url_for_plan(
+    *,
+    base: str,
+    item_id: str,
+    api_key: str,
+    session_id: str,
+    plan: PlaybackPlan,
+    static: bool = True,
+) -> str:
+    return build_stream_url(
+        base=base,
+        item_id=item_id,
+        api_key=api_key,
+        session_id=session_id,
+        transcode=plan.server_mode == "server_transcode",
+        static=static,
+    )

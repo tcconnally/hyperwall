@@ -152,6 +152,26 @@ def test_stable_display_settings_round_trip_preserves_selection_and_layout():
         assert HyperwallConfig.load(path).display_settings() == settings
 
 
+def test_stable_display_settings_round_trip_preserves_selection_set():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "config.ini")
+        settings = {
+            "screen-v1:one": {"selected": True, "current": True},
+            "screen-v1:two": {"selected": False, "current": False},
+            "screen-v1:three": {"selected": True, "current": False},
+        }
+        cfg = HyperwallConfig(
+            server_url="http://h", username="u", password="p",
+            last_display_settings=json.dumps(settings),
+        )
+        cfg.save(path)
+        restored = HyperwallConfig.load(path).display_settings()
+        assert {k for k, v in restored.items() if v["selected"]} == {
+            "screen-v1:one", "screen-v1:three",
+        }
+        assert restored["screen-v1:two"]["selected"] is False
+        assert restored["screen-v1:one"]["current"] is True
+
 def test_scenes_round_trip():
     from hyperwall.scenes import scene_to_str, normalize_scene, scenes_from_mapping
     with tempfile.TemporaryDirectory() as d:

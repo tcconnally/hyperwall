@@ -255,6 +255,7 @@ def _safe_env_manifest(env: object) -> dict[str, object]:
         "HYPERWALL_STATS", "HYPERWALL_PERFTRACE", "HYPERWALL_SOAK_MINUTES",
         "HYPERWALL_SOAK_DWELL_S", "HYPERWALL_SOAK_PROFILE", "HYPERWALL_HWDEC",
         "HYPERWALL_CACHE_BUDGET_MB", "HYPERWALL_DEMUXER_PER_CELL_MB",
+        "HYPERWALL_AUTO_TRANSCODE",
         "HYPERWALL_NO_RELAUNCH", "HYPERWALL_NO_LOG_SETUP", "LC_NUMERIC",
     )
     values: dict[str, object] = dict(env) if isinstance(env, dict) else {}
@@ -390,14 +391,56 @@ def _group_exists(pgid: int) -> bool:
     return True
 
 
+def _direct_process_signal(process: subprocess.Popen, sig: signal.Signals) -> None:
+    try:
+        if sig == signal.SIGTERM:
+            process.terminate()
+        else:
+            process.kill()
+    except ProcessLookupError:
+        return
+    except PermissionError as exc:
+        print(
+            f"WARNING: direct phase-leader signal {sig.name} failed: {exc}",
+            file=sys.stderr,
+        )
+
+
+def _wait_for_process(process: subprocess.Popen, seconds: float) -> bool:
+    try:
+        process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        return False
+    except (ChildProcessError, ProcessLookupError):
+        return True
+    return True
+
+
 def _terminate_process_group(process: subprocess.Popen, pgid: int | None = None) -> None:
     pgid = process.pid if pgid is None else pgid
+    group_signal_denied = False
     for sig, wait_seconds in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 5.0)):
+        if group_signal_denied:
+            _direct_process_signal(process, sig)
+            if _wait_for_process(process, wait_seconds):
+                break
+            continue
         if _group_exists(pgid):
             try:
                 os.killpg(pgid, sig)
             except ProcessLookupError:
                 pass
+            except PermissionError as exc:
+                group_signal_denied = True
+                print(
+                    f"WARNING: process-group signal {sig.name} denied for "
+                    f"pgid={pgid}: {exc}; falling back to phase leader.",
+                    file=sys.stderr,
+                )
+                _direct_process_signal(process, sig)
+                if _wait_for_process(process, wait_seconds):
+                    break
+                continue
         deadline = time.monotonic() + wait_seconds
         while time.monotonic() < deadline and _group_exists(pgid):
             time.sleep(0.05)
@@ -406,6 +449,8 @@ def _terminate_process_group(process: subprocess.Popen, pgid: int | None = None)
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
+        pass
+    except (ChildProcessError, ProcessLookupError):
         pass
 
 
@@ -436,12 +481,14 @@ def _install_signal_cleanup() -> None:
 
 def _analyze_phase(phase_dir: Path) -> dict[str, object]:
     result = analyze_run(phase_dir)
-    result["redacted_artifacts"] = str(_redact_phase(phase_dir))
+    safe_dir = phase_dir.parent / (phase_dir.name + "-redacted")
+    result["redacted_artifacts"] = str(safe_dir)
     analysis_path = phase_dir / "analysis.json"
     analysis_path.write_text(
         json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8"
     )
     _force_private_permissions(analysis_path)
+    _redact_phase(phase_dir)
     return result
 
 

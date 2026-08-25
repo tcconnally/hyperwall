@@ -100,6 +100,7 @@ CRASH_LOOP_COOLDOWN_S = _int_env("HYPERWALL_CRASHLOOP_COOLDOWN_S", 120, 10, 7_20
 OUTAGE_WINDOW_S = _int_env("HYPERWALL_OUTAGE_WINDOW_S", 45, 10, 600)
 OUTAGE_MIN_CELLS = _int_env("HYPERWALL_OUTAGE_MIN_CELLS", 3, 2, 100)
 OUTAGE_BACKOFF_S = _int_env("HYPERWALL_OUTAGE_BACKOFF_S", 20, 5, 600)
+SESSION_CLEANUP_RETRY_S = _int_env("HYPERWALL_SESSION_CLEANUP_RETRY_S", 5, 1, 120)
 
 # Per-cell media fault containment. Hardware decoder errors get one local
 # software fallback before a repeated software fault quarantines the item;

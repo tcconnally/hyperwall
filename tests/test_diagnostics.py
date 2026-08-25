@@ -121,6 +121,27 @@ def test_runner_does_not_silently_ignore_permission_failures():
     assert "except OSError" not in source
 
 
+def test_process_group_cleanup_falls_back_after_permission_denied():
+    from unittest import mock
+
+    runner = _load_runner_module()
+    process = mock.Mock()
+    process.pid = 1234
+    process.wait.return_value = None
+    with (
+        mock.patch.object(runner, "_group_exists", side_effect=[True, False, False]),
+        mock.patch.object(
+            runner.os,
+            "killpg",
+            side_effect=PermissionError(1, "Operation not permitted"),
+            create=True,
+        ),
+        mock.patch.object(runner.signal, "SIGKILL", new=9, create=True),
+    ):
+        runner._terminate_process_group(process, process.pid)
+
+    process.terminate.assert_called_once_with()
+
 def test_permission_enforcement_raises_on_chmod_failure():
     import importlib.util
 
@@ -982,6 +1003,25 @@ def test_analyze_run_blocks_on_unacceptable_media_and_memory_results():
         assert result["gates"]["freeze_count"]["status"] == "BLOCK"
         assert result["gates"]["working_set_growth_mb"]["status"] == "BLOCK"
         assert result["gates"]["max_loop_stall_ms"]["status"] == "BLOCK"
+
+
+def test_runner_metadata_records_auto_transcode_mode():
+    runner = _load_runner_module()
+    manifest = runner._safe_env_manifest({"HYPERWALL_AUTO_TRANSCODE": "0"})
+    assert manifest["HYPERWALL_AUTO_TRANSCODE"] == "0"
+
+
+def test_phase_analysis_is_written_before_redaction():
+    source = open(
+        os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "run-soak-diagnostics.py"
+        ),
+        encoding="utf-8",
+    ).read()
+    start = source.index("def _analyze_phase")
+    end = source.index("\ndef main", start)
+    body = source[start:end]
+    assert body.index("analysis_path.write_text") < body.index("_redact_phase")
 
 
 def run_all() -> int:
