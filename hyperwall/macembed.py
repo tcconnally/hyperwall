@@ -20,11 +20,14 @@ Threading rules honored here (libmpv render.h + CLAUDE.md observer rules):
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QOpenGLContext, QPainter
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+
+from .render_telemetry import RenderTelemetry
 
 logger = logging.getLogger("HyperWall")
 
@@ -46,6 +49,7 @@ class MpvGLWidget(QOpenGLWidget):
         self._get_proc_address: Any = None  # CFUNCTYPE — must stay alive
         # Retain contexts abandoned after GL teardown until their mpv core exits.
         self._abandoned_contexts: list[Any] = []
+        self._render_telemetry = RenderTelemetry()
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.sig_frame_ready.connect(
             self.update, Qt.ConnectionType.QueuedConnection
@@ -173,6 +177,7 @@ class MpvGLWidget(QOpenGLWidget):
         """
         try:
             if self._accepting_frames:
+                self._render_telemetry.record_frame_ready()
                 self.sig_frame_ready.emit()
         except Exception:
             pass
@@ -180,17 +185,22 @@ class MpvGLWidget(QOpenGLWidget):
     # ── painting ──────────────────────────────────────────────────────
 
     def paintGL(self) -> None:
-        if self._ctx is None:
-            # No mpv yet (staggered startup) — paint solid black so the
-            # composited cell matches the Windows background.
-            p = QPainter(self)
-            p.fillRect(self.rect(), Qt.GlobalColor.black)
-            p.end()
-            return
-        dpr = self.devicePixelRatioF()
-        w = max(1, int(self.width() * dpr))
-        h = max(1, int(self.height() * dpr))
+        paint_started = time.perf_counter()
+        render_started: float | None = None
+        rendered = False
+        render_ms = 0.0
         try:
+            if self._ctx is None:
+                # No mpv yet (staggered startup) — paint solid black so the
+                # composited cell matches the Windows background.
+                p = QPainter(self)
+                p.fillRect(self.rect(), Qt.GlobalColor.black)
+                p.end()
+                return
+            dpr = self.devicePixelRatioF()
+            w = max(1, int(self.width() * dpr))
+            h = max(1, int(self.height() * dpr))
+            render_started = time.perf_counter()
             self._ctx.render(
                 opengl_fbo={
                     "fbo": int(self.defaultFramebufferObject()),
@@ -201,5 +211,22 @@ class MpvGLWidget(QOpenGLWidget):
                 block_for_target_time=False,  # never block the GUI thread
             )
             self._ctx.report_swap()
+            rendered = True
         except Exception as e:
             logger.debug("mpv render raised: %s", e)
+        finally:
+            if render_started is not None:
+                render_ms = (time.perf_counter() - render_started) * 1000.0
+            paint_ms = (time.perf_counter() - paint_started) * 1000.0
+            self._render_telemetry.record_paint(
+                paint_ms=paint_ms,
+                render_ms=render_ms,
+                rendered=rendered,
+                render_attempted=render_started is not None,
+            )
+
+    def telemetry_snapshot(
+        self, *, reset_interval: bool = False,
+    ) -> dict[str, dict[str, int | float]]:
+        """Return bounded cumulative/interval render-path telemetry."""
+        return self._render_telemetry.snapshot(reset_interval=reset_interval)

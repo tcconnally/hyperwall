@@ -359,13 +359,21 @@ class SoakController(QObject):
             dict(sorted(self._action_counts.items())),
             self._invariant_violations,
         )
+        telemetry = self._wall.soak_telemetry_snapshot(reset_interval=True)
+        logger.info(
+            "SOAK telemetry @%.0fmin: %s",
+            mins,
+            telemetry,
+        )
         self._write_report(
             "sample", resources=snap, actions=dict(sorted(self._action_counts.items())),
             invariant_violations=self._invariant_violations,
+            render_telemetry=telemetry,
         )
 
     def _finish(self) -> None:
         snap = _resource_snapshot()
+        telemetry = self._wall.soak_telemetry_snapshot(reset_interval=False)
         logger.info(
             "SOAK done after %d min: actions=%s invariant_violations=%d  "
             "baseline %s → final %s",
@@ -376,6 +384,7 @@ class SoakController(QObject):
             "finish", baseline=self._baseline, resources=snap,
             actions=dict(sorted(self._action_counts.items())),
             invariant_violations=self._invariant_violations,
+            render_telemetry=telemetry,
         )
         self._res_timer.stop()
         self._churn_timer.stop()

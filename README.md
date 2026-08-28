@@ -185,10 +185,13 @@ It runs a 60-minute self-terminating wall session, keeps at most one cell
 unmuted, and biases actions toward lazy-audio arm/relock transitions. Each run
 creates `soak_reports/<timestamp>/` with `hyperwall.log`, JSONL events,
 `vm_stat.log`, `nettop.log`, and (where permitted) `powermetrics.log`. The
-final `hyperwall_stats_*.json` records VideoToolbox/decode/drop/freeze totals.
-To test a different hardware-decoder path, run a separate, otherwise identical
-session, e.g. `HYPERWALL_HWDEC=videotoolbox-copy ./soak_wall.sh 60`; do not mix
-profiles in one run.
+final `hyperwall_stats_*.json` records VideoToolbox/decode/drop/freeze totals,
+render callback/paint/render timing, and the final per-cell audio state. Each
+JSONL sample also carries bounded interval render counters and native drop
+counter deltas, so startup/transition drops can be separated from steady-state
+pressure. To test a different hardware-decoder path, run a separate,
+otherwise identical session, e.g. `HYPERWALL_HWDEC=videotoolbox-copy
+./soak_wall.sh 60`; do not mix profiles in one run.
 
 ### One-command no-image diagnostics
 
@@ -201,9 +204,11 @@ python3 scripts/run-soak-diagnostics.py --minutes 10 --expected-cells 8 --decode
 ```
 
 The runner writes a timestamped directory under `soak_reports/`, redacts text
-copies for sharing, and returns nonzero when a measured reliability or
-cell-count gate is blocked. It collects application logs, JSONL soak events,
-final per-cell stats, `vm_stat`, `nettop`, and best-effort `powermetrics`; it
+copies for sharing, and returns nonzero when a measured blocking reliability,
+cell-count, or completeness gate fails. Non-blocking resource warnings remain
+reported as `WARNING` in the summary instead of being promoted to `BLOCK`. It
+collects application logs, JSONL soak events, final per-cell stats, `vm_stat`,
+`nettop`, and best-effort `powermetrics`; it
 captures **no images, screenshots, or video**. Use `--decoders no` to isolate
 server auto-transcoding from the Mac decoder, or select another decoder for a
 separate decoder experiment. `--expected-cells 4` or `--expected-cells 8`
