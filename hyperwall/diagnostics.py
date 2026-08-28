@@ -515,7 +515,15 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
         "paint_gap_last_ms",
     )
     render_rows: list[dict[str, Any]] = []
+    frame_pump_rows: list[dict[str, Any]] = []
     audio_rows: list[dict[str, Any]] = []
+    frame_pump_numeric_fields = (
+        "callbacks",
+        "queued_updates",
+        "coalesced_callbacks",
+        "ignored_callbacks",
+    )
+    frame_pump_boolean_fields = ("pending", "closed")
     if isinstance(cells, list):
         for cell in cells:
             if not isinstance(cell, dict):
@@ -537,6 +545,24 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
                         safe_render[key] = metric
                 if len(safe_render) > 1:
                     render_rows.append(safe_render)
+            frame_pump_value = cell.get("frame_pump")
+            if isinstance(frame_pump_value, dict):
+                safe_frame_pump: dict[str, Any] = {"cell": cell_id}
+                for key in frame_pump_numeric_fields:
+                    metric = frame_pump_value.get(key)
+                    if (
+                        isinstance(metric, (int, float))
+                        and not isinstance(metric, bool)
+                        and math.isfinite(float(metric))
+                        and metric >= 0
+                    ):
+                        safe_frame_pump[key] = metric
+                for key in frame_pump_boolean_fields:
+                    metric = frame_pump_value.get(key)
+                    if isinstance(metric, bool):
+                        safe_frame_pump[key] = metric
+                if len(safe_frame_pump) > 1:
+                    frame_pump_rows.append(safe_frame_pump)
             audio_value = cell.get("audio_state")
             if isinstance(audio_value, dict):
                 muted = audio_value.get("muted")
@@ -549,6 +575,8 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
                     })
     if render_rows:
         summary["render_telemetry"] = render_rows
+    if frame_pump_rows:
+        summary["frame_pump"] = frame_pump_rows
     if audio_rows:
         summary["audio_state"] = audio_rows
     policy = value.get("playback_policy")
