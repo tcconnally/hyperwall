@@ -47,8 +47,8 @@ def test_soak_emits_machine_readable_manifest():
     assert "HYPERWALL_SOAK_REPORT_DIR" in source
     assert "hyperwall_soak_" in source
     assert 'self._write_report("start"' in source
-    assert 'self._write_report(\n            "sample"' in source
-    assert 'self._write_report(\n            "finish"' in source
+    assert 'self._write_report("sample", **report)' in source
+    assert 'self._write_report("finish", **report)' in source
     assert "root.mkdir(parents=True, exist_ok=True, mode=0o700)" in source
     assert "path.chmod(0o600)" in source
 

@@ -347,45 +347,58 @@ class SoakController(QObject):
                 action, "; ".join(problems),
             )
 
+    def _telemetry_snapshot(self, *, reset_interval: bool) -> dict | None:
+        snapshot_fn = getattr(self._wall, "soak_telemetry_snapshot", None)
+        if not callable(snapshot_fn):
+            return None
+        result = snapshot_fn(reset_interval=reset_interval)
+        return result if isinstance(result, dict) else None
+
     def _sample(self) -> None:
         snap = _resource_snapshot()
         mins = (time.monotonic() - self._t0) / 60
         logger.info(
             "SOAK res @%.0fmin: ws=%sMB current=%sMB private=%sMB gdi=%s user=%s "
             "threads=%s actions=%s invariant_violations=%d",
-            mins, snap.get("ws_mb"), snap.get("current_ws_mb"),
-            snap.get("private_mb"),
+            mins, snap.get("ws_mb"), snap.get("current_ws_mb"), snap.get("private_mb"),
             snap.get("gdi"), snap.get("user"), snap.get("threads"),
             dict(sorted(self._action_counts.items())),
             self._invariant_violations,
         )
-        telemetry = self._wall.soak_telemetry_snapshot(reset_interval=True)
-        logger.info(
-            "SOAK telemetry @%.0fmin: %s",
-            mins,
-            telemetry,
-        )
-        self._write_report(
-            "sample", resources=snap, actions=dict(sorted(self._action_counts.items())),
-            invariant_violations=self._invariant_violations,
-            render_telemetry=telemetry,
-        )
+        telemetry = self._telemetry_snapshot(reset_interval=True)
+        if telemetry is not None:
+            logger.info(
+                "SOAK telemetry @%.0fmin: %s",
+                mins,
+                telemetry,
+            )
+        report = {
+            "resources": snap,
+            "actions": dict(sorted(self._action_counts.items())),
+            "invariant_violations": self._invariant_violations,
+        }
+        if telemetry is not None:
+            report["render_telemetry"] = telemetry
+        self._write_report("sample", **report)
 
     def _finish(self) -> None:
         snap = _resource_snapshot()
-        telemetry = self._wall.soak_telemetry_snapshot(reset_interval=False)
+        telemetry = self._telemetry_snapshot(reset_interval=False)
         logger.info(
             "SOAK done after %d min: actions=%s invariant_violations=%d  "
             "baseline %s → final %s",
             SOAK_MINUTES, dict(sorted(self._action_counts.items())),
             self._invariant_violations, self._baseline, snap,
         )
-        self._write_report(
-            "finish", baseline=self._baseline, resources=snap,
-            actions=dict(sorted(self._action_counts.items())),
-            invariant_violations=self._invariant_violations,
-            render_telemetry=telemetry,
-        )
+        report = {
+            "baseline": self._baseline,
+            "resources": snap,
+            "actions": dict(sorted(self._action_counts.items())),
+            "invariant_violations": self._invariant_violations,
+        }
+        if telemetry is not None:
+            report["render_telemetry"] = telemetry
+        self._write_report("finish", **report)
         self._res_timer.stop()
         self._churn_timer.stop()
         # Leave the wall silent regardless of where the audio cycle ended.
