@@ -9,8 +9,8 @@ the same architecture IINA and IPTVnator use.
 
 Threading rules honored here (libmpv render.h + CLAUDE.md observer rules):
 - The update callback fires on an mpv thread. It must not call mpv or touch
-  Qt state — it only performs a bare signal emit, which Qt queues onto the
-  GUI thread where update() schedules paintGL.
+  Qt state; it records bounded gate state and emits at most one signal, which
+  Qt queues onto the GUI thread where update() schedules paintGL.
 - Every mpv_render_* call happens on the GUI thread with this widget's GL
   context current (initializeGL / paintGL / explicit makeCurrent pairs).
 - The render context is freed BEFORE the mpv core is terminated

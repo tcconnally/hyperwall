@@ -1140,12 +1140,26 @@ class VideoCell(QWidget):
                 render_snapshot = candidate
         stats = self._stats_snapshot()
         item = self.current_item or {}
+        info = stats.get("info", {})
+        if not isinstance(info, dict):
+            info = {}
+        requested_decoder = (
+            self._playback_plan.client_decoder
+            if self._playback_plan is not None else None
+        )
         return {
             "render": render_snapshot,
             "stats": stats,
             "audio": {
                 "muted": bool(self.muted),
                 "audio_started": bool(self._audio_started),
+            },
+            "decoder": {
+                "requested": requested_decoder,
+                "active": info.get("hwdec-current"),
+                "fault_count": max(0, int(self._decoder_fault_count)),
+                "software_fallback": bool(self._force_software_decode),
+                "resource_quarantined": bool(self._resource_quarantined),
             },
             "item_id": item.get("Id"),
             "item_name": item.get("Name"),
