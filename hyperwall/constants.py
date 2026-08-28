@@ -465,6 +465,13 @@ STATS_INFO_PROPS = (
     "video-bitrate",
     "container-fps",
     "estimated-vf-fps",
+    # Render/display timing and audio-clock fields make the final stats useful
+    # for distinguishing VO pressure from audio or display synchronization.
+    "display-sync-active",
+    "vsync-ratio",
+    "avsync",
+    "total-avsync-change",
+    "audio-params",
 )
 
 # ── MPV log noise to suppress ────────────────────────────────────────────────

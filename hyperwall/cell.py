@@ -378,6 +378,10 @@ class VideoCell(QWidget):
         self._mpv_opts: dict[str, Any] | None = None
 
         # Stats
+        # Observer callbacks run on mpv's event thread while shutdown and
+        # telemetry snapshots run on the GUI thread. Keep snapshots coherent
+        # without holding the native-call ownership lock during normal reads.
+        self._stats_lock = threading.Lock()
         self._stats_current: dict[str, float] = {}
         self._stats_total: dict[str, float] = {}
         self._stats_info: dict[str, object] = {}
@@ -744,7 +748,8 @@ class VideoCell(QWidget):
                     prop: str = prop, context: NativeContext = context,
                 ) -> None:
                     if value is not None and self._native_context_is_current(context):
-                        self._stats_current[prop] = float(value)
+                        with self._stats_lock:
+                            self._stats_current[prop] = float(value)
                 register(prop, on_counter)
             for prop in STATS_INFO_PROPS:
                 def on_info(
@@ -752,7 +757,8 @@ class VideoCell(QWidget):
                     prop: str = prop, context: NativeContext = context,
                 ) -> None:
                     if value is not None and self._native_context_is_current(context):
-                        self._stats_info[prop] = value
+                        with self._stats_lock:
+                            self._stats_info[prop] = value
                 register(prop, on_info)
 
     def _native_context_is_current(self, context: NativeContext) -> bool:
@@ -1093,23 +1099,57 @@ class VideoCell(QWidget):
                 try:
                     v = getattr(self._mpv, prop.replace("-", "_"))
                     if v is not None:
-                        self._stats_current[prop] = float(v)
+                        with self._stats_lock:
+                            self._stats_current[prop] = float(v)
                 except Exception:
                     pass
             for prop in STATS_INFO_PROPS:
                 try:
                     v = getattr(self._mpv, prop.replace("-", "_"))
                     if v is not None:
-                        self._stats_info[prop] = v
+                        with self._stats_lock:
+                            self._stats_info[prop] = v
                 except Exception:
                     pass
         # Detach-swap before iterating: the stats observers write these
         # dicts from the mpv event thread, and iterating a dict that grows
         # mid-iteration raises. The reference swap is GIL-atomic; observers
         # write to the fresh dict while we drain the detached one.
-        current, self._stats_current = self._stats_current, {}
-        for k, v in current.items():
-            self._stats_total[k] = self._stats_total.get(k, 0.0) + v
+        with self._stats_lock:
+            current, self._stats_current = self._stats_current, {}
+            for k, v in current.items():
+                self._stats_total[k] = self._stats_total.get(k, 0.0) + v
+
+    def _stats_snapshot(self) -> dict[str, dict[str, Any]]:
+        """Return coherent cumulative stats without a native property read."""
+        with self._stats_lock:
+            totals = dict(self._stats_total)
+            for key, value in self._stats_current.items():
+                totals[key] = totals.get(key, 0.0) + value
+            return {"totals": totals, "info": dict(self._stats_info)}
+
+    def telemetry_snapshot(
+        self, *, reset_interval: bool = False,
+    ) -> dict[str, Any]:
+        """Return render, native-stat, and audio state for diagnostics."""
+        render_snapshot: dict[str, Any] = {}
+        snapshot_fn = getattr(self.video_frame, "telemetry_snapshot", None)
+        if callable(snapshot_fn):
+            candidate = snapshot_fn(reset_interval=reset_interval)
+            if isinstance(candidate, dict):
+                render_snapshot = candidate
+        stats = self._stats_snapshot()
+        item = self.current_item or {}
+        return {
+            "render": render_snapshot,
+            "stats": stats,
+            "audio": {
+                "muted": bool(self.muted),
+                "audio_started": bool(self._audio_started),
+            },
+            "item_id": item.get("Id"),
+            "item_name": item.get("Name"),
+        }
 
     def _mpv_log(
         self,

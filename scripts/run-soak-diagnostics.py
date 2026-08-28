@@ -507,6 +507,30 @@ def _analyze_phase(
     return result
 
 
+def _aggregate_verdict(
+    *,
+    incomplete: bool,
+    failures: int,
+    phase_results: list[dict[str, object]],
+    auxiliary_statuses: list[object] | tuple[object, ...],
+) -> str:
+    """Aggregate phase status without promoting non-blocking warnings.
+
+    A warning is evidence that needs follow-up, not proof that the measured
+    playback phase failed.  Incomplete runs remain distinct so a skipped
+    phase cannot accidentally look like a passing run.
+    """
+    if incomplete:
+        return "INCOMPLETE"
+    if failures:
+        return "BLOCK"
+    if any(
+        result.get("verdict") == "WARNING" for result in phase_results
+    ) or any(status == "WARNING" for status in auxiliary_statuses):
+        return "WARNING"
+    return "PASS"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -624,17 +648,31 @@ def main(argv: list[str] | None = None) -> int:
             )
             result["process_exit_code"] = code
             summary["phases"].append(result)
-            failures += int(code != 0 or result.get("verdict") != "PASS")
+            failures += int(code != 0 or result.get("verdict") == "BLOCK")
     else:
         summary["phases"] = []
     incomplete = args.skip_live or args.skip_source_health or args.skip_repo_tests
     if incomplete:
         failures += 1
-    phase_results = summary.get("phases") if isinstance(summary.get("phases"), list) else []
+    phase_results_value = summary.get("phases")
+    phase_results: list[dict[str, object]] = (
+        [result for result in phase_results_value if isinstance(result, dict)]
+        if isinstance(phase_results_value, list) else []
+    )
     if not args.skip_live and not phase_results:
         failures += 1
-    summary["verdict"] = "INCOMPLETE" if incomplete and not failures == 0 else (
-        "BLOCK" if failures else "PASS"
+    auxiliary_statuses: list[object] = []
+    for key in ("repo_tests", "source_health"):
+        record = summary.get(key)
+        if isinstance(record, dict):
+            auxiliary_statuses.append(record.get("status"))
+    summary["verdict"] = _aggregate_verdict(
+        incomplete=incomplete,
+        failures=failures,
+        phase_results=[
+            result for result in phase_results if isinstance(result, dict)
+        ],
+        auxiliary_statuses=auxiliary_statuses,
     )
     summary["finished_at"] = datetime.now(timezone.utc).isoformat()
     summary_path = report_root / "summary.json"

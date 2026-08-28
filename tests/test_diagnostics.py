@@ -626,7 +626,35 @@ def test_runner_skip_live_is_incomplete_not_pass():
         ),
         encoding="utf-8",
     ).read()
-    assert '"INCOMPLETE" if incomplete' in source
+    assert "def _aggregate_verdict" in source
+
+
+def test_runner_aggregates_warning_without_promoting_it_to_block():
+    runner = _load_runner_module()
+    assert runner._aggregate_verdict(
+        incomplete=False,
+        failures=0,
+        phase_results=[{"verdict": "WARNING"}],
+        auxiliary_statuses=["PASS"],
+    ) == "WARNING"
+    assert runner._aggregate_verdict(
+        incomplete=False,
+        failures=0,
+        phase_results=[{"verdict": "PASS"}],
+        auxiliary_statuses=["PASS"],
+    ) == "PASS"
+    assert runner._aggregate_verdict(
+        incomplete=False,
+        failures=1,
+        phase_results=[{"verdict": "WARNING"}],
+        auxiliary_statuses=["PASS"],
+    ) == "BLOCK"
+    assert runner._aggregate_verdict(
+        incomplete=True,
+        failures=0,
+        phase_results=[],
+        auxiliary_statuses=[],
+    ) == "INCOMPLETE"
 
 
 def test_redaction_masks_stream_credentials_and_host_identifiers():

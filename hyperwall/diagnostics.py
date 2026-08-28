@@ -502,6 +502,55 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
             if mode in {"direct", "server_transcode"}:
                 modes[mode] = modes.get(mode, 0) + 1
     summary["final_server_modes"] = modes
+    render_fields = (
+        "frame_ready",
+        "paint_calls",
+        "render_calls",
+        "render_errors",
+        "paint_total_ms",
+        "paint_max_ms",
+        "render_total_ms",
+        "render_max_ms",
+        "paint_gap_max_ms",
+        "paint_gap_last_ms",
+    )
+    render_rows: list[dict[str, Any]] = []
+    audio_rows: list[dict[str, Any]] = []
+    if isinstance(cells, list):
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            cell_id = cell.get("cell")
+            if isinstance(cell_id, bool) or not isinstance(cell_id, int):
+                continue
+            render_value = cell.get("render_telemetry")
+            if isinstance(render_value, dict):
+                safe_render: dict[str, Any] = {"cell": cell_id}
+                for key in render_fields:
+                    metric = render_value.get(key)
+                    if (
+                        isinstance(metric, (int, float))
+                        and not isinstance(metric, bool)
+                        and math.isfinite(float(metric))
+                        and metric >= 0
+                    ):
+                        safe_render[key] = metric
+                if len(safe_render) > 1:
+                    render_rows.append(safe_render)
+            audio_value = cell.get("audio_state")
+            if isinstance(audio_value, dict):
+                muted = audio_value.get("muted")
+                audio_started = audio_value.get("audio_started")
+                if isinstance(muted, bool) and isinstance(audio_started, bool):
+                    audio_rows.append({
+                        "cell": cell_id,
+                        "muted": muted,
+                        "audio_started": audio_started,
+                    })
+    if render_rows:
+        summary["render_telemetry"] = render_rows
+    if audio_rows:
+        summary["audio_state"] = audio_rows
     policy = value.get("playback_policy")
     if isinstance(policy, dict):
         safe_policy: dict[str, object] = {}

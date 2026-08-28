@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time as _time
@@ -264,6 +265,7 @@ class WallController:
         # pressure, so per-cell timers cannot prevent a wall-wide burst.
         self._prefetch_next_ready_ts = 0.0
         self._mpv_opts_effective: dict[str, Any] = {}
+        self._soak_stats_baseline: list[dict[str, float]] = []
         self._resource_governor = ResourceGovernor(MAX_CONCURRENT_TRANSCODES)
 
         # Emergency escape
@@ -1404,16 +1406,85 @@ class WallController:
         else:
             logger.warning("Stats overlay toggle failed (stats.lua not loaded?).")
 
+    @staticmethod
+    def _numeric_counter_delta(
+        current: dict[str, Any], previous: dict[str, float],
+    ) -> dict[str, float]:
+        delta: dict[str, float] = {}
+        for key, value in current.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            try:
+                number = float(value)
+                old = float(previous.get(key, 0.0))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(number) or not math.isfinite(old):
+                continue
+            delta[key] = max(0.0, number - old)
+        return delta
+
+    def soak_telemetry_snapshot(
+        self, *, reset_interval: bool = True,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return per-cell render/audio data and native counter deltas."""
+        cells: list[dict[str, Any]] = []
+        current_baseline: list[dict[str, float]] = []
+        for index, cell in enumerate(self.cells):
+            snapshot = cell.telemetry_snapshot(reset_interval=reset_interval)
+            stats = snapshot.get("stats", {})
+            totals = stats.get("totals", {}) if isinstance(stats, dict) else {}
+            if not isinstance(totals, dict):
+                totals = {}
+            previous = (
+                self._soak_stats_baseline[index]
+                if index < len(self._soak_stats_baseline) else {}
+            )
+            current_baseline.append({
+                key: float(value)
+                for key, value in totals.items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            })
+            render = snapshot.get("render", {})
+            if not isinstance(render, dict):
+                render = {}
+            cells.append({
+                "cell": index,
+                "item_id": snapshot.get("item_id"),
+                "item_name": snapshot.get("item_name"),
+                "audio": snapshot.get("audio", {}),
+                "render": render,
+                "stats_delta": self._numeric_counter_delta(totals, previous),
+            })
+        if reset_interval:
+            self._soak_stats_baseline = current_baseline
+        return {"cells": cells}
+
     def _dump_stats_json(self) -> None:
         cells_payload = []
         for i, c in enumerate(self.cells):
+            telemetry = c.telemetry_snapshot(reset_interval=False)
+            stats = telemetry.get("stats", {})
+            if not isinstance(stats, dict):
+                stats = {}
+            totals = stats.get("totals", {})
+            info = stats.get("info", {})
+            if not isinstance(totals, dict):
+                totals = {}
+            if not isinstance(info, dict):
+                info = {}
             state_controller = getattr(c, "_playback_controller", None)
             state = getattr(getattr(state_controller, "state", None), "value", None)
             plan = getattr(c, "_playback_plan", None)
+            render = telemetry.get("render", {})
+            if not isinstance(render, dict):
+                render = {}
             cells_payload.append({
                 "cell": i,
-                "totals": dict(c._stats_total),
-                "info": {k: v for k, v in c._stats_info.items()},
+                "totals": totals,
+                "info": info,
+                "render_telemetry": render.get("total", {}),
+                "audio_state": telemetry.get("audio", {}),
                 "freezes": c._freeze_count,
                 "freeze_seconds": round(c._freeze_total_s, 1),
                 "postseek_refills": c._freeze_postseek_count,
