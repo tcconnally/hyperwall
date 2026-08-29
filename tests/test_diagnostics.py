@@ -431,6 +431,21 @@ def test_shutdown_stall_is_not_used_as_playback_responsiveness_failure():
     assert parsed["shutdown_loop_stalls"] == 1
 
 
+def test_parse_app_log_extracts_loop_summary_and_100ms_stall_count():
+    parsed = parse_app_log(
+        "\n".join(
+            [
+                "[12:00:00] INFO PERF loop-lag ms: mean 3.1  p95 24.5  p99 80.0  max 120.0  (n=100)",
+                "[12:00:01] WARNING PERF loop stall: main thread blocked ~100ms",
+                "[12:00:02] WARNING PERF loop stall: main thread blocked ~120ms",
+            ]
+        )
+    )
+
+    assert parsed["p95_loop_lag_ms"] == 24.5
+    assert parsed["loop_stalls_ge_100ms"] == 2
+
+
 def test_peak_rss_growth_is_investigation_warning_not_leak_proof():
     with tempfile.TemporaryDirectory() as directory:
         Path(directory, "hyperwall.log").write_text(

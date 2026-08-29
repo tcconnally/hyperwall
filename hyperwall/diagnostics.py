@@ -69,6 +69,9 @@ _LOG_PATTERNS = {
     "retry_skips": re.compile(r"Max retries reached"),
     "crash_loop_guard": re.compile(r"Crash-loop guard"),
 }
+_LOOP_LAG_SUMMARY_RE = re.compile(
+    r"PERF loop-lag ms:.*?p95\s+(?P<p95>[^\s]+)"
+)
 _PLAYBACK_PLAN_RE = re.compile(
     r"Playback plan: (DIRECT|TRANSCODE)(/prefetch)?"
 )
@@ -216,6 +219,8 @@ def parse_app_log(text: str) -> dict[str, Any]:
     max_loop_stall: list[float] = []
     active_loop_stall: list[float] = []
     shutdown_loop_stall: list[float] = []
+    p95_loop_lag: list[float] = []
+    loop_stalls_ge_100ms = 0
     max_slow_slot: list[float] = []
     shutdown_started = False
     stats: list[dict[str, Any]] = []
@@ -229,6 +234,16 @@ def parse_app_log(text: str) -> dict[str, Any]:
     for line in text.splitlines():
         if re.search(r"Shutdown requested\.", line):
             shutdown_started = True
+        lag_summary = _LOOP_LAG_SUMMARY_RE.search(line)
+        if lag_summary and not shutdown_started:
+            try:
+                value = float(lag_summary.group("p95"))
+                if not math.isfinite(value) or value < 0:
+                    malformed_numeric += 1
+                else:
+                    p95_loop_lag.append(value)
+            except (TypeError, ValueError, OverflowError):
+                malformed_numeric += 1
         for key, pattern in _LOG_PATTERNS.items():
             match = pattern.search(line)
             if match:
@@ -244,6 +259,8 @@ def parse_app_log(text: str) -> dict[str, Any]:
                                 shutdown_loop_stall.append(value)
                             else:
                                 active_loop_stall.append(value)
+                                if value >= 100.0:
+                                    loop_stalls_ge_100ms += 1
                         else:
                             max_slow_slot.append(value)
                     except (TypeError, ValueError, OverflowError):
@@ -300,6 +317,8 @@ def parse_app_log(text: str) -> dict[str, Any]:
     counts["freeze_seconds"] = round(freeze_seconds, 1)
     counts["max_loop_stall_ms"] = _max_or_zero(active_loop_stall)
     counts["max_loop_stall_ms_including_shutdown"] = _max_or_zero(max_loop_stall)
+    counts["loop_stalls_ge_100ms"] = loop_stalls_ge_100ms
+    counts["p95_loop_lag_ms"] = max(p95_loop_lag) if p95_loop_lag else None
     counts["shutdown_loop_stalls"] = len(shutdown_loop_stall)
     counts["max_shutdown_loop_stall_ms"] = _max_or_zero(shutdown_loop_stall)
     counts["max_slow_slot_ms"] = _max_or_zero(max_slow_slot)
@@ -526,6 +545,14 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
     )
     frame_pump_boolean_fields = ("pending", "closed")
     decoder_string_fields = ("requested", "active")
+    decoder_numeric_fields = (
+        "fault_count",
+        "hardware_attempts",
+        "hardware_successes",
+        "software_fallbacks",
+        "recovery_exhausted",
+        "quarantines",
+    )
     decoder_boolean_fields = ("software_fallback", "resource_quarantined")
     if isinstance(cells, list):
         for cell in cells:
@@ -573,14 +600,15 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
                     decoder_field = decoder_value.get(key)
                     if isinstance(decoder_field, str) and decoder_field:
                         safe_decoder[key] = decoder_field
-                fault_count = decoder_value.get("fault_count")
-                if (
-                    isinstance(fault_count, (int, float))
-                    and not isinstance(fault_count, bool)
-                    and math.isfinite(float(fault_count))
-                    and fault_count >= 0
-                ):
-                    safe_decoder["fault_count"] = fault_count
+                for key in decoder_numeric_fields:
+                    metric = decoder_value.get(key)
+                    if (
+                        isinstance(metric, (int, float))
+                        and not isinstance(metric, bool)
+                        and math.isfinite(float(metric))
+                        and metric >= 0
+                    ):
+                        safe_decoder[key] = metric
                 for key in decoder_boolean_fields:
                     decoder_flag = decoder_value.get(key)
                     if isinstance(decoder_flag, bool):

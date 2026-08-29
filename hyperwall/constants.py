@@ -435,6 +435,53 @@ def mpv_opts_for_platform(
     return out
 
 
+_MACOS_RENDER_PROFILES: dict[str, dict[str, object]] = {
+    "hq": {
+        "dscale": "mitchell",
+        "correct_downscaling": "yes",
+        "linear_downscaling": "yes",
+        "scale": "ewa_lanczossharp",
+        "deband": "yes",
+    },
+    # Explicit diagnostic/operational tier for thermally constrained Macs.
+    # It avoids mpv's broad profile=fast switch so other playback options and
+    # platform defaults remain unchanged.
+    "low-cost": {
+        "dscale": "bilinear",
+        "correct_downscaling": "no",
+        "linear_downscaling": "no",
+        "scale": "bilinear",
+        "deband": "no",
+    },
+}
+
+
+def apply_render_profile(
+    opts: dict,
+    profile: str | None = None,
+    *,
+    platform: str | None = None,
+) -> dict:
+    """Apply an explicitly named macOS render tier to an options copy.
+
+    ``HYPERWALL_RENDER_PROFILE`` is intentionally separate from mpv's
+    ``HYPERWALL_PROFILE`` option. Unknown profiles are a no-op, and the helper
+    never changes non-macOS options.
+    """
+    out = dict(opts)
+    target_platform = sys.platform if platform is None else platform
+    if target_platform != "darwin":
+        return out
+    selected = profile
+    if selected is None:
+        selected = os.environ.get("HYPERWALL_RENDER_PROFILE", "hq")
+    selected = str(selected or "hq").strip().lower()
+    values = _MACOS_RENDER_PROFILES.get(selected)
+    if values is not None:
+        out.update(values)
+    return out
+
+
 MPV_OPTS: dict[str, object] = mpv_opts_for_platform()
 
 
@@ -505,7 +552,7 @@ def apply_env_overrides(opts: dict) -> dict:
             out["audio_buffer"] = float(v)
         except ValueError:
             pass
-    return out
+    return apply_render_profile(out)
 
 
 def apply_cache_budget(

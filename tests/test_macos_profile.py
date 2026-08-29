@@ -1,9 +1,12 @@
 """Tests for sanitized macOS native-profile parsing."""
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
+import tempfile
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.fspath(_ROOT))
@@ -84,6 +87,140 @@ def test_sample_parser_marks_empty_capture_incomplete():
 
     assert report["complete"] is False
     assert "sample_missing" in report["missing_evidence"]
+
+
+def test_profile_cli_selects_highest_passing_capacity_mode():
+    profiles = [
+        {
+            "cell_count": 4,
+            "duration_coverage": 1.0,
+            "p95_loop_lag_ms": 10.0,
+            "max_render_gap_ms": 40.0,
+            "cpu_cores_mean": 2.0,
+            "loop_stalls_ge_100ms": 0,
+            "freeze_count": 0,
+            "decoder_faults": 0,
+            "audio_underruns": 0,
+            "av_desync": 0,
+            "transport_errors": 0,
+        },
+        {
+            "cell_count": 6,
+            "duration_coverage": 1.0,
+            "p95_loop_lag_ms": 10.0,
+            "max_render_gap_ms": 40.0,
+            "cpu_cores_mean": 2.0,
+            "loop_stalls_ge_100ms": 0,
+            "freeze_count": 0,
+            "decoder_faults": 0,
+            "audio_underruns": 0,
+            "av_desync": 0,
+            "transport_errors": 0,
+        },
+        {
+            "cell_count": 8,
+            "duration_coverage": 1.0,
+            "p95_loop_lag_ms": 10.0,
+            "max_render_gap_ms": 40.0,
+            "cpu_cores_mean": 2.0,
+            "loop_stalls_ge_100ms": 1,
+            "freeze_count": 0,
+            "decoder_faults": 0,
+            "audio_underruns": 0,
+            "av_desync": 0,
+            "transport_errors": 0,
+        },
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+        paths = []
+        for index, profile in enumerate(profiles):
+            path = Path(directory, f"profile-{index}.json")
+            path.write_text(json.dumps(profile), encoding="utf-8")
+            paths.append(str(path))
+        result = subprocess.run(
+            [sys.executable, str(_ROOT / "scripts" / "profile-macos-render.py"), "--matrix", *paths],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["capacity"]["status"] == "PASS"
+    assert report["capacity"]["selected_cells"] == 6
+
+
+def test_profile_cli_accepts_analyze_run_reports():
+    analysis = {
+        "stats": {
+            "n_cells": 6,
+            "render_telemetry": [{"paint_gap_max_ms": 80.0}],
+        },
+        "log": {
+            "p95_loop_lag_ms": 20.0,
+            "loop_stalls_ge_100ms": 0,
+            "freeze_count": 0,
+            "hardware_decode_failures": 0,
+            "decoder_buffer_warnings": 0,
+            "video_decode_errors": 0,
+            "audio_decode_errors": 0,
+            "audio_underrun": 0,
+            "av_desync": 0,
+            "connection_refused": 0,
+            "hls_segment_failures": 0,
+            "stream_open_failures": 0,
+            "playback_errors": 0,
+            "retry_skips": 0,
+        },
+        "gates": {"duration_coverage": {"value": {"coverage": 1.0}}},
+        "native_profile": {
+            "powermetrics": {"process": {"cpu_ms_s": {"mean": 2.14}}},
+        },
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory, "analysis.json")
+        path.write_text(json.dumps(analysis), encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(_ROOT / "scripts" / "profile-macos-render.py"), "--matrix", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["capacity"]["selected_cells"] == 6
+    assert report["profiles"][0]["cpu_cores_mean"] == 2.14
+
+
+def test_profile_cli_blocks_when_capacity_matrix_has_no_passing_mode():
+    profile = {
+        "cell_count": 8,
+        "duration_coverage": 1.0,
+        "p95_loop_lag_ms": 30.0,
+        "max_render_gap_ms": 40.0,
+        "cpu_cores_mean": 2.0,
+        "loop_stalls_ge_100ms": 1,
+        "freeze_count": 0,
+        "decoder_faults": 0,
+        "audio_underruns": 0,
+        "av_desync": 0,
+        "transport_errors": 0,
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory, "profile.json")
+        path.write_text(json.dumps(profile), encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(_ROOT / "scripts" / "profile-macos-render.py"), "--matrix", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    assert result.returncode == 2
+    report = json.loads(result.stdout)
+    assert report["capacity"]["status"] == "BLOCK"
+    assert report["capacity"]["selected_cells"] is None
 
 
 def run_all() -> int:

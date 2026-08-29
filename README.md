@@ -153,6 +153,7 @@ Environment variables:
 | `HYPERWALL_SERVER_URL` | Per-launch Emby endpoint override; leaves `config.ini` unchanged (use for LAN/public A/B) |
 | `HYPERWALL_STATS=1` | Enable per-cell playback stats |
 | `HYPERWALL_HWDEC` | Override hardware decoder (nvdec, d3d11va, etc.) |
+| `HYPERWALL_RENDER_PROFILE` | macOS render tier: `hq` (default) or explicit `low-cost`; ignored on Windows/Linux |
 | `HYPERWALL_VO` | Override video output (gpu-next, gpu) |
 | `HYPERWALL_NO_RELAUNCH=1` | Skip exe re-launch (script mode) |
 | `HYPERWALL_ISOLATED=1` | Force G-Sync isolation on (bypass exe-name check) |
@@ -195,6 +196,21 @@ python3 scripts/profile-macos-render.py \
 
 The profiler exits nonzero when either capture is missing or incomplete. A
 permission-denied `powermetrics` file is incomplete evidence, not a pass.
+To try the opt-in render tier, launch the same fixed corpus with:
+
+```bash
+HYPERWALL_RENDER_PROFILE=low-cost ./launch.sh
+```
+
+After converting each bounded run to a normalized profile or `analyze_run()`
+JSON report, select the highest passing mode without guessing:
+
+```bash
+python3 scripts/profile-macos-render.py --matrix \\
+  profile-4.json profile-6.json profile-8.json
+```
+
+The command returns `BLOCK` when required evidence is missing or no mode passes.
 
 ### macOS playback soak
 
