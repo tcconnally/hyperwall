@@ -103,14 +103,13 @@ stall >=100 ms; no unexplained CPU escalation.
 
 ## Work items
 
-The implementation and discussion are tracked in the GitHub issues linked below
-once published:
+The implementation and discussion are tracked in the following GitHub issues:
 
-- Frame-pump coalescing and callback safety — **pending issue publication**
-- Native stack profile and cell-scaling benchmark — **pending issue publication**
-- macOS low-cost render profile — **pending issue publication**
-- Per-resource VideoToolbox policy — **pending issue publication**
-- M5 capacity policy and promotion gate — **pending issue publication**
+- [#75: Frame-pump coalescing and callback safety](https://github.com/tcconnally/hyperwall/issues/75)
+- [#76: Native stack profile and cell-scaling benchmark](https://github.com/tcconnally/hyperwall/issues/76)
+- [#77: macOS low-cost render profile](https://github.com/tcconnally/hyperwall/issues/77)
+- [#78: Per-resource VideoToolbox policy](https://github.com/tcconnally/hyperwall/issues/78)
+- [#79: M5 capacity policy and promotion gate](https://github.com/tcconnally/hyperwall/issues/79)
 
 ## Safety rules for evidence
 
