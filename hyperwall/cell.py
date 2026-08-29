@@ -291,6 +291,12 @@ class VideoCell(QWidget):
         self._force_transcode = False
         self._force_software_decode = False
         self._decoder_fault_count = 0
+        self._decoder_hardware_attempts = 0
+        self._decoder_hardware_successes = 0
+        self._decoder_software_fallbacks = 0
+        self._decoder_recovery_exhausted = 0
+        self._decoder_quarantines = 0
+        self._decoder_hardware_success_recorded = False
         self._decoder_recovery_scheduled = False
         self._decoder_recovery_token: PlaybackToken | None = None
         self._transport_retry_count = 0
@@ -514,6 +520,11 @@ class VideoCell(QWidget):
             # Decoder fallback is isolated to this cell and this media item;
             # the wall's other cells retain their configured hardware path.
             _opts["hwdec"] = "no"
+        _requested_hwdec = str(_opts.get("hwdec", "no")).strip().lower()
+        if _requested_hwdec not in {"", "no", "none", "software", "false", "0"}:
+            with self._stats_lock:
+                self._decoder_hardware_attempts += 1
+                self._decoder_hardware_success_recorded = False
         next_gen = self._mpv_gen + 1
 
         def _log_handler(level: str, component: str, message: str) -> None:
@@ -699,6 +710,25 @@ class VideoCell(QWidget):
                     pass
         self._native_track_observers.clear()
 
+    def _record_hwdec_current(self, value: Any) -> None:
+        """Store the active decoder and count the first hardware activation."""
+        if isinstance(value, bytes):
+            normalized = value.decode("utf-8", "replace")
+        else:
+            normalized = str(value)
+        is_hardware = normalized.strip().lower() not in {
+            "", "no", "none", "software", "false", "0",
+        }
+        with self._stats_lock:
+            self._stats_info["hwdec-current"] = normalized
+            if (
+                is_hardware
+                and self._decoder_hardware_attempts > 0
+                and not self._decoder_hardware_success_recorded
+            ):
+                self._decoder_hardware_successes += 1
+                self._decoder_hardware_success_recorded = True
+
     def _bind_native_track_observers(
         self, mpv_ref: Any, gen: int, context: NativeContext,
     ) -> None:
@@ -737,10 +767,15 @@ class VideoCell(QWidget):
             if value and self._native_context_is_current(context):
                 self._duration_s = float(value)
 
+        def on_hwdec_current(_name: str, value: Any) -> None:
+            if value is not None and self._native_context_is_current(context):
+                self._record_hwdec_current(value)
+
         register("eof-reached", on_eof)
         register("paused-for-cache", on_pfc)
         register("time-pos", on_time)
         register("duration", on_duration)
+        register("hwdec-current", on_hwdec_current)
         if STATS_ENABLED:
             for prop in STATS_COUNTER_PROPS:
                 def on_counter(
@@ -752,6 +787,8 @@ class VideoCell(QWidget):
                             self._stats_current[prop] = float(value)
                 register(prop, on_counter)
             for prop in STATS_INFO_PROPS:
+                if prop == "hwdec-current":
+                    continue
                 def on_info(
                     _name: str, value: Any,
                     prop: str = prop, context: NativeContext = context,
@@ -1107,8 +1144,11 @@ class VideoCell(QWidget):
                 try:
                     v = getattr(self._mpv, prop.replace("-", "_"))
                     if v is not None:
-                        with self._stats_lock:
-                            self._stats_info[prop] = v
+                        if prop == "hwdec-current":
+                            self._record_hwdec_current(v)
+                        else:
+                            with self._stats_lock:
+                                self._stats_info[prop] = v
                 except Exception:
                     pass
         # Detach-swap before iterating: the stats observers write these
@@ -1158,6 +1198,11 @@ class VideoCell(QWidget):
                 "requested": requested_decoder,
                 "active": info.get("hwdec-current"),
                 "fault_count": max(0, int(self._decoder_fault_count)),
+                "hardware_attempts": max(0, int(self._decoder_hardware_attempts)),
+                "hardware_successes": max(0, int(self._decoder_hardware_successes)),
+                "software_fallbacks": max(0, int(self._decoder_software_fallbacks)),
+                "recovery_exhausted": max(0, int(self._decoder_recovery_exhausted)),
+                "quarantines": max(0, int(self._decoder_quarantines)),
                 "software_fallback": bool(self._force_software_decode),
                 "resource_quarantined": bool(self._resource_quarantined),
             },
@@ -1312,6 +1357,12 @@ class VideoCell(QWidget):
             self._force_transcode = False
             self._force_software_decode = False
             self._decoder_fault_count = 0
+            self._decoder_hardware_attempts = 0
+            self._decoder_hardware_successes = 0
+            self._decoder_software_fallbacks = 0
+            self._decoder_recovery_exhausted = 0
+            self._decoder_quarantines = 0
+            self._decoder_hardware_success_recorded = False
             self._transport_retry_count = 0
             self._decoder_recovery_scheduled = False
             self._transport_recovery_scheduled = False
@@ -3006,12 +3057,17 @@ class VideoCell(QWidget):
             logger.error(
                 "Decoder recovery exhausted on cell — quarantining current resource."
             )
+            with self._stats_lock:
+                self._decoder_recovery_exhausted += 1
+                self._decoder_quarantines += 1
             self._resource_quarantined = True
             self._track_done = True
             self._notify_resource_quarantined()
             self._request_next_throttled(False)
             return
         if plan["action"] == "fallback-software":
+            with self._stats_lock:
+                self._decoder_software_fallbacks += 1
             self._force_software_decode = True
             if self._playback_plan is not None:
                 self._playback_plan = self._playback_plan.with_client_decoder("no")

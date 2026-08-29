@@ -88,6 +88,37 @@ def test_07_small_macos_host_defaults_to_software_decode():
     assert mpv_opts_for_platform("darwin", physical_memory_mb=24 * 1024)["hwdec"] == "videotoolbox"
 
 
+def test_08_macos_low_cost_render_profile_is_explicit_and_scoped():
+    from hyperwall.constants import apply_render_profile, mpv_opts_for_platform
+
+    hq = mpv_opts_for_platform("darwin", physical_memory_mb=16 * 1024)
+    low = apply_render_profile(hq, "low-cost", platform="darwin")
+
+    assert hq["dscale"] == "mitchell"
+    assert hq["scale"] == "ewa_lanczossharp"
+    assert hq["deband"] == "yes"
+    assert low["dscale"] == "bilinear"
+    assert low["scale"] == "bilinear"
+    assert low["deband"] == "no"
+    assert low["correct_downscaling"] == "no"
+
+
+def test_09_low_cost_profile_does_not_change_non_macos_options():
+    from hyperwall.constants import apply_render_profile, mpv_opts_for_platform
+
+    windows = mpv_opts_for_platform("win32")
+    assert apply_render_profile(windows, "low-cost", platform="win32") == windows
+    linux = mpv_opts_for_platform("linux")
+    assert apply_render_profile(linux, "low-cost", platform="linux") == linux
+
+
+def test_10_unknown_render_profile_is_a_noop():
+    from hyperwall.constants import apply_render_profile, mpv_opts_for_platform
+
+    options = mpv_opts_for_platform("darwin")
+    assert apply_render_profile(options, "not-a-profile", platform="darwin") == options
+
+
 def run_all() -> int:
     tests = [
         test_01_macos_opts_use_render_api,
@@ -97,6 +128,9 @@ def run_all() -> int:
         test_05_env_overrides_still_win_on_macos,
         test_06_macos_render_api_prefers_display_resample_sync,
         test_07_small_macos_host_defaults_to_software_decode,
+        test_08_macos_low_cost_render_profile_is_explicit_and_scoped,
+        test_09_low_cost_profile_does_not_change_non_macos_options,
+        test_10_unknown_render_profile_is_a_noop,
     ]
     failed = 0
     for test in tests:

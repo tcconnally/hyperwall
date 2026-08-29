@@ -401,11 +401,15 @@ def main() -> None:
 
     # 11. Perf env
     _eff = apply_env_overrides(MPV_OPTS)
+    _render_profile = os.environ.get(
+        "HYPERWALL_RENDER_PROFILE",
+        "hq" if sys.platform == "darwin" else "platform-default",
+    )
     logger.info(
-        "Perf: vo=%s gpu_api=%s hwdec=%s profile=%s video_sync=%s "
+        "Perf: vo=%s gpu_api=%s hwdec=%s profile=%s render_profile=%s video_sync=%s "
         "hdr_hint=%s stats=%s",
         _eff.get("vo"), _eff.get("gpu_api"), _eff.get("hwdec"),
-        _eff.get("profile"), _eff.get("video_sync"),
+        _eff.get("profile"), _render_profile, _eff.get("video_sync"),
         _eff.get("target_colorspace_hint"),
         "on" if STATS_ENABLED else "off",
     )

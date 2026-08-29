@@ -17,6 +17,14 @@ def test_cell_telemetry_exports_decoder_state():
     assert "_decoder_fault_count" in source
     assert "_force_software_decode" in source
     assert "_resource_quarantined" in source
+    for field in (
+        "hardware_attempts",
+        "hardware_successes",
+        "software_fallbacks",
+        "recovery_exhausted",
+        "quarantines",
+    ):
+        assert field in source
 
 
 def test_stats_dump_exports_decoder_state_separately():
@@ -40,6 +48,11 @@ def test_stats_summary_projects_decoder_state():
                                 "requested": "videotoolbox-copy",
                                 "active": "no",
                                 "fault_count": 2,
+                                "hardware_attempts": 3,
+                                "hardware_successes": 1,
+                                "software_fallbacks": 1,
+                                "recovery_exhausted": 0,
+                                "quarantines": 0,
                                 "software_fallback": True,
                                 "resource_quarantined": False,
                             },
@@ -57,6 +70,11 @@ def test_stats_summary_projects_decoder_state():
             "requested": "videotoolbox-copy",
             "active": "no",
             "fault_count": 2,
+            "hardware_attempts": 3,
+            "hardware_successes": 1,
+            "software_fallbacks": 1,
+            "recovery_exhausted": 0,
+            "quarantines": 0,
             "software_fallback": True,
             "resource_quarantined": False,
         }

@@ -1505,7 +1505,8 @@ class WallController:
                 for k in (
                     "HYPERWALL_STATS", "HYPERWALL_HDR_HINT",
                     "HYPERWALL_HWDEC", "HYPERWALL_GPU_API",
-                    "HYPERWALL_PROFILE", "HYPERWALL_VIDEO_SYNC",
+                    "HYPERWALL_PROFILE", "HYPERWALL_RENDER_PROFILE",
+                    "HYPERWALL_VIDEO_SYNC",
                 )
                 if os.environ.get(k) is not None
             },

@@ -46,6 +46,7 @@ SUITES = [
     "test_decoder_observability",
     "test_performance_roadmap",
     "test_macos_profile",
+    "test_capacity_policy",
     "test_macos_playback_performance",
     "test_endpoint_override",
 ]

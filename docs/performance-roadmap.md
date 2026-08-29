@@ -1,6 +1,6 @@
 # macOS M5 Performance Roadmap
 
-Status: **Stage 0 — measurement and render-pump isolation**
+Status: **Implementation tranche merged; M5 runtime qualification pending**
 
 This roadmap records the performance work for Hyperwall’s macOS libmpv render
 path. It is deliberately evidence-led: a successful process exit or a clean
@@ -14,6 +14,30 @@ fallback and a known-good media corpus pass the gates below.
 
 The next experiment is a bounded native profile and frame-pump test, not
 another 30- or 60-minute soak.
+
+## What is usable now
+
+- The macOS frame-update path coalesces callbacks before they enter the Qt
+  event queue. Per-cell callback, queue, paint, and render counters are
+  exported in final stats.
+- `HYPERWALL_RENDER_PROFILE=low-cost` is an explicit macOS-only render tier.
+  It uses bilinear scaling and disables debanding. The default HQ filters stay
+  unchanged, and Windows/Linux ignore this variable.
+- Decoder telemetry records the requested and active decoder, hardware attempts
+  and activations, software fallbacks, exhausted recovery, and quarantine.
+- `scripts/profile-macos-render.py` parses native captures. Its `--matrix`
+  mode accepts normalized profile JSON or `analyze_run()` reports and selects
+  the highest passing 4/6/8-cell mode. Missing evidence blocks selection.
+
+A normalized matrix profile must include `cell_count`, `duration_coverage`,
+`p95_loop_lag_ms`, `max_render_gap_ms`, `cpu_cores_mean`,
+`loop_stalls_ge_100ms`, `freeze_count`, `decoder_faults`,
+`audio_underruns`, `av_desync`, and `transport_errors`. For example:
+
+```bash
+python3 scripts/profile-macos-render.py --matrix \\
+  profile-4.json profile-6.json profile-8.json
+```
 
 ## Evidence ledger
 
@@ -53,20 +77,20 @@ is incomplete evidence, not a pass.
 
 ### Stage 1 — coalesce the frame pump
 
-`hyperwall/macembed.py` currently emits a queued Qt signal for every mpv update
-callback. Add one pending-update gate per cell so callback bursts do not create
-unbounded GUI work, while preserving newest-frame semantics and the callback
-trampoline lifetime during teardown.
+`hyperwall/macembed.py` now emits at most one queued GUI update per cell while
+an update is pending. The gate preserves newest-frame semantics and retains the
+callback trampoline through teardown.
 
 **Exit gate:** race-tested coalescing; bounded queue notifications; no lost
 newest frame; no increase in maximum paint gap; no callback-lifetime crash.
 
 ### Stage 2 — measured render-cost profile
 
-If Stage 0 identifies the render path as material, benchmark named macOS-only
-profiles one variable at a time: deband, downscale filter, upscale filter, and
-downscaling correction. Keep the current HQ profile unchanged by default until
-quality and responsiveness are measured.
+The opt-in `low-cost` macOS render profile is available for this comparison.
+The default HQ profile remains unchanged. Benchmark the named profile one
+variable at a time: deband, downscale filter, upscale filter, and downscaling
+correction. Keep the current HQ profile unchanged by default until quality and
+responsiveness are measured.
 
 **Pilot gate:** no loop stall >=100 ms, p95 loop lag <=25 ms, no freeze, audio
 underrun, A/V desync, or decoder fault, and at least 95% active-duration
@@ -74,10 +98,11 @@ coverage.
 
 ### Stage 3 — per-resource decoder policy
 
-Use hardware decode only for validated resource/codec/container classes. On a
-hardware failure, perform one bounded software fallback, then quarantine the
-resource if recovery fails. Never turn a single bad file into a wall-wide
-policy change.
+Use hardware decode only for validated resource/codec/container classes. The
+runtime records hardware attempts, activations, software fallback, recovery
+exhaustion, and quarantine per resource. On a hardware failure, perform one
+bounded software fallback, then quarantine the resource if recovery fails.
+Never turn a single bad file into a wall-wide policy change.
 
 **Exit gate:** known-good corpus has zero hardware faults; malformed resources
 are isolated; final stats identify requested decoder, active decoder, and
@@ -85,9 +110,11 @@ fallback reason per cell.
 
 ### Stage 4 — measured capacity policy
 
-Run the selected candidate on 4, 6, and 8 cells. Promote the highest cell count
-that meets the pilot/30-minute gates. If 8 cells fail, make 6 (or 4) the M5
-default and document 8 cells as experimental.
+Run the selected candidate on 4, 6, and 8 cells. The capacity evaluator selects
+the highest measured passing mode from those reports. If 8 cells fail, make 6
+(or 4) the M5 default and document 8 cells as experimental. If all reports
+fail or any required evidence is missing, it returns `BLOCK` with no default
+selection.
 
 Do not use the rejected runtime `30/25` shaping (`30 fps / 25 Mbps`) with live
 transcoding. Use fewer cells or a pre-normalized wall-safe corpus instead.
