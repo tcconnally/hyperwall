@@ -172,6 +172,30 @@ Environment variables:
 | `HYPERWALL_SOAK_PROFILE` | Soak mix: `mixed` (default), `audio` (mute/unmute focus), or `advance` |
 | `HYPERWALL_SOAK_REPORT_DIR` | Write JSONL run events (start/sample/finish) to this directory |
 
+### macOS performance roadmap
+
+The evidence-led M5 performance plan, capacity gates, and decoder/rendering
+policy are tracked in [`docs/performance-roadmap.md`](docs/performance-roadmap.md).
+Do not repeat a long 8-cell soak until the roadmap's short profiling and
+frame-pump gates pass.
+
+For a bounded native profile on macOS, capture the running Hyperwall PID from
+its startup log, then collect native stacks and privileged task telemetry:
+
+```bash
+sample <HYPERWALL_PID> 10 3 -file /tmp/hyperwall-sample.txt
+sudo powermetrics --samplers tasks,thermal,gpu_power -i 1000 -n 120 \
+  > /tmp/hyperwall-powermetrics.txt
+python3 scripts/profile-macos-render.py \
+  --powermetrics /tmp/hyperwall-powermetrics.txt \
+  --sample /tmp/hyperwall-sample.txt \
+  --pid <HYPERWALL_PID> \
+  --output /tmp/hyperwall-profile.json
+```
+
+The profiler exits nonzero when either capture is missing or incomplete. A
+permission-denied `powermetrics` file is incomplete evidence, not a pass.
+
 ### macOS playback soak
 
 For the reported mute/unmute jank, use the audio-focused launcher on the M5:

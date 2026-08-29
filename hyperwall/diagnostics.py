@@ -515,7 +515,18 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
         "paint_gap_last_ms",
     )
     render_rows: list[dict[str, Any]] = []
+    frame_pump_rows: list[dict[str, Any]] = []
+    decoder_rows: list[dict[str, Any]] = []
     audio_rows: list[dict[str, Any]] = []
+    frame_pump_numeric_fields = (
+        "callbacks",
+        "queued_updates",
+        "coalesced_callbacks",
+        "ignored_callbacks",
+    )
+    frame_pump_boolean_fields = ("pending", "closed")
+    decoder_string_fields = ("requested", "active")
+    decoder_boolean_fields = ("software_fallback", "resource_quarantined")
     if isinstance(cells, list):
         for cell in cells:
             if not isinstance(cell, dict):
@@ -537,6 +548,45 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
                         safe_render[key] = metric
                 if len(safe_render) > 1:
                     render_rows.append(safe_render)
+            frame_pump_value = cell.get("frame_pump")
+            if isinstance(frame_pump_value, dict):
+                safe_frame_pump: dict[str, Any] = {"cell": cell_id}
+                for key in frame_pump_numeric_fields:
+                    metric = frame_pump_value.get(key)
+                    if (
+                        isinstance(metric, (int, float))
+                        and not isinstance(metric, bool)
+                        and math.isfinite(float(metric))
+                        and metric >= 0
+                    ):
+                        safe_frame_pump[key] = metric
+                for key in frame_pump_boolean_fields:
+                    metric = frame_pump_value.get(key)
+                    if isinstance(metric, bool):
+                        safe_frame_pump[key] = metric
+                if len(safe_frame_pump) > 1:
+                    frame_pump_rows.append(safe_frame_pump)
+            decoder_value = cell.get("decoder")
+            if isinstance(decoder_value, dict):
+                safe_decoder: dict[str, Any] = {"cell": cell_id}
+                for key in decoder_string_fields:
+                    decoder_field = decoder_value.get(key)
+                    if isinstance(decoder_field, str) and decoder_field:
+                        safe_decoder[key] = decoder_field
+                fault_count = decoder_value.get("fault_count")
+                if (
+                    isinstance(fault_count, (int, float))
+                    and not isinstance(fault_count, bool)
+                    and math.isfinite(float(fault_count))
+                    and fault_count >= 0
+                ):
+                    safe_decoder["fault_count"] = fault_count
+                for key in decoder_boolean_fields:
+                    decoder_flag = decoder_value.get(key)
+                    if isinstance(decoder_flag, bool):
+                        safe_decoder[key] = decoder_flag
+                if len(safe_decoder) > 1:
+                    decoder_rows.append(safe_decoder)
             audio_value = cell.get("audio_state")
             if isinstance(audio_value, dict):
                 muted = audio_value.get("muted")
@@ -549,6 +599,10 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
                     })
     if render_rows:
         summary["render_telemetry"] = render_rows
+    if frame_pump_rows:
+        summary["frame_pump"] = frame_pump_rows
+    if decoder_rows:
+        summary["decoder"] = decoder_rows
     if audio_rows:
         summary["audio_state"] = audio_rows
     policy = value.get("playback_policy")

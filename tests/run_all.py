@@ -40,6 +40,12 @@ SUITES = [
     "test_freeze_visibility",
     "test_platform",
     "test_soak_telemetry",
+    "test_frame_pump",
+    "test_frame_pump_integration",
+    "test_frame_pump_telemetry",
+    "test_decoder_observability",
+    "test_performance_roadmap",
+    "test_macos_profile",
     "test_macos_playback_performance",
     "test_endpoint_override",
 ]

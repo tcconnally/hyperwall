@@ -1484,6 +1484,8 @@ class WallController:
                 "totals": totals,
                 "info": info,
                 "render_telemetry": render.get("total", {}),
+                "frame_pump": render.get("frame_pump", {}),
+                "decoder": telemetry.get("decoder", {}),
                 "audio_state": telemetry.get("audio", {}),
                 "freezes": c._freeze_count,
                 "freeze_seconds": round(c._freeze_total_s, 1),

@@ -9,8 +9,8 @@ the same architecture IINA and IPTVnator use.
 
 Threading rules honored here (libmpv render.h + CLAUDE.md observer rules):
 - The update callback fires on an mpv thread. It must not call mpv or touch
-  Qt state — it only performs a bare signal emit, which Qt queues onto the
-  GUI thread where update() schedules paintGL.
+  Qt state; it records bounded gate state and emits at most one signal, which
+  Qt queues onto the GUI thread where update() schedules paintGL.
 - Every mpv_render_* call happens on the GUI thread with this widget's GL
   context current (initializeGL / paintGL / explicit makeCurrent pairs).
 - The render context is freed BEFORE the mpv core is terminated
@@ -28,6 +28,7 @@ from PyQt6.QtGui import QOpenGLContext, QPainter
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 
 from .render_telemetry import RenderTelemetry
+from .frame_pump import FramePumpGate
 
 logger = logging.getLogger("HyperWall")
 
@@ -50,9 +51,10 @@ class MpvGLWidget(QOpenGLWidget):
         # Retain contexts abandoned after GL teardown until their mpv core exits.
         self._abandoned_contexts: list[Any] = []
         self._render_telemetry = RenderTelemetry()
+        self._frame_pump = FramePumpGate()
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.sig_frame_ready.connect(
-            self.update, Qt.ConnectionType.QueuedConnection
+            self._schedule_frame_update, Qt.ConnectionType.QueuedConnection
         )
         self._sig_free.connect(self._free_ctx, Qt.ConnectionType.QueuedConnection)
 
@@ -91,6 +93,7 @@ class MpvGLWidget(QOpenGLWidget):
         """
         try:
             self._accepting_frames = False
+            self._frame_pump.close()
             if self._ctx is not None:
                 # The callback body is gated above. Do not replace update_cb
                 # here. python-mpv releases the old
@@ -178,13 +181,19 @@ class MpvGLWidget(QOpenGLWidget):
         try:
             if self._accepting_frames:
                 self._render_telemetry.record_frame_ready()
-                self.sig_frame_ready.emit()
+                if self._frame_pump.request():
+                    self.sig_frame_ready.emit()
         except Exception:
             pass
+
+    def _schedule_frame_update(self) -> None:
+        """GUI-thread delivery of one coalesced frame notification."""
+        self.update()
 
     # ── painting ──────────────────────────────────────────────────────
 
     def paintGL(self) -> None:
+        self._frame_pump.begin_paint()
         paint_started = time.perf_counter()
         render_started: float | None = None
         rendered = False
@@ -224,9 +233,16 @@ class MpvGLWidget(QOpenGLWidget):
                 rendered=rendered,
                 render_attempted=render_started is not None,
             )
+            if self._frame_pump.finish_paint():
+                try:
+                    self.sig_frame_ready.emit()
+                except Exception:
+                    pass
 
     def telemetry_snapshot(
         self, *, reset_interval: bool = False,
-    ) -> dict[str, dict[str, int | float]]:
-        """Return bounded cumulative/interval render-path telemetry."""
-        return self._render_telemetry.snapshot(reset_interval=reset_interval)
+    ) -> dict[str, Any]:
+        """Return bounded render and frame-pump telemetry."""
+        snapshot = self._render_telemetry.snapshot(reset_interval=reset_interval)
+        snapshot["frame_pump"] = self._frame_pump.snapshot()
+        return snapshot
