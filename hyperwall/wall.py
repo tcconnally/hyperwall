@@ -978,11 +978,7 @@ class WallController:
             if self._transcode_handoff_retries.get(key) != state:
                 return
             self._transcode_handoff_retries.pop(key, None)
-            if (
-                self._shutdown_requested
-                or self.in_outage()
-                or cell._mpv is None
-            ):
+            if self._shutdown_requested or self.in_outage():
                 return
             if token is not None and not cell._playback_token_is_current(token):
                 return

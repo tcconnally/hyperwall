@@ -287,6 +287,10 @@ def test_active_unknown_transcode_is_not_demoted_when_capacity_is_full():
     handoff = wall[start:end]
     assert "requested_plan" in handoff
     assert "_schedule_transcode_handoff_retry" in handoff
+    retry_start = wall.index("    def _schedule_transcode_handoff_retry")
+    retry_end = wall.index("\n    @traced(\"wall._hand_off\")", retry_start)
+    retry = wall[retry_start:retry_end]
+    assert "cell._mpv is None" not in retry
 
 
 def test_decoder_faults_have_per_cell_software_fallback_path():
