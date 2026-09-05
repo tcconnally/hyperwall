@@ -2847,7 +2847,7 @@ class VideoCell(QWidget):
         self, token: PlaybackToken | None = None,
     ) -> None:
         """Stop the audio demuxer synchronously on non-macOS platforms."""
-        if self._closing or self._mpv is None:
+        if self._closing or self._mpv is None or not self.muted:
             return
         if token is None:
             token = self._current_playback_token()
@@ -2861,7 +2861,7 @@ class VideoCell(QWidget):
             )
             return
         try:
-            if self._playback_token_is_current(token):
+            if self.muted and self._playback_token_is_current(token):
                 self._mpv["aid"] = audio_track_for_mute(True)
                 self._audio_started = False
                 logger.info("AUDIO disarm: aid=0ms")

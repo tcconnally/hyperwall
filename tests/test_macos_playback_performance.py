@@ -126,6 +126,15 @@ def test_macos_normal_load_is_deferred_off_gui_thread():
     assert "not self._closing" in cell[helper_start:helper_end]
     assert "_finish_async_play" in cell
 
+def test_non_macos_audio_disarm_retry_rechecks_latest_mute_state():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _disable_audio_track_sync")
+    end = source.index("\n    def _enable_audio_track_sync_locked", start)
+    body = source[start:end]
+    assert "self.muted" in body
+    assert "lambda token=token" in body
+
+
 def test_non_macos_audio_arm_preserves_sync_path():
     source = _source("hyperwall/cell.py")
     start = source.index("    def _enable_audio_track(self)")
