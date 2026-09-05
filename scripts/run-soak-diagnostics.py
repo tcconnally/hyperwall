@@ -258,7 +258,8 @@ def _safe_env_manifest(env: object) -> dict[str, object]:
         "HYPERWALL_CACHE_BUDGET_MB", "HYPERWALL_DEMUXER_PER_CELL_MB",
         "HYPERWALL_AUTO_TRANSCODE", "HYPERWALL_STABLE_DIRECT_ONLY",
         "HYPERWALL_STABLE_MAX_FPS", "HYPERWALL_STABLE_MAX_BITRATE_MBPS",
-        "HYPERWALL_NO_RELAUNCH", "HYPERWALL_NO_LOG_SETUP", "LC_NUMERIC",
+        "HYPERWALL_NO_RELAUNCH", "HYPERWALL_NO_LOG_SETUP",
+        "HYPERWALL_NO_CONFIG_SAVE", "LC_NUMERIC",
     )
     values: dict[str, object] = dict(env) if isinstance(env, dict) else {}
     return {key: values.get(key) for key in keys}
@@ -298,6 +299,7 @@ def _base_env(
         "HYPERWALL_SOAK_REPORT_ROOT": str(report_dir.parent),
         "HYPERWALL_NO_RELAUNCH": "1",
         "HYPERWALL_NO_LOG_SETUP": "1",
+        "HYPERWALL_NO_CONFIG_SAVE": "1",
         "LC_NUMERIC": "C",
     })
     if item_id is not None:

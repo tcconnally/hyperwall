@@ -397,7 +397,12 @@ def main() -> None:
         sync_display_name=cfg.sync_display_name,
         scenes=cfg.scenes,  # preserve saved scene presets across the rewrite
     )
-    cfg.save()
+    # Diagnostic phases use the wizard for temporary runtime settings but must
+    # not rewrite the operator's persistent config.ini.
+    if os.environ.get("HYPERWALL_NO_CONFIG_SAVE") != "1":
+        cfg.save()
+    else:
+        logger.info("Config persistence disabled for this soak phase.")
 
     # 11. Perf env
     _eff = apply_env_overrides(MPV_OPTS)

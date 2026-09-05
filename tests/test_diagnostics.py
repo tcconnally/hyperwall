@@ -81,6 +81,22 @@ def test_runner_clears_ambient_item_id_without_explicit_selector():
     assert "HYPERWALL_SOAK_ITEM_ID" not in env
 
 
+def test_runner_disables_config_persistence_for_live_phase():
+    runner = _load_runner_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        env = runner._base_env(Path(tmp), 1, 0)
+    assert env["HYPERWALL_NO_CONFIG_SAVE"] == "1"
+    assert runner._safe_env_manifest(env)["HYPERWALL_NO_CONFIG_SAVE"] == "1"
+
+
+def test_app_honors_soak_config_persistence_guard():
+    source = Path(os.path.dirname(__file__), "..", "hyperwall", "app.py").read_text(
+        encoding="utf-8"
+    )
+    assert "HYPERWALL_NO_CONFIG_SAVE" in source
+    assert "cfg.save()" in source
+
+
 def test_runner_rejects_empty_item_id():
     runner = _load_runner_module()
     for value in ("", " ", "\t"):
