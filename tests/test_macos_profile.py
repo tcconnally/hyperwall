@@ -80,6 +80,26 @@ def test_sample_parser_counts_native_hot_stack_labels():
     assert report["labels"]["_PyEval_EvalFrameDefault"] == 1
 
 
+def test_sample_parser_accepts_macos_thread_rows_with_numeric_prefix():
+    from hyperwall.macos_profile import parse_sample_stacks
+
+    sample = """\
+Process:         Python [75185]
+Call graph:
+    2930 Thread_1168979   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 2930 _PyEval_EvalFrameDefault  (in Python) + 10488
+    265 Thread_1168991
+    + 1 libmpv.2.dylib             mpv_render_context_render
+"""
+
+    report = parse_sample_stacks(sample)
+
+    assert report["complete"] is True
+    assert report["thread_count"] == 2
+    assert report["labels"]["_PyEval_EvalFrameDefault"] == 1
+    assert report["labels"]["mpv_render_context_render"] == 1
+
+
 def test_sample_parser_marks_empty_capture_incomplete():
     from hyperwall.macos_profile import parse_sample_stacks
 

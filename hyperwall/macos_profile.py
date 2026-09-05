@@ -16,7 +16,7 @@ _TASK_RE = re.compile(
 )
 _THERMAL_RE = re.compile(r"^Current pressure level:\s*(?P<level>\S.*)\s*$")
 _GPU_IDLE_RE = re.compile(r"^GPU idle residency:\s*(?P<idle>[0-9]+(?:\.[0-9]+)?)%")
-_THREAD_RE = re.compile(r"^\s*Thread\b")
+_THREAD_RE = re.compile(r"^\s*(?:\d+\s+)?Thread(?:[_\s]|$)")
 _PERMISSION_MARKERS = (
     "must be invoked as the superuser",
     "not permitted",
