@@ -260,8 +260,12 @@ captures **no images, screenshots, or video**. Use `--decoders no` to isolate
 server auto-transcoding from the Mac decoder, or select another decoder for a
 separate decoder experiment. `--expected-cells 4` or `--expected-cells 8`
 blocks a phase if the final stats contain a different number of cells. A
-source-health failure is reported separately from a client/decoder failure.
-The current checkout still requires one manual SetupWizard acceptance per
+source-health failure is reported separately from a client/decoder failure. To
+run a controlled known-good or malformed-resource decoder phase, pass the exact
+Emby item ID with `--item-id <id>`. The selector takes precedence over the
+broad pool filter, requires exactly one matching item, records the ID in the
+private phase manifest, and fails closed on a missing or duplicate match. The
+current checkout still requires one manual SetupWizard acceptance per
 live phase; the runner prints this notice rather than automating GUI clicks.
 
 The default 10-minute phases are a pilot. Run the full soak only after the

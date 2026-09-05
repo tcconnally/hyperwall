@@ -28,10 +28,46 @@ def test_initial_filter_is_all_by_default_and_for_unknown_modes():
         assert filtered is not items
 
 
+def test_exact_item_selection_overrides_pool_filter():
+    items = [
+        {"Id": "good", "UserData": {"IsFavorite": False}},
+        {"Id": "other", "UserData": {"IsFavorite": True}},
+    ]
+
+    filtered, mode = apply_initial_filter(
+        items, "favorites", item_id="good"
+    )
+
+    assert mode == "item"
+    assert filtered == [items[0]]
+
+
+def test_exact_item_selection_fails_closed_when_missing_or_ambiguous():
+    items = [
+        {"Id": "good"},
+        {"Id": "duplicate"},
+        {"Id": "duplicate"},
+    ]
+
+    missing, missing_mode = apply_initial_filter(
+        items, "favorites", item_id="absent"
+    )
+    ambiguous, ambiguous_mode = apply_initial_filter(
+        items, "favorites", item_id="duplicate"
+    )
+
+    assert missing == []
+    assert missing_mode == "item-not-found"
+    assert ambiguous == []
+    assert ambiguous_mode == "item-ambiguous"
+
+
 def run_all() -> int:
     tests = [
         test_initial_favorites_filter_selects_only_favorites,
         test_initial_filter_is_all_by_default_and_for_unknown_modes,
+        test_exact_item_selection_overrides_pool_filter,
+        test_exact_item_selection_fails_closed_when_missing_or_ambiguous,
     ]
     failures = 0
     for test in tests:
