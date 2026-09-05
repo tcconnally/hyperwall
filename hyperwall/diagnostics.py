@@ -451,9 +451,8 @@ def _power_sleep_summary(path: Path | None) -> dict[str, Any]:
     assertion_samples = sum(
         bool(
             re.search(
-                r"(?i)Assertion status system-wide:|"
-                r"Prevent(?:UserIdle|System)Sleep\s+\d+|"
-                r"Listed by owning process:",
+                r"(?im)^\s*Prevent(?:UserIdle(?:Display|System)?|System)Sleep"
+                r"\s*(?:=|:)?\s*[1-9]\d*\b",
                 section,
             )
         )

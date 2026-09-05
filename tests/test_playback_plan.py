@@ -133,6 +133,18 @@ def test_missing_source_metadata_uses_server_transcode_when_auto_enabled():
     assert plan.reason == "missing_metadata_transcode"
 
 
+def test_boolean_source_metadata_is_treated_as_missing():
+    item = _item(fps=True, bitrate=True)
+    policy = PlaybackPolicy(auto_transcode=True, max_fps=66, max_bitrate_mbps=50)
+    plan = plan_playback(item, policy=policy, client_decoder="no")
+
+    assert plan.server_mode == "server_transcode"
+    assert plan.reason == "missing_metadata_transcode"
+    assert is_stable_direct_candidate(
+        item, max_fps=30, max_bitrate_mbps=20,
+    ) is False
+
+
 
 def test_client_decoder_fallback_updates_only_client_dimension():
     plan = plan_playback(_item(bitrate=80_000_000), client_decoder="videotoolbox-copy")

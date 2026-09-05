@@ -226,6 +226,25 @@ def test_power_sleep_summary_rejects_empty_assertion_output():
     assert summary["assertion_samples"] == 0
 
 
+def test_power_sleep_summary_rejects_zero_assertion_output():
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory, "power_sleep.log")
+        path.write_text(
+            "=== sample ===\n"
+            "--- pmset -g ps ---\n"
+            "Now drawing from 'AC Power'\n"
+            "--- pmset -g assertions ---\n"
+            "Assertion status system-wide:\n"
+            "PreventSystemSleep 0\n"
+            "Listed by owning process:\n"
+            '"AppleClamshellState" = No\n',
+            encoding="utf-8",
+        )
+        summary = _power_sleep_summary(path)
+    assert summary["samples"] == 1
+    assert summary["assertion_samples"] == 0
+
+
 def test_source_health_records_latency_without_response_body():
     source = open(
         os.path.join(
