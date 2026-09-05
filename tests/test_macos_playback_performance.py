@@ -36,6 +36,19 @@ def test_audio_arm_is_deferred_out_of_gui_handler():
     assert "self._mpv[\"aid\"] = \"auto\"" not in body
 
 
+def test_mute_disarms_audio_instead_of_only_silencing_output():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _apply_mute")
+    end = source.index("\n    @traced(\"cell._toggle_mute\")", start)
+    body = source[start:end]
+    assert "_disable_audio_track" in body
+    assert "audio_track_for_mute" in source
+    disarm = source[source.index("    def _disable_audio_track_sync"):source.index("\n    def _enable_audio_track_sync_locked", source.index("    def _disable_audio_track_sync"))]
+    assert "_request_audio_track_state(False)" in source
+    assert "audio_track_for_mute(True)" in disarm
+    assert "_audio_arm_call_lock" in disarm
+
+
 def test_recreated_mpv_defers_audio_until_after_load():
     source = _source("hyperwall/cell.py")
     start = source.index("    def _ensure_mpv")

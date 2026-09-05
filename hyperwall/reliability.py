@@ -326,6 +326,16 @@ def classify_playback_fault(message: str) -> str:
     return "other"
 
 
+def audio_track_for_mute(muted: bool) -> str:
+    """Return the mpv audio-track selection for the requested mute state.
+
+    Muting a cell must stop its audio demuxer, not merely silence the output.
+    The wall deliberately allows only one audible cell, so leaving ``aid=auto``
+    on previously unmuted cells multiplies decode and cache pressure.
+    """
+    return "no" if bool(muted) else "auto"
+
+
 def is_malformed_stream_fault(message: str) -> bool:
     """Return whether a decoder log identifies unrecoverable media bytes."""
     text = str(message or "").lower()

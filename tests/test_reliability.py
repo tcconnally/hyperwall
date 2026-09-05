@@ -15,6 +15,7 @@ sys.path.insert(0, REPO_ROOT)
 
 from hyperwall.reliability import (  # noqa: E402
     apply_jitter,
+    audio_track_for_mute,
     classify_playback_fault,
     context_for_prefetch_fault,
     context_for_unscoped_fault,
@@ -194,6 +195,11 @@ def test_fault_classifier_separates_decoder_and_transport_failures():
         "http: Will reconnect at 123 in 0 second(s), error=Operation timed out."
     ) == "transport"
     assert classify_playback_fault("audio device underrun detected") == "other"
+
+
+def test_mute_state_selects_lazy_audio_track():
+    assert audio_track_for_mute(True) == "no"
+    assert audio_track_for_mute(False) == "auto"
 
 
 def test_malformed_stream_signatures_are_decoder_faults():

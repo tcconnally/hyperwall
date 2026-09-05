@@ -173,6 +173,7 @@ def test_runner_writes_preflight_and_health_artifacts_privately():
     ).read()
     assert "preflight.json" in source
     assert "source-health.json" in source
+    assert "power_sleep.log" in source
     assert "redacted_artifacts" in source
 
 

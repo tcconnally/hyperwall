@@ -221,10 +221,17 @@ chmod +x soak_wall.sh
 ./soak_wall.sh 60
 ```
 
+The audio-enabled phase is paired with an audio-disabled control by preserving
+all launch, media, grid, and power settings while disabling the action driver:
+
+```bash
+HYPERWALL_SOAK_ACTIONS=0 HYPERWALL_SOAK_PROFILE=advance ./soak_wall.sh 10
+```
+
 It runs a 60-minute self-terminating wall session, keeps at most one cell
 unmuted, and biases actions toward lazy-audio arm/relock transitions. Each run
 creates `soak_reports/<timestamp>/` with `hyperwall.log`, JSONL events,
-`vm_stat.log`, `nettop.log`, and (where permitted) `powermetrics.log`. The
+`vm_stat.log`, `nettop.log`, `power_sleep.log`, and (where permitted) `powermetrics.log`. The
 final `hyperwall_stats_*.json` records VideoToolbox/decode/drop/freeze totals,
 render callback/paint/render timing, and the final per-cell audio state. Each
 JSONL sample also carries bounded interval render counters and native drop

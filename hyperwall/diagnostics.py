@@ -429,6 +429,41 @@ def _find_file(root: Path, names: tuple[str, ...]) -> Path | None:
     return None
 
 
+def _power_sleep_summary(path: Path | None) -> dict[str, Any]:
+    """Summarize independent AC/lid/sleep evidence without calling macOS tools."""
+    if path is None:
+        return {
+            "path": None,
+            "present": False,
+            "samples": 0,
+            "assertion_samples": 0,
+            "ac_power_observed": False,
+            "lid_open_observed": False,
+        }
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    samples = len(re.findall(r"pmset -g ps", text, re.IGNORECASE))
+    assertion_samples = len(re.findall(r"pmset -g assertions", text, re.IGNORECASE))
+    ac_power = bool(re.search(r"AC Power", text, re.IGNORECASE))
+    lid_open = bool(
+        re.search(
+            r"AppleClamshellState\s*=\s*(?:No|0|false)",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    return {
+        "path": str(path),
+        "present": bool(text.strip()),
+        "samples": samples,
+        "assertion_samples": assertion_samples,
+        "ac_power_observed": ac_power,
+        "lid_open_observed": lid_open,
+    }
+
+
 def _safe_children(root: Path, pattern: str) -> list[Path]:
     """Return only regular, non-symlink direct children matching pattern."""
     result: list[Path] = []
@@ -721,6 +756,8 @@ def analyze_run(
     log = log_path.read_text(encoding="utf-8", errors="replace") if log_path else ""
     stats_candidates = sorted(_safe_children(root, "hyperwall_stats_*.json"))
     stats_path = stats_candidates[0] if len(stats_candidates) == 1 else None
+    power_path = _find_file(root, ("power_sleep.log",))
+    power_summary = _power_sleep_summary(power_path)
     stats_valid = _has_valid_stats(stats_path)
     stats_summary = _stats_summary(stats_path)
     manifest = (
@@ -882,6 +919,19 @@ def analyze_run(
             "Active soak duration must cover at least 95% of the requested interval; "
             "sleep/suspend gaps invalidate the measurement.",
         )
+    power_complete = (
+        power_summary["present"]
+        and power_summary["samples"] > 0
+        and power_summary["assertion_samples"] > 0
+        and power_summary["ac_power_observed"]
+        and power_summary["lid_open_observed"]
+    )
+    gates["power_sleep_evidence"] = _gate(
+        "PASS" if power_complete else "BLOCK" if expected_duration_seconds is not None else "WARNING",
+        power_summary,
+        "A live soak requires independent AC-power, lid, and sleep-assertion evidence; "
+        "caffeinate alone is not proof that the Mac stayed awake.",
+    )
     for key, note in (
         ("playback_errors", "Playback errors must be zero."),
         ("retry_skips", "Exhausted playback retries must be zero."),
@@ -913,6 +963,7 @@ def analyze_run(
             "log": str(log_path) if log_path else None,
             "jsonl": str(jsonl_path) if jsonl_path else None,
             "stats": str(stats_path) if stats_path else None,
+            "power_sleep": str(power_path) if power_path else None,
         },
         "stats": stats_summary,
         "manifest": manifest,

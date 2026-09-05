@@ -37,7 +37,7 @@ from hyperwall.diagnostics import analyze_run, redact_tree, force_private_permis
 
 
 DEFAULT_DECODERS = ("videotoolbox", "videotoolbox-copy")
-TEXT_ARTIFACTS = {"hyperwall.log", "run.env", "vm_stat.log", "nettop.log", "powermetrics.log"}
+TEXT_ARTIFACTS = {"hyperwall.log", "run.env", "vm_stat.log", "nettop.log", "powermetrics.log", "power_sleep.log"}
 _SOURCE_HEALTH_PATHS = {
     "emby": ("/System/Info/Public",),
     "jellyfin": ("/health",),
