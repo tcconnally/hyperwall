@@ -542,6 +542,12 @@ def _aggregate_verdict(
     return "PASS"
 
 
+def _validate_item_id(value: str | None) -> None:
+    """Reject an empty selector before an uncontrolled phase can start."""
+    if value is not None and not value.strip():
+        raise ValueError("--item-id must be a non-empty Emby item ID")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -585,6 +591,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Run repository/source checks only; do not launch the wall.",
     )
     args = parser.parse_args(argv)
+    try:
+        _validate_item_id(args.item_id)
+    except ValueError as exc:
+        parser.error(str(exc))
     _install_signal_cleanup()
     if args.minutes < 1 or args.dwell < 0 or args.watchdog_grace < 1:
         parser.error("minutes must be >=1, dwell >=0, watchdog-grace >=1")
