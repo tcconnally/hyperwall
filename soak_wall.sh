@@ -38,7 +38,11 @@ PIDS=()
   printf 'hardware='; system_profiler SPHardwareDataType 2>/dev/null || true
   printf 'env=HYPERWALL_SOAK_MINUTES=%s HYPERWALL_SOAK_DWELL_S=%s HYPERWALL_SOAK_PROFILE=%s HYPERWALL_HWDEC=%s HYPERWALL_CACHE_BUDGET_MB=%s HYPERWALL_DEMUXER_PER_CELL_MB=%s\n' "$HYPERWALL_SOAK_MINUTES" "$HYPERWALL_SOAK_DWELL_S" "$HYPERWALL_SOAK_PROFILE" "${HYPERWALL_HWDEC:-}" "${HYPERWALL_CACHE_BUDGET_MB:-}" "${HYPERWALL_DEMUXER_PER_CELL_MB:-}"
   display_probe="$(system_profiler SPDisplaysDataType 2>/dev/null || true)"
-  if printf '%s\n' "$display_probe" | grep -Eqi 'Display Type: External|Connection Type: (DisplayPort|HDMI|DVI|USB|Thunderbolt|AirPlay)'; then
+  if printf '%s\n' "$display_probe" | python3 -c '
+import sys
+from hyperwall.diagnostics import external_display_observed_from_system_profiler
+raise SystemExit(0 if external_display_observed_from_system_profiler(sys.stdin.read()) else 1)
+'; then
     printf 'external_display_observed=1\n'
   else
     printf 'external_display_observed=0\n'
