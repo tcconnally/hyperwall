@@ -20,6 +20,7 @@ _REQUIRED_METRICS = (
     "audio_underruns",
     "av_desync",
     "transport_errors",
+    "power_sleep_evidence",
 )
 
 
@@ -102,6 +103,12 @@ def capacity_profile_from_analysis(
             "retry_skips",
         ),
     )
+    power_gate = gates.get("power_sleep_evidence")
+    power_sleep_evidence = (
+        1
+        if isinstance(power_gate, Mapping) and power_gate.get("status") == "PASS"
+        else None
+    )
     return {
         "cell_count": cell_count,
         "duration_coverage": _number(duration_coverage),
@@ -114,6 +121,7 @@ def capacity_profile_from_analysis(
         "audio_underruns": _number(log.get("audio_underrun")),
         "av_desync": _number(log.get("av_desync")),
         "transport_errors": transport_errors,
+        "power_sleep_evidence": power_sleep_evidence,
     }
 
 
@@ -146,6 +154,9 @@ def _candidate(profile: Mapping[str, Any]) -> dict[str, Any]:
                 failures.append(metric)
         elif metric == "max_render_gap_ms":
             if value > M5_MAX_RENDER_GAP_MS:
+                failures.append(metric)
+        elif metric == "power_sleep_evidence":
+            if value != 1:
                 failures.append(metric)
         elif metric != "cpu_cores_mean" and value != 0:
             failures.append(metric)

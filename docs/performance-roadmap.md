@@ -29,10 +29,13 @@ another 30- or 60-minute soak.
   mode accepts normalized profile JSON or `analyze_run()` reports and selects
   the highest passing 4/6/8-cell mode. Missing evidence blocks selection.
 
-A normalized matrix profile must include `cell_count`, `duration_coverage`,
-`p95_loop_lag_ms`, `max_render_gap_ms`, `cpu_cores_mean`,
-`loop_stalls_ge_100ms`, `freeze_count`, `decoder_faults`,
-`audio_underruns`, `av_desync`, and `transport_errors`. For example:
+`power_sleep_evidence` must be `1` only when the analysis report's
+`power_sleep_evidence` gate is `PASS`; missing, warning, or blocked AC/lid/sleep
+coverage is not promotable. A normalized matrix profile must include
+`cell_count`, `duration_coverage`, `p95_loop_lag_ms`, `max_render_gap_ms`,
+`cpu_cores_mean`, `loop_stalls_ge_100ms`, `freeze_count`, `decoder_faults`,
+`audio_underruns`, `av_desync`, `transport_errors`, and
+`power_sleep_evidence`. For example:
 
 ```bash
 python3 scripts/profile-macos-render.py --matrix \\

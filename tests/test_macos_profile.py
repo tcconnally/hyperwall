@@ -103,6 +103,7 @@ def test_profile_cli_selects_highest_passing_capacity_mode():
             "audio_underruns": 0,
             "av_desync": 0,
             "transport_errors": 0,
+            "power_sleep_evidence": 1,
         },
         {
             "cell_count": 6,
@@ -116,6 +117,7 @@ def test_profile_cli_selects_highest_passing_capacity_mode():
             "audio_underruns": 0,
             "av_desync": 0,
             "transport_errors": 0,
+            "power_sleep_evidence": 1,
         },
         {
             "cell_count": 8,
@@ -129,6 +131,7 @@ def test_profile_cli_selects_highest_passing_capacity_mode():
             "audio_underruns": 0,
             "av_desync": 0,
             "transport_errors": 0,
+            "power_sleep_evidence": 1,
         },
     ]
     with tempfile.TemporaryDirectory() as directory:
@@ -172,7 +175,10 @@ def test_profile_cli_accepts_analyze_run_reports():
             "playback_errors": 0,
             "retry_skips": 0,
         },
-        "gates": {"duration_coverage": {"value": {"coverage": 1.0}}},
+        "gates": {
+            "duration_coverage": {"value": {"coverage": 1.0}},
+            "power_sleep_evidence": {"status": "PASS"},
+        },
         "native_profile": {
             "powermetrics": {"process": {"cpu_ms_s": {"mean": 2.14}}},
         },

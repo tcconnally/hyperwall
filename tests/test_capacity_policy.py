@@ -22,6 +22,7 @@ def _profile(cells: int, **overrides):
         "audio_underruns": 0,
         "av_desync": 0,
         "transport_errors": 0,
+        "power_sleep_evidence": 1,
     }
     result.update(overrides)
     return result
@@ -53,6 +54,7 @@ def test_analysis_report_is_normalized_for_capacity_selection():
         },
         "gates": {
             "duration_coverage": {"value": {"coverage": 1.0}},
+            "power_sleep_evidence": {"status": "PASS"},
         },
     }
     native = {
@@ -70,6 +72,53 @@ def test_analysis_report_is_normalized_for_capacity_selection():
     assert profile["cpu_cores_mean"] == 2.14
     assert profile["decoder_faults"] == 0
     assert select_capacity([profile])["status"] == "PASS"
+
+
+def test_power_sleep_gate_blocks_capacity_promotion_when_incomplete():
+    from hyperwall.capacity_policy import capacity_profile_from_analysis, select_capacity
+
+    report = {
+        "stats": {
+            "n_cells": 8,
+            "render_telemetry": [{"paint_gap_max_ms": 40.0}],
+        },
+        "log": {
+            "p95_loop_lag_ms": 10.0,
+            "loop_stalls_ge_100ms": 0,
+            "freeze_count": 0,
+            "hardware_decode_failures": 0,
+            "decoder_buffer_warnings": 0,
+            "video_decode_errors": 0,
+            "audio_decode_errors": 0,
+            "audio_underrun": 0,
+            "av_desync": 0,
+            "connection_refused": 0,
+            "hls_segment_failures": 0,
+            "stream_open_failures": 0,
+            "playback_errors": 0,
+            "retry_skips": 0,
+        },
+        "gates": {
+            "duration_coverage": {"status": "PASS", "value": {"coverage": 1.0}},
+            "power_sleep_evidence": {
+                "status": "BLOCK",
+                "value": {"coverage_ok": False},
+            },
+        },
+        "verdict": "BLOCK",
+    }
+    native = {
+        "powermetrics": {
+            "process": {"cpu_ms_s": {"mean": 2.0}},
+        },
+    }
+
+    profile = capacity_profile_from_analysis(report, native_profile=native)
+    decision = select_capacity([profile])
+
+    assert decision["status"] == "BLOCK"
+    assert decision["selected_cells"] is None
+    assert "power_sleep_evidence" in decision["candidates"][0]["missing"]
 
 
 def test_highest_passing_cell_count_is_selected():
