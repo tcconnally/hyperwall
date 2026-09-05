@@ -254,6 +254,11 @@ class SoakController(QObject):
     _ADVANCE_ACTIONS = (("advance", 80), ("prev", 10), ("seek", 10))
 
     def _churn(self) -> None:
+        if not SOAK_ACTIONS:
+            # The control phase must leave natural playback untouched; do not
+            # synthesize the old advance-only fallback.
+            self._arm_churn()
+            return
         try:
             cell = random.choice(self._wall.cells)
             if SOAK_ACTIONS:

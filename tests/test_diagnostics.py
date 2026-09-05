@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hyperwall.diagnostics import (  # noqa: E402
+    _power_sleep_summary,
     analyze_run,
     parse_app_log,
     parse_soak_jsonl,
@@ -186,6 +187,25 @@ def test_source_health_records_backend_without_credentials():
     ).read()
     assert "_configured_backend" in source
     assert "endpoint_hash" in source
+
+
+def test_power_sleep_summary_accepts_quoted_ioreg_clamshell_key():
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory, "power_sleep.log")
+        path.write_text(
+            "--- pmset -g ps ---\n"
+            "Now drawing from 'AC Power'\n"
+            "--- pmset -g assertions ---\n"
+            "PreventSystemSleep 1\n"
+            '"AppleClamshellState" = No\n',
+            encoding="utf-8",
+        )
+        summary = _power_sleep_summary(path)
+    assert summary["present"] is True
+    assert summary["samples"] == 1
+    assert summary["assertion_samples"] == 1
+    assert summary["ac_power_observed"] is True
+    assert summary["lid_open_observed"] is True
 
 
 def test_source_health_records_latency_without_response_body():

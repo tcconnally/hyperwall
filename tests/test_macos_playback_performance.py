@@ -71,6 +71,18 @@ def test_gui_seek_serializes_and_cancels_audio_relock():
     )
 
 
+def test_audio_arm_transition_rechecks_latest_mute_state_before_publish():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _audio_arm_worker")
+    end = source.index("\n    def _disable_audio_track", start)
+    body = source[start:end]
+    assert "self.muted == (not enabled)" in body
+    assert "restart_token" in body
+    disable_start = source.index("    def _disable_audio_track")
+    disable_end = source.index("\n    def _queue_mute_native", disable_start)
+    assert "_request_audio_track_state(False)" in source[disable_start:disable_end]
+
+
 def test_audio_arm_transition_serializes_replacement():
     source = _source("hyperwall/cell.py")
     start = source.index("    def play(")

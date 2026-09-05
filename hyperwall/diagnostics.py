@@ -449,7 +449,7 @@ def _power_sleep_summary(path: Path | None) -> dict[str, Any]:
     ac_power = bool(re.search(r"AC Power", text, re.IGNORECASE))
     lid_open = bool(
         re.search(
-            r"AppleClamshellState\s*=\s*(?:No|0|false)",
+            r'"?AppleClamshellState"?\s*=\s*(?:No|0|false)',
             text,
             re.IGNORECASE,
         )

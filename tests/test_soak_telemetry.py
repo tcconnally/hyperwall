@@ -39,6 +39,15 @@ def test_soak_supports_audio_focused_profile():
     assert "_AUDIO_ACTIONS" in source
 
 
+def test_soak_disabled_action_driver_leaves_playback_natural():
+    source = open(
+        os.path.join(os.path.dirname(__file__), "..", "hyperwall", "soak.py"),
+        encoding="utf-8",
+    ).read()
+    assert "if not SOAK_ACTIONS" in source
+    assert "self._arm_churn()" in source
+
+
 def test_soak_emits_machine_readable_manifest():
     source = open(
         os.path.join(os.path.dirname(__file__), "..", "hyperwall", "soak.py"),

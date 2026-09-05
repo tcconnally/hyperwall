@@ -2686,6 +2686,7 @@ class VideoCell(QWidget):
         aid_ms = 0.0
         seek_ms = 0.0
         restart_enabled: bool | None = None
+        restart_token: int | None = None
         try:
             # The lock covers the validity check and every native call. A
             # cancellation token alone leaves a TOCTOU window between the
@@ -2716,6 +2717,8 @@ class VideoCell(QWidget):
                     if (
                         not self._closing
                         and self._audio_arm_inflight_token == token
+                        and self._audio_arm_token == token
+                        and self.muted == (not enabled)
                     ):
                         self._audio_started = enabled
             if enabled:
@@ -2739,21 +2742,28 @@ class VideoCell(QWidget):
                     and self._track_generation == track_generation
                 ):
                     restart_enabled = self._audio_arm_pending_enabled
+                    restart_token = self._audio_arm_token
                     self._audio_arm_pending_enabled = None
             if restart_enabled is not None:
-                self._request_audio_track_state(restart_enabled)
+                with self._audio_arm_lock:
+                    restart_current = (
+                        restart_token == self._audio_arm_token
+                        and not self._closing
+                        and self._mpv is mpv_ref
+                        and self._track_generation == track_generation
+                        and self.muted == (not restart_enabled)
+                    )
+                if restart_current:
+                    self._request_audio_track_state(restart_enabled)
 
     def _disable_audio_track(self) -> None:
         """Stop hidden audio demux/decode when a cell is muted."""
         if self._mpv is None:
             return
-        with self._audio_arm_lock:
-            active = (
-                self._audio_started
-                or self._audio_arm_inflight_token is not None
-            )
-        if active:
-            self._request_audio_track_state(False)
+        # Always publish the latest mute intent. The worker may have just
+        # cleared its inflight marker while a stale restart is still pending;
+        # checking only _audio_started would miss that cancellation window.
+        self._request_audio_track_state(False)
 
     def _queue_mute_native(self, muted: bool) -> None:
         self._queue_native_property("mute", muted)
@@ -2815,7 +2825,7 @@ class VideoCell(QWidget):
     def _enable_audio_track_sync(
         self, token: PlaybackToken | None = None,
     ) -> None:
-        if self._closing:
+        if self._closing or self.muted:
             return
         if token is None:
             token = self._current_playback_token()
@@ -2866,6 +2876,7 @@ class VideoCell(QWidget):
         """Arm audio synchronously on platforms without the macOS GUI stall."""
         if (
             self._closing
+            or self.muted
             or self._audio_started
             or self._mpv is None
             or (token is not None and not self._playback_token_is_current(token))
