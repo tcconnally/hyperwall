@@ -291,6 +291,7 @@ def test_active_unknown_transcode_is_not_demoted_when_capacity_is_full():
     retry_end = wall.index("\n    @traced(\"wall._hand_off\")", retry_start)
     retry = wall[retry_start:retry_end]
     assert "cell._mpv is None" not in retry
+    assert "claim_front" in retry
 
 
 def test_decoder_faults_have_per_cell_software_fallback_path():

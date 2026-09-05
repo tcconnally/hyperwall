@@ -86,6 +86,21 @@ def test_push_front_returns_reserved_item_without_dropping_it():
     assert returned["Id"] == item["Id"]
 
 
+def test_claim_front_only_consumes_the_reserved_item():
+    pm = PlaylistManager(shuffle=_noshuffle)
+    pm.set_source(_items(3))
+    reserved = pm.next()
+    assert reserved is not None
+    pm.next()  # leave another item available behind the reservation
+    pm.push_front(DEFAULT_GROUP, reserved)
+
+    assert pm.next() is reserved  # another cell wins the race
+    assert pm.claim_front(DEFAULT_GROUP, reserved) is None
+
+    pm.push_front(DEFAULT_GROUP, reserved)
+    assert pm.claim_front(DEFAULT_GROUP, reserved) is reserved
+
+
 def test_clear_group_preserves_pool():
     pm = PlaylistManager(shuffle=_noshuffle)
     pm.set_source(_items(3), group="a")

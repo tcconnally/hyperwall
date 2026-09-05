@@ -982,7 +982,7 @@ class WallController:
                 return
             if token is not None and not cell._playback_token_is_current(token):
                 return
-            if self.playlists.peek(self._cell_group(cell)) is not item:
+            if self.playlists.claim_front(self._cell_group(cell), item) is None:
                 return
             self._hand_off(
                 cell,
