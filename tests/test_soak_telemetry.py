@@ -217,6 +217,7 @@ def test_macos_soak_launcher_collects_system_telemetry():
         "HYPERWALL_SOAK_ITEM_ID",
         "HYPERWALL_STATS=1",
         "HYPERWALL_PERFTRACE=1",
+        "HYPERWALL_NO_CONFIG_SAVE=1",
         "powermetrics",
         "SPDisplaysDataType",
         "external_display_observed_from_system_profiler",
@@ -244,6 +245,7 @@ def test_normal_launcher_clears_stale_soak_environment():
     assert 'unset HYPERWALL_SOAK_FILTER' in source
     assert 'unset HYPERWALL_SOAK_ITEM_ID' in source
     assert 'unset HYPERWALL_NO_LOG_SETUP' in source
+    assert 'unset HYPERWALL_NO_CONFIG_SAVE' in source
 
 
 def test_soak_launcher_marks_explicit_soak_mode():

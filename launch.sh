@@ -17,6 +17,7 @@ if [ "${HYPERWALL_SOAK_ACTIVE:-0}" != "1" ]; then
   unset HYPERWALL_SOAK_REPORT_ROOT
   unset HYPERWALL_NO_RELAUNCH
   unset HYPERWALL_NO_LOG_SETUP
+  unset HYPERWALL_NO_CONFIG_SAVE
 fi
 
 cd "$(dirname "$0")"
