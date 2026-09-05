@@ -40,6 +40,7 @@ SUITES = [
     "test_freeze_visibility",
     "test_platform",
     "test_soak_telemetry",
+    "test_soak_filter",
     "test_frame_pump",
     "test_frame_pump_integration",
     "test_frame_pump_telemetry",

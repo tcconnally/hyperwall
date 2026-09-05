@@ -84,6 +84,7 @@ from .reliability import (
 )
 from .urls import build_stream_url_for_plan, tag_names
 from .playlist import PlaylistManager, DEFAULT_GROUP
+from .soak_filter import apply_initial_filter
 
 logger = logging.getLogger("HyperWall")
 
@@ -709,10 +710,23 @@ class WallController:
                 len(source_items),
             )
         self.all_items = source_items
-        self.filtered = source_items[:]
+        initial_filter = (
+            os.environ.get("HYPERWALL_SOAK_FILTER", "")
+            if os.environ.get("HYPERWALL_SOAK_ACTIVE") == "1"
+            else ""
+        )
+        self.filtered, self.filter_mode = apply_initial_filter(
+            source_items, initial_filter
+        )
         self.playlists.set_source(self.filtered, DEFAULT_GROUP)
+        if self.filter_mode != "all":
+            logger.info(
+                "Filter: %s (%d items)",
+                self.filter_mode.upper(),
+                len(self.filtered),
+            )
         logger.info("Metadata Index: %d items loaded.", len(source_items))
-        if not source_items:
+        if not self.filtered:
             logger.warning(
                 "No playable items returned — check config.ini libraries or "
                 "the Emby library response."
