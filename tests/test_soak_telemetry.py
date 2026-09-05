@@ -216,6 +216,8 @@ def test_macos_soak_launcher_collects_system_telemetry():
         "HYPERWALL_STATS=1",
         "HYPERWALL_PERFTRACE=1",
         "powermetrics",
+        "SPDisplaysDataType",
+        "external_display_observed",
         "nettop",
         "vm_stat",
         "chmod 700",

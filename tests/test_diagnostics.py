@@ -210,6 +210,92 @@ def test_power_sleep_summary_accepts_quoted_ioreg_clamshell_key():
     assert summary["lid_open_observed"] is True
 
 
+def test_power_sleep_summary_accepts_docked_clamshell_with_external_display():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        power_path = root / "power_sleep.log"
+        power_path.write_text(
+            "=== sample ===\n"
+            "--- pmset -g ps ---\n"
+            "Now drawing from 'AC Power'\n"
+            "--- pmset -g assertions ---\n"
+            "PreventSystemSleep 1\n"
+            "--- ioreg AppleClamshellState ---\n"
+            '"AppleClamshellState" = Yes\n',
+            encoding="utf-8",
+        )
+        (root / "run.env").write_text(
+            "external_display_observed=1\n",
+            encoding="utf-8",
+        )
+        summary = _power_sleep_summary(power_path)
+
+    assert summary["lid_closed_observed"] is True
+    assert summary["external_display_observed"] is True
+    assert summary["docked_clamshell_observed"] is True
+
+
+def test_analyze_run_accepts_docked_clamshell_power_evidence():
+    cells = [
+        {
+            "cell": 0,
+            "totals": {"frame-drop-count": 0},
+            "info": {"hwdec-current": "no"},
+            "freezes": 0,
+            "freeze_seconds": 0,
+        }
+    ]
+    records = [
+        {"event": "start", "baseline": {"ws_mb": 1}},
+        {
+            "event": "sample",
+            "wall_seconds": 30,
+            "cells": 1,
+            "actions": {},
+            "resources": {"ws_mb": 1},
+        },
+        {
+            "event": "finish",
+            "wall_seconds": 60,
+            "resources": {"ws_mb": 1},
+            "invariant_violations": 0,
+        },
+    ]
+    power_sample = (
+        "=== sample ===\n"
+        "Now drawing from 'AC Power'\n"
+        "PreventSystemSleep 1\n"
+        '"AppleClamshellState" = Yes\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "hyperwall.log").write_text(
+            "Runtime: Hyperwall\nSOAK start:\n",
+            encoding="utf-8",
+        )
+        (root / "hyperwall_stats_a.json").write_text(
+            json.dumps({"cells": cells}),
+            encoding="utf-8",
+        )
+        (root / "hyperwall_soak_a.jsonl").write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n",
+            encoding="utf-8",
+        )
+        (root / "power_sleep.log").write_text(power_sample * 4, encoding="utf-8")
+        (root / "run.env").write_text(
+            "external_display_observed=1\n",
+            encoding="utf-8",
+        )
+        result = analyze_run(
+            root,
+            expected_cells=1,
+            expected_duration_seconds=60,
+        )
+
+    assert result["gates"]["power_sleep_evidence"]["status"] == "PASS"
+    assert result["gates"]["power_sleep_evidence"]["value"]["docked_clamshell_observed"] is True
+
+
 def test_power_sleep_summary_rejects_empty_assertion_output():
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory, "power_sleep.log")
