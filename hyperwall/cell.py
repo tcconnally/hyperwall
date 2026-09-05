@@ -77,6 +77,7 @@ from .constants import (
 )
 from .reliability import (
     apply_jitter,
+    audio_track_for_mute,
     classify_playback_fault,
     context_for_prefetch_fault,
     context_for_unscoped_fault,
@@ -343,6 +344,7 @@ class VideoCell(QWidget):
         self._audio_arm_inflight_token: int | None = None
         self._audio_arm_done = threading.Event()
         self._audio_arm_done.set()
+        self._audio_arm_pending_enabled: bool | None = None
         # Latest-value native control writes are serialized with audio arm and
         # run off the GUI thread. Tokens discard stale mute/volume writes after
         # a track replacement or shutdown.
@@ -1715,7 +1717,7 @@ class VideoCell(QWidget):
             PlaybackEvent.LOAD_REQUESTED,
             self._playback_state_identity(self._pending_native_context),
         )
-        if sys.platform == "darwin" and not need_create:
+        if sys.platform == "darwin":
             token = self._current_playback_token()
             if token is None or not self._queue_async_play(token, url, on_started):
                 self._switching = False
@@ -2605,6 +2607,7 @@ class VideoCell(QWidget):
             self._audio_arm_token += 1
             self._native_control_serial += 1
             self._native_control_tokens.clear()
+            self._audio_arm_pending_enabled = None
             inflight = self._audio_arm_inflight_token
             done = self._audio_arm_done
         if inflight is None or done.wait(timeout_s):
@@ -2615,34 +2618,61 @@ class VideoCell(QWidget):
         )
         return False
 
-    def _start_audio_arm(self) -> None:
-        """Submit the potentially blocking aid/seek sequence to a daemon."""
-        mpv_ref = self._mpv
-        if self._closing or mpv_ref is None:
+    def _request_audio_track_state(self, enabled: bool) -> None:
+        """Converge the native audio track on the latest mute request.
+
+        ``mute=true`` only silences the audio output; it does not stop mpv's
+        audio demux/decode work. Keep one serialized, token-bound transition
+        for both arm and disarm so a rapid mute/unmute cannot let an old
+        ``aid=auto`` completion resurrect hidden audio on the cell.
+        """
+        if self._closing or self._mpv is None:
             return
+        if sys.platform != "darwin":
+            token = self._current_playback_token()
+            if enabled:
+                self._enable_audio_track_sync(token)
+            else:
+                self._disable_audio_track_sync(token)
+            return
+
+        mpv_ref = self._mpv
         with self._audio_arm_lock:
-            if self._audio_arm_inflight_token is not None:
-                return
             self._audio_arm_token += 1
             token = self._audio_arm_token
+            self._audio_arm_pending_enabled = enabled
+            if not enabled:
+                # Reflect the requested state immediately; the native write is
+                # still serialized below and may be waiting behind libmpv IPC.
+                self._audio_started = False
+            if self._audio_arm_inflight_token is not None:
+                return
+            self._audio_arm_pending_enabled = None
             self._audio_arm_inflight_token = token
             self._audio_arm_done.clear()
             track_generation = self._track_generation
             position = self._play_pos if self._play_pos > 0 else None
         worker = threading.Thread(
             target=self._audio_arm_worker,
-            args=(token, mpv_ref, track_generation, position),
+            args=(token, mpv_ref, track_generation, position, enabled),
             name="mpv-audio-arm",
             daemon=True,
         )
         try:
             worker.start()
-        except Exception:
+        except Exception as e:
             with self._audio_arm_lock:
                 if self._audio_arm_inflight_token == token:
                     self._audio_arm_inflight_token = None
                     self._audio_arm_done.set()
-            raise
+                self._audio_arm_pending_enabled = None
+            logger.warning("Audio track transition could not start: %s", e)
+
+    def _start_audio_arm(self) -> None:
+        """Submit the potentially blocking aid/seek sequence to a daemon."""
+        if self._closing:
+            return
+        self._request_audio_track_state(True)
 
     def _audio_arm_worker(
         self,
@@ -2650,10 +2680,13 @@ class VideoCell(QWidget):
         mpv_ref: Any,
         track_generation: int,
         position: float | None,
+        enabled: bool = True,
     ) -> None:
-        """Run lazy audio selection and relock without occupying Qt."""
+        """Run the latest lazy audio arm/disarm transition off Qt."""
         aid_ms = 0.0
         seek_ms = 0.0
+        restart_enabled: bool | None = None
+        restart_token: int | None = None
         try:
             # The lock covers the validity check and every native call. A
             # cancellation token alone leaves a TOCTOU window between the
@@ -2665,16 +2698,17 @@ class VideoCell(QWidget):
                 ):
                     return
                 started = _time.perf_counter()
-                mpv_ref["aid"] = "auto"
+                mpv_ref["aid"] = audio_track_for_mute(not enabled)
                 aid_ms = (_time.perf_counter() - started) * 1000
-                if not self._audio_arm_is_current(
-                    token, mpv_ref, track_generation
-                ):
-                    return
-                if position is not None:
-                    started = _time.perf_counter()
-                    mpv_ref.seek(position, "absolute+keyframes")
-                    seek_ms = (_time.perf_counter() - started) * 1000
+                if enabled:
+                    if not self._audio_arm_is_current(
+                        token, mpv_ref, track_generation
+                    ):
+                        return
+                    if position is not None:
+                        started = _time.perf_counter()
+                        mpv_ref.seek(position, "absolute+keyframes")
+                        seek_ms = (_time.perf_counter() - started) * 1000
                 if not self._audio_arm_is_current(
                     token, mpv_ref, track_generation
                 ):
@@ -2683,19 +2717,53 @@ class VideoCell(QWidget):
                     if (
                         not self._closing
                         and self._audio_arm_inflight_token == token
+                        and self._audio_arm_token == token
+                        and self.muted == (not enabled)
                     ):
-                        self._audio_started = True
-            logger.info(
-                "AUDIO arm: aid=%.0fms seek=%.0fms cached-pos=%s",
-                aid_ms, seek_ms, "yes" if position is not None else "no",
-            )
+                        self._audio_started = enabled
+            if enabled:
+                logger.info(
+                    "AUDIO arm: aid=%.0fms seek=%.0fms cached-pos=%s",
+                    aid_ms, seek_ms, "yes" if position is not None else "no",
+                )
+            else:
+                logger.info("AUDIO disarm: aid=%.0fms", aid_ms)
         except Exception as e:
-            logger.warning("Audio track arm failed on unmute: %s", e)
+            logger.warning("Audio track transition failed: %s", e)
         finally:
             with self._audio_arm_lock:
                 if self._audio_arm_inflight_token == token:
                     self._audio_arm_inflight_token = None
                     self._audio_arm_done.set()
+                if (
+                    self._audio_arm_pending_enabled is not None
+                    and not self._closing
+                    and self._mpv is mpv_ref
+                    and self._track_generation == track_generation
+                ):
+                    restart_enabled = self._audio_arm_pending_enabled
+                    restart_token = self._audio_arm_token
+                    self._audio_arm_pending_enabled = None
+            if restart_enabled is not None:
+                with self._audio_arm_lock:
+                    restart_current = (
+                        restart_token == self._audio_arm_token
+                        and not self._closing
+                        and self._mpv is mpv_ref
+                        and self._track_generation == track_generation
+                        and self.muted == (not restart_enabled)
+                    )
+                if restart_current:
+                    self._request_audio_track_state(restart_enabled)
+
+    def _disable_audio_track(self) -> None:
+        """Stop hidden audio demux/decode when a cell is muted."""
+        if self._mpv is None:
+            return
+        # Always publish the latest mute intent. The worker may have just
+        # cleared its inflight marker while a stale restart is still pending;
+        # checking only _audio_started would miss that cancellation window.
+        self._request_audio_track_state(False)
 
     def _queue_mute_native(self, muted: bool) -> None:
         self._queue_native_property("mute", muted)
@@ -2757,7 +2825,7 @@ class VideoCell(QWidget):
     def _enable_audio_track_sync(
         self, token: PlaybackToken | None = None,
     ) -> None:
-        if self._closing:
+        if self._closing or self.muted:
             return
         if token is None:
             token = self._current_playback_token()
@@ -2775,12 +2843,40 @@ class VideoCell(QWidget):
         finally:
             self._audio_arm_call_lock.release()
 
+    def _disable_audio_track_sync(
+        self, token: PlaybackToken | None = None,
+    ) -> None:
+        """Stop the audio demuxer synchronously on non-macOS platforms."""
+        if self._closing or self._mpv is None or not self.muted:
+            return
+        if token is None:
+            token = self._current_playback_token()
+            if token is None:
+                return
+        if not self._playback_token_is_current(token):
+            return
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            QTimer.singleShot(
+                50, lambda token=token: self._disable_audio_track_sync(token),
+            )
+            return
+        try:
+            if self.muted and self._playback_token_is_current(token):
+                self._mpv["aid"] = audio_track_for_mute(True)
+                self._audio_started = False
+                logger.info("AUDIO disarm: aid=0ms")
+        except Exception as e:
+            logger.warning("Audio track disarm failed on mute: %s", e)
+        finally:
+            self._audio_arm_call_lock.release()
+
     def _enable_audio_track_sync_locked(
         self, token: PlaybackToken | None = None,
     ) -> None:
         """Arm audio synchronously on platforms without the macOS GUI stall."""
         if (
             self._closing
+            or self.muted
             or self._audio_started
             or self._mpv is None
             or (token is not None and not self._playback_token_is_current(token))
@@ -2870,9 +2966,13 @@ class VideoCell(QWidget):
         """Single writer for the mute state itself (cache + mpv + UI).
 
         Unmuting arms the audio track first (lazy — see _enable_audio_track),
-        then clears mpv's mute flag."""
+        while muting disarms the track so silent cells do not keep decoding
+        audio in the background.
+        """
         self.muted = muted
-        if not muted:
+        if muted:
+            self._disable_audio_track()
+        else:
             self._enable_audio_track()
         if self._mpv is not None:
             if sys.platform == "darwin":

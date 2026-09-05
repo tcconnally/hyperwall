@@ -122,3 +122,15 @@ class PlaylistManager:
             self._refill(group)
             q = self._queues[group]
         return q[0]
+
+    def claim_front(self, group: str, item: Item) -> Item | None:
+        """Atomically consume ``item`` only if it is still queue-front.
+
+        A retry timer must not use ``peek`` followed by a later handoff: a
+        different cell can consume the reserved item between those operations.
+        Identity matching keeps a stale retry from starting a duplicate stream.
+        """
+        q = self._queues.get(group)
+        if q and q[0] is item:
+            return q.popleft()
+        return None

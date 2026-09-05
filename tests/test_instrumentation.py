@@ -12,8 +12,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["HYPERWALL_SOAK_MINUTES"] = "1"
-# Plain-wall churn test needs deterministic advances (fake cells
-# have no buttons for the function exerciser).
+# The plain-wall churn test uses the control phase so fake cells are not
+# required to implement GUI action widgets; disabled actions must not synthesize
+# an advance.
 os.environ["HYPERWALL_SOAK_ACTIONS"] = "0"
 
 # The ubuntu CI job is the pure-logic lane and deliberately has no PyQt
@@ -158,8 +159,8 @@ def test_soak_controller_constructs_against_plain_wall():
     wall = _PlainWall()
     c = SoakController(wall)  # regression: must not use wall as QObject parent
     c._sample()               # resource snapshot logs without raising
-    c._churn()                # advances a random cell via wall.next_video
-    assert len(wall.advances) == 1
+    c._churn()                # disabled action driver leaves natural playback alone
+    assert len(wall.advances) == 0
     c._finish()               # summary + graceful shutdown hook
     assert wall.shutdowns == 1
 

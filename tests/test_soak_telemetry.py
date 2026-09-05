@@ -39,6 +39,15 @@ def test_soak_supports_audio_focused_profile():
     assert "_AUDIO_ACTIONS" in source
 
 
+def test_soak_disabled_action_driver_leaves_playback_natural():
+    source = open(
+        os.path.join(os.path.dirname(__file__), "..", "hyperwall", "soak.py"),
+        encoding="utf-8",
+    ).read()
+    assert "if not SOAK_ACTIONS" in source
+    assert "self._arm_churn()" in source
+
+
 def test_soak_emits_machine_readable_manifest():
     source = open(
         os.path.join(os.path.dirname(__file__), "..", "hyperwall", "soak.py"),
@@ -202,7 +211,7 @@ def test_macos_soak_launcher_collects_system_telemetry():
     path = os.path.join(os.path.dirname(__file__), "..", "soak_wall.sh")
     source = open(path, encoding="utf-8").read()
     for expected in (
-        "HYPERWALL_SOAK_PROFILE=audio",
+        "HYPERWALL_SOAK_PROFILE:-audio",
         "HYPERWALL_SOAK_REPORT_DIR",
         "HYPERWALL_STATS=1",
         "HYPERWALL_PERFTRACE=1",
@@ -241,6 +250,23 @@ def test_macos_soak_prevents_idle_sleep_during_measurement():
     source = open(path, encoding="utf-8").read()
     assert "command -v caffeinate" in source
     assert "caffeinate -dims" in source
+
+
+def test_macos_soak_captures_power_lid_and_sleep_evidence():
+    path = os.path.join(os.path.dirname(__file__), "..", "soak_wall.sh")
+    source = open(path, encoding="utf-8").read()
+    assert "power_sleep.log" in source
+    assert "pmset -g ps" in source
+    assert "pmset -g assertions" in source
+    assert "ioreg" in source
+    assert "power_evidence_required" in source
+
+
+def test_macos_soak_allows_an_audio_disabled_control_profile():
+    path = os.path.join(os.path.dirname(__file__), "..", "soak_wall.sh")
+    source = open(path, encoding="utf-8").read()
+    assert 'HYPERWALL_SOAK_ACTIONS:-1' in source
+    assert 'HYPERWALL_SOAK_PROFILE:-audio' in source
 
 
 def run_all() -> int:

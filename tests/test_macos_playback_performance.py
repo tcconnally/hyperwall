@@ -36,6 +36,19 @@ def test_audio_arm_is_deferred_out_of_gui_handler():
     assert "self._mpv[\"aid\"] = \"auto\"" not in body
 
 
+def test_mute_disarms_audio_instead_of_only_silencing_output():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _apply_mute")
+    end = source.index("\n    @traced(\"cell._toggle_mute\")", start)
+    body = source[start:end]
+    assert "_disable_audio_track" in body
+    assert "audio_track_for_mute" in source
+    disarm = source[source.index("    def _disable_audio_track_sync"):source.index("\n    def _enable_audio_track_sync_locked", source.index("    def _disable_audio_track_sync"))]
+    assert "_request_audio_track_state(False)" in source
+    assert "audio_track_for_mute(True)" in disarm
+    assert "_audio_arm_call_lock" in disarm
+
+
 def test_recreated_mpv_defers_audio_until_after_load():
     source = _source("hyperwall/cell.py")
     start = source.index("    def _ensure_mpv")
@@ -56,6 +69,18 @@ def test_gui_seek_serializes_and_cancels_audio_relock():
     assert body.index("self._cancel_audio_arm(timeout_s=0.0)") < body.index(
         "self._mpv.seek"
     )
+
+
+def test_audio_arm_transition_rechecks_latest_mute_state_before_publish():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _audio_arm_worker")
+    end = source.index("\n    def _disable_audio_track", start)
+    body = source[start:end]
+    assert "self.muted == (not enabled)" in body
+    assert "restart_token" in body
+    disable_start = source.index("    def _disable_audio_track")
+    disable_end = source.index("\n    def _queue_mute_native", disable_start)
+    assert "_request_audio_track_state(False)" in source[disable_start:disable_end]
 
 
 def test_audio_arm_transition_serializes_replacement():
@@ -88,6 +113,7 @@ def test_macos_normal_load_is_deferred_off_gui_thread():
     assert "sys.platform == \"darwin\"" in body
     async_start = body.index("        if sys.platform == \"darwin\"")
     async_end = body.index("        try:", async_start)
+    assert "and not need_create" not in body[async_start:async_end]
     assert "self._mpv.command(\"loadfile\", url)" not in body[async_start:async_end]
     worker_start = cell.index("    def _async_play_worker")
     worker_end = cell.index("\n    def _finish_async_play", worker_start)
@@ -99,6 +125,15 @@ def test_macos_normal_load_is_deferred_off_gui_thread():
     helper_end = cell.index(chr(10) + "    def _async_play_worker", helper_start)
     assert "not self._closing" in cell[helper_start:helper_end]
     assert "_finish_async_play" in cell
+
+def test_non_macos_audio_disarm_retry_rechecks_latest_mute_state():
+    source = _source("hyperwall/cell.py")
+    start = source.index("    def _disable_audio_track_sync")
+    end = source.index("\n    def _enable_audio_track_sync_locked", start)
+    body = source[start:end]
+    assert "self.muted" in body
+    assert "lambda token=token" in body
+
 
 def test_non_macos_audio_arm_preserves_sync_path():
     source = _source("hyperwall/cell.py")
@@ -239,15 +274,26 @@ def test_playback_plan_owns_server_capacity_accounting():
     assert "resolved_plan.server_mode" in build_request
 
 
-def test_prefetch_admission_does_not_demote_heavy_candidate_to_direct():
+def test_active_unknown_transcode_is_not_demoted_when_capacity_is_full():
     wall = _source("hyperwall/wall.py")
-    start = wall.index("    def _arm_prefetch")
-    end = wall.index("\n    def run_on_main", start)
-    body = wall[start:end]
-    admission = body.index("if self._auto_transcode_requested(item)")
-    build = body.index("url, sid, plan = self._build_playback_request", admission)
-    assert admission < build
-    assert body.index("self.playlists.push_front", admission) < build
+    start = wall.index("    def _admit_playback_plan")
+    end = wall.index("\n    def _build_playback_request", start)
+    admission = wall[start:end]
+    assert 'plan.reason == "missing_metadata_transcode"' in admission
+    assert "return None" in admission
+
+    start = wall.index("    def _hand_off")
+    end = wall.index("\n    def _arm_prefetch", start)
+    handoff = wall[start:end]
+    assert "requested_plan" in handoff
+    assert "_schedule_transcode_handoff_retry" in handoff
+    retry_start = wall.index("    def _schedule_transcode_handoff_retry")
+    retry_end = wall.index("\n    @traced(\"wall._hand_off\")", retry_start)
+    retry = wall[retry_start:retry_end]
+    assert "cell._mpv is None" not in retry
+    assert "claim_front" in retry
+    assert "cell_identity" in retry
+    assert "force_transcode" in handoff
 
 
 def test_decoder_faults_have_per_cell_software_fallback_path():

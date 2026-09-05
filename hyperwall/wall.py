@@ -69,8 +69,8 @@ from .playback_plan import (
     PlaybackPlan,
     PlaybackPolicy,
     budgeted_mib,
-    filter_stable_direct_candidates,
     plan_playback,
+    select_playback_candidates,
 )
 from .resource_governor import ResourceGovernor
 from .session_broker import EmbySessionBroker, SessionRecord
@@ -264,6 +264,7 @@ class WallController:
         # intentionally controller-wide: all cells share the same link/cache
         # pressure, so per-cell timers cannot prevent a wall-wide burst.
         self._prefetch_next_ready_ts = 0.0
+        self._transcode_handoff_retries: dict[int, tuple[Any, ...]] = {}
         self._mpv_opts_effective: dict[str, Any] = {}
         self._soak_stats_baseline: list[dict[str, float]] = []
         self._resource_governor = ResourceGovernor(MAX_CONCURRENT_TRANSCODES)
@@ -327,11 +328,19 @@ class WallController:
             self._bitrate_budget_mbps,
         )
         if self._stable_direct_only:
-            logger.info(
-                "Stable direct-only profile: 8-cell small-mac pool limited "
+            logger.warning(
+                "Explicit direct-only profile: 8-cell pool limited "
                 "to <=%dfps and <=%d Mbps; live transcoding disabled.",
                 STABLE_DIRECT_MAX_FPS,
                 STABLE_DIRECT_MAX_BITRATE_MBPS,
+            )
+        else:
+            logger.info(
+                "Full-library playback profile: direct sources capped at "
+                "<=%dfps and <=%d Mbps; heavy/unknown sources use "
+                "bounded server H.264/AAC transcoding.",
+                MAX_DIRECT_FPS,
+                self._bitrate_budget_mbps,
             )
 
         for win in self.windows:
@@ -680,17 +689,24 @@ class WallController:
         self.loader.start()
 
     def _on_items_loaded(self, items: list[dict[str, Any]]) -> None:
-        source_items = list(items)
+        source_items = select_playback_candidates(
+            list(items),
+            direct_only=getattr(self, "_stable_direct_only", False),
+            max_fps=STABLE_DIRECT_MAX_FPS,
+            max_bitrate_mbps=STABLE_DIRECT_MAX_BITRATE_MBPS,
+        )
         if getattr(self, "_stable_direct_only", False):
-            source_items = filter_stable_direct_candidates(
-                source_items,
-                max_fps=STABLE_DIRECT_MAX_FPS,
-                max_bitrate_mbps=STABLE_DIRECT_MAX_BITRATE_MBPS,
-            )
-            logger.info(
-                "Stable direct-only pool: admitted %d/%d items; excluded %d "
-                "heavy or unmeasured resources before playback.",
+            logger.warning(
+                "Explicit direct-only pool: admitted %d/%d items; excluded %d "
+                "heavy or unmeasured resources. Set "
+                "HYPERWALL_STABLE_DIRECT_ONLY=0 for the full library.",
                 len(source_items), len(items), len(items) - len(source_items),
+            )
+        else:
+            logger.info(
+                "Playback pool: retained full library (%d items); "
+                "auto-transcode enabled for heavy or unmeasured sources.",
+                len(source_items),
             )
         self.all_items = source_items
         self.filtered = source_items[:]
@@ -699,7 +715,7 @@ class WallController:
         if not source_items:
             logger.warning(
                 "No playable items returned — check config.ini libraries or "
-                "the stable direct-only media limits."
+                "the Emby library response."
             )
             for cell in self.cells:
                 # play() never runs for these cells: stop the endless
@@ -805,7 +821,14 @@ class WallController:
         )
         if admitted:
             return plan
-        if prefetch or force_transcode:
+        if (
+            prefetch
+            or force_transcode
+            or plan.reason == "missing_metadata_transcode"
+        ):
+            # Unknown sources must not bypass the safety policy by falling
+            # back to raw client-side demux/decode when Emby's transcode
+            # governor is full. The caller requeues them for bounded retry.
             return None
         return replace(
             plan,
@@ -914,6 +937,78 @@ class WallController:
 
     # ── playout ───────────────────────────────────────────────────────────
 
+    def _schedule_transcode_handoff_retry(
+        self,
+        cell: VideoCell,
+        item: dict[str, Any],
+        *,
+        force_transcode: bool,
+        preserve_failure_state: bool,
+        attempt: int,
+    ) -> None:
+        """Retry an unknown source without ever demoting it to direct play."""
+        if (
+            TRANSCODE_PREFETCH_RETRY_S <= 0
+            or TRANSCODE_PREFETCH_RETRY_ATTEMPTS <= 0
+            or attempt > TRANSCODE_PREFETCH_RETRY_ATTEMPTS
+        ):
+            logger.error(
+                "Transcode capacity remained full after bounded retries; "
+                "keeping unknown item queued instead of direct-playing it: %s",
+                item.get("Name", item.get("Id", "?")),
+            )
+            return
+        key = id(cell)
+        token = cell._current_playback_token()
+        cell_identity = (
+            getattr(cell, "_mpv_gen", None),
+            getattr(cell, "_track_generation", None),
+            (getattr(cell, "current_item", None) or {}).get("Id"),
+            getattr(cell, "_stream_url", None),
+        )
+        state = (
+            cell_identity,
+            token,
+            item,
+            force_transcode,
+            preserve_failure_state,
+            attempt,
+        )
+        existing = self._transcode_handoff_retries.get(key)
+        if existing is not None:
+            if existing[2] is item:
+                return
+            self._transcode_handoff_retries.pop(key, None)
+        self._transcode_handoff_retries[key] = state
+
+        def _retry() -> None:
+            if self._transcode_handoff_retries.get(key) != state:
+                return
+            self._transcode_handoff_retries.pop(key, None)
+            if self._shutdown_requested or self.in_outage():
+                return
+            current_identity = (
+                getattr(cell, "_mpv_gen", None),
+                getattr(cell, "_track_generation", None),
+                (getattr(cell, "current_item", None) or {}).get("Id"),
+                getattr(cell, "_stream_url", None),
+            )
+            if current_identity != cell_identity:
+                return
+            if token is not None and not cell._playback_token_is_current(token):
+                return
+            if self.playlists.claim_front(self._cell_group(cell), item) is None:
+                return
+            self._hand_off(
+                cell,
+                item,
+                force_transcode=force_transcode,
+                preserve_failure_state=preserve_failure_state,
+                _transcode_retry_attempt=attempt,
+            )
+
+        QTimer.singleShot(TRANSCODE_PREFETCH_RETRY_S * 1000, _retry)
+
     @traced("wall._hand_off")
     def _hand_off(
         self,
@@ -921,6 +1016,8 @@ class WallController:
         item: dict[str, Any],
         force_transcode: bool = False,
         preserve_failure_state: bool = False,
+        *,
+        _transcode_retry_attempt: int = 0,
     ) -> None:
         old_item_id = cell._emby_item_id
         old_session_id = cell._emby_session_id
@@ -929,14 +1026,25 @@ class WallController:
             logger.error("Session admission closed; requeued handoff item.")
             return
         sid = uuid.uuid4().hex
-        plan = self._plan_for_item(item, force_transcode=force_transcode)
+        requested_plan = self._plan_for_item(item, force_transcode=force_transcode)
         plan = self._admit_playback_plan(
-            plan,
+            requested_plan,
             sid,
             force_transcode=force_transcode,
         )
         if plan is None:
             self.playlists.push_front(self._cell_group(cell), item)
+            if (
+                requested_plan.reason == "missing_metadata_transcode"
+                or force_transcode
+            ):
+                self._schedule_transcode_handoff_retry(
+                    cell,
+                    item,
+                    force_transcode=force_transcode,
+                    preserve_failure_state=preserve_failure_state,
+                    attempt=_transcode_retry_attempt + 1,
+                )
             logger.warning("Playback plan deferred: no transcode capacity.")
             return
         url, sid, plan = self._build_playback_request(

@@ -158,7 +158,7 @@ Environment variables:
 | `HYPERWALL_NO_RELAUNCH=1` | Skip exe re-launch (script mode) |
 | `HYPERWALL_ISOLATED=1` | Force G-Sync isolation on (bypass exe-name check) |
 | `HYPERWALL_AUTO_TRANSCODE=0` | Disable auto-transcode heuristic |
-| `HYPERWALL_STABLE_DIRECT_ONLY` | Force (`1`) or disable (`0`) the fail-closed direct-only pool. Auto-enabled only for an 8-cell macOS host with <=20 GiB RAM. |
+| `HYPERWALL_STABLE_DIRECT_ONLY` | Explicit emergency escape: force (`1`) or disable (`0`) the fail-closed direct-only pool. It is **not** auto-enabled; normal playback retains the full library and uses bounded server H.264/AAC transcoding for heavy or unmeasured sources. |
 | `HYPERWALL_STABLE_MAX_FPS` | Stable-pool frame-rate ceiling (default 30 fps) |
 | `HYPERWALL_STABLE_MAX_BITRATE_MBPS` | Stable-pool bitrate ceiling (default 20 Mbps) |
 | `HYPERWALL_STALL_TIMEOUT_S` | Stall watchdog: flag a frozen stream after N s of no progress (default 20) |
@@ -221,10 +221,17 @@ chmod +x soak_wall.sh
 ./soak_wall.sh 60
 ```
 
+The audio-enabled phase is paired with an audio-disabled control by preserving
+all launch, media, grid, and power settings while disabling the action driver:
+
+```bash
+HYPERWALL_SOAK_ACTIONS=0 HYPERWALL_SOAK_PROFILE=advance ./soak_wall.sh 10
+```
+
 It runs a 60-minute self-terminating wall session, keeps at most one cell
 unmuted, and biases actions toward lazy-audio arm/relock transitions. Each run
 creates `soak_reports/<timestamp>/` with `hyperwall.log`, JSONL events,
-`vm_stat.log`, `nettop.log`, and (where permitted) `powermetrics.log`. The
+`vm_stat.log`, `nettop.log`, `power_sleep.log`, and (where permitted) `powermetrics.log`. The
 final `hyperwall_stats_*.json` records VideoToolbox/decode/drop/freeze totals,
 render callback/paint/render timing, and the final per-cell audio state. Each
 JSONL sample also carries bounded interval render counters and native drop

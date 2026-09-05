@@ -157,6 +157,24 @@ def test_remute_after_drag_unmute():
     assert cell.btn_mute.property("audible") is False
 
 
+def test_remute_disables_the_audio_decoder_for_the_current_track():
+    """Re-muting must stop hidden audio demux on a still-playing item.
+
+    The audio soak kept ``audio_started=True`` on every cell that had ever
+    been unmuted, even after the cell was muted again. That left up to eight
+    audio decoders running while only one cell was audible and multiplied the
+    M5 software-decode/render pressure.
+    """
+    cell = _make_cell()
+    cell.btn_mute.click()          # unmute: aid=auto
+    assert cell._audio_started is True
+    assert cell._mpv.props["aid"] == "auto"
+    cell.btn_mute.click()          # re-mute: aid must return to no
+    assert cell.muted is True
+    assert cell._audio_started is False
+    assert cell._mpv.props["aid"] == "no"
+
+
 def test_drag_down_does_not_poison_last_vol():
     # Owner report round 2: dragging DOWN from 70 swept every value ≥10
     # through valueChanged, leaving _last_vol ≈ 10 — the next unmute

@@ -15,6 +15,7 @@ sys.path.insert(0, REPO_ROOT)
 
 from hyperwall.reliability import (  # noqa: E402
     apply_jitter,
+    audio_track_for_mute,
     classify_playback_fault,
     context_for_prefetch_fault,
     context_for_unscoped_fault,
@@ -194,6 +195,11 @@ def test_fault_classifier_separates_decoder_and_transport_failures():
         "http: Will reconnect at 123 in 0 second(s), error=Operation timed out."
     ) == "transport"
     assert classify_playback_fault("audio device underrun detected") == "other"
+
+
+def test_mute_state_selects_lazy_audio_track():
+    assert audio_track_for_mute(True) == "no"
+    assert audio_track_for_mute(False) == "auto"
 
 
 def test_malformed_stream_signatures_are_decoder_faults():
@@ -653,21 +659,30 @@ def test_macos_8_cell_cache_is_256_mib_with_bounded_readahead():
     assert opts["cache_secs"] == 30
 
 
-def test_fixed_16gb_macos_8_cell_wall_uses_stable_direct_profile():
+def test_fixed_16gb_macos_8_cell_does_not_enable_direct_only_by_default():
     import hyperwall.constants as constants
     from hyperwall.constants import stable_direct_profile_for_platform
 
-    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "auto") is True
+    # The measured direct-only profile was a safety escape, not a library
+    # admission policy. The normal path must retain the complete library and
+    # let the playback planner select server H.264/AAC transcoding.
+    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "auto") is False
     original_probe = constants._physical_memory_mb
     constants._physical_memory_mb = lambda: None
     try:
-        assert stable_direct_profile_for_platform("darwin", None, 8, "auto") is True
+        assert stable_direct_profile_for_platform("darwin", None, 8, "auto") is False
     finally:
         constants._physical_memory_mb = original_probe
     assert stable_direct_profile_for_platform("darwin", 16 * 1024, 6, "auto") is False
     assert stable_direct_profile_for_platform("darwin", 32 * 1024, 8, "auto") is False
     assert stable_direct_profile_for_platform("linux", 16 * 1024, 8, "auto") is False
     assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "off") is False
+
+
+def test_direct_only_profile_remains_an_explicit_escape_hatch():
+    from hyperwall.constants import stable_direct_profile_for_platform
+
+    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "on") is True
     assert stable_direct_profile_for_platform("linux", 64 * 1024, 2, "on") is True
 
 
