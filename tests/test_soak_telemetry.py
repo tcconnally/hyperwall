@@ -254,6 +254,20 @@ def test_soak_launcher_marks_explicit_soak_mode():
     assert 'HYPERWALL_SOAK_ACTIVE=1' in source
 
 
+def test_windows_soak_launcher_disables_config_persistence():
+    path = os.path.join(os.path.dirname(__file__), "..", "soak_wall.bat")
+    source = open(path, encoding="utf-8").read()
+    assert "set HYPERWALL_SOAK_ACTIVE=1" in source
+    assert "set HYPERWALL_NO_CONFIG_SAVE=1" in source
+
+
+def test_windows_normal_launcher_clears_config_persistence_guard():
+    path = os.path.join(os.path.dirname(__file__), "..", "launch.bat")
+    source = open(path, encoding="utf-8").read()
+    assert 'if not "%HYPERWALL_SOAK_ACTIVE%"=="1"' in source
+    assert "set HYPERWALL_NO_CONFIG_SAVE=" in source
+
+
 def test_macos_soak_prevents_idle_sleep_during_measurement():
     path = os.path.join(os.path.dirname(__file__), "..", "soak_wall.sh")
     source = open(path, encoding="utf-8").read()

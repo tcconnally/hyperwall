@@ -11,6 +11,8 @@
 :: so one hour churns through hundreds of library items.
 setlocal
 cd /d "%~dp0"
+set HYPERWALL_SOAK_ACTIVE=1
+set HYPERWALL_NO_CONFIG_SAVE=1
 set HYPERWALL_STATS=1
 set HYPERWALL_PERFTRACE=1
 set HYPERWALL_SOAK_MINUTES=60

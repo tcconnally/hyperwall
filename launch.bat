@@ -4,6 +4,10 @@
 setlocal
 cd /d "%~dp0"
 
+if not "%HYPERWALL_SOAK_ACTIVE%"=="1" (
+    set HYPERWALL_NO_CONFIG_SAVE=
+)
+
 :: If no exe exists, fall back to script
 if not exist "hyperwall.exe" (
     echo hyperwall.exe not found — launching script mode.
