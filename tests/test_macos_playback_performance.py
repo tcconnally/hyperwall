@@ -274,15 +274,19 @@ def test_playback_plan_owns_server_capacity_accounting():
     assert "resolved_plan.server_mode" in build_request
 
 
-def test_prefetch_admission_does_not_demote_heavy_candidate_to_direct():
+def test_active_unknown_transcode_is_not_demoted_when_capacity_is_full():
     wall = _source("hyperwall/wall.py")
-    start = wall.index("    def _arm_prefetch")
-    end = wall.index("\n    def run_on_main", start)
-    body = wall[start:end]
-    admission = body.index("if self._auto_transcode_requested(item)")
-    build = body.index("url, sid, plan = self._build_playback_request", admission)
-    assert admission < build
-    assert body.index("self.playlists.push_front", admission) < build
+    start = wall.index("    def _admit_playback_plan")
+    end = wall.index("\n    def _build_playback_request", start)
+    admission = wall[start:end]
+    assert 'plan.reason == "missing_metadata_transcode"' in admission
+    assert "return None" in admission
+
+    start = wall.index("    def _hand_off")
+    end = wall.index("\n    def _arm_prefetch", start)
+    handoff = wall[start:end]
+    assert "requested_plan" in handoff
+    assert "_schedule_transcode_handoff_retry" in handoff
 
 
 def test_decoder_faults_have_per_cell_software_fallback_path():
