@@ -25,6 +25,9 @@ another 30- or 60-minute soak.
   unchanged, and Windows/Linux ignore this variable.
 - Decoder telemetry records the requested and active decoder, hardware attempts
   and activations, software fallbacks, exhausted recovery, and quarantine.
+- `scripts/run-soak-diagnostics.py --item-id <id>` selects one exact Emby item
+  for a controlled decoder phase. It fails closed when the source response has
+  zero or multiple matches and records the selector in the private manifest.
 - `scripts/profile-macos-render.py` parses native captures. Its `--matrix`
   mode accepts normalized profile JSON or `analyze_run()` reports and selects
   the highest passing 4/6/8-cell mode. Missing evidence blocks selection.

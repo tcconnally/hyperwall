@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -61,6 +62,23 @@ def test_runner_records_only_safe_environment_fields():
     ).read()
     assert "_safe_env_manifest" in source
     assert "os.environ" in source
+
+
+def test_runner_propagates_exact_item_id_into_safe_manifest():
+    runner = _load_runner_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        env = runner._base_env(Path(tmp), 1, 0, item_id="known-good-id")
+    assert env["HYPERWALL_SOAK_ITEM_ID"] == "known-good-id"
+    assert runner._safe_env_manifest(env)["HYPERWALL_SOAK_ITEM_ID"] == "known-good-id"
+
+
+def test_runner_clears_ambient_item_id_without_explicit_selector():
+    runner = _load_runner_module()
+    with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+        os.environ, {"HYPERWALL_SOAK_ITEM_ID": "stale-id"}, clear=False
+    ):
+        env = runner._base_env(Path(tmp), 1, 0)
+    assert "HYPERWALL_SOAK_ITEM_ID" not in env
 
 
 def test_runner_has_safe_preflight_and_manual_wizard_notice():

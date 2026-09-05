@@ -690,6 +690,13 @@ class WallController:
         self.loader.start()
 
     def _on_items_loaded(self, items: list[dict[str, Any]]) -> None:
+        soak_active = os.environ.get("HYPERWALL_SOAK_ACTIVE") == "1"
+        initial_filter = (
+            os.environ.get("HYPERWALL_SOAK_FILTER", "") if soak_active else ""
+        )
+        initial_item_id = (
+            os.environ.get("HYPERWALL_SOAK_ITEM_ID") if soak_active else None
+        )
         source_items = select_playback_candidates(
             list(items),
             direct_only=getattr(self, "_stable_direct_only", False),
@@ -709,14 +716,12 @@ class WallController:
                 "auto-transcode enabled for heavy or unmeasured sources.",
                 len(source_items),
             )
-        self.all_items = source_items
-        initial_filter = (
-            os.environ.get("HYPERWALL_SOAK_FILTER", "")
-            if os.environ.get("HYPERWALL_SOAK_ACTIVE") == "1"
-            else ""
+        selection_items = (
+            list(items) if initial_item_id not in (None, "") else source_items
         )
+        self.all_items = selection_items
         self.filtered, self.filter_mode = apply_initial_filter(
-            source_items, initial_filter
+            selection_items, initial_filter, item_id=initial_item_id
         )
         self.playlists.set_source(self.filtered, DEFAULT_GROUP)
         if self.filter_mode != "all":

@@ -253,7 +253,8 @@ def _validate_endpoint(url: str | None) -> None:
 def _safe_env_manifest(env: object) -> dict[str, object]:
     keys = (
         "HYPERWALL_STATS", "HYPERWALL_PERFTRACE", "HYPERWALL_SOAK_MINUTES",
-        "HYPERWALL_SOAK_DWELL_S", "HYPERWALL_SOAK_PROFILE", "HYPERWALL_HWDEC",
+        "HYPERWALL_SOAK_DWELL_S", "HYPERWALL_SOAK_PROFILE", "HYPERWALL_SOAK_FILTER",
+        "HYPERWALL_SOAK_ITEM_ID", "HYPERWALL_HWDEC",
         "HYPERWALL_CACHE_BUDGET_MB", "HYPERWALL_DEMUXER_PER_CELL_MB",
         "HYPERWALL_AUTO_TRANSCODE", "HYPERWALL_STABLE_DIRECT_ONLY",
         "HYPERWALL_STABLE_MAX_FPS", "HYPERWALL_STABLE_MAX_BITRATE_MBPS",
@@ -269,13 +270,20 @@ def _force_private_permissions(path: Path) -> None:
     force_private_permissions(path, mode)
 
 
-def _base_env(report_dir: Path, minutes: int, dwell: int) -> dict[str, str]:
+def _base_env(
+    report_dir: Path,
+    minutes: int,
+    dwell: int,
+    *,
+    item_id: str | None = None,
+) -> dict[str, str]:
     env = os.environ.copy()
     for key in (
         "HYPERWALL_HWDEC",
         "HYPERWALL_VO",
         "HYPERWALL_GPU_API",
         "HYPERWALL_PROFILE",
+        "HYPERWALL_SOAK_ITEM_ID",
     ):
         env.pop(key, None)
     env.update({
@@ -292,6 +300,8 @@ def _base_env(report_dir: Path, minutes: int, dwell: int) -> dict[str, str]:
         "HYPERWALL_NO_LOG_SETUP": "1",
         "LC_NUMERIC": "C",
     })
+    if item_id is not None:
+        env["HYPERWALL_SOAK_ITEM_ID"] = item_id
     return env
 
 
@@ -330,10 +340,11 @@ def _run_live_phase(
     dwell: int,
     watchdog: int,
     expected_cells: int | None = None,
+    item_id: str | None = None,
 ) -> int:
     phase_dir.mkdir(parents=True, exist_ok=True)
     _force_private_permissions(phase_dir)
-    env = _base_env(phase_dir, minutes, dwell)
+    env = _base_env(phase_dir, minutes, dwell, item_id=item_id)
     env["HYPERWALL_HWDEC"] = decoder
     _write_run_metadata(
         phase_dir / "runner.json",
@@ -550,6 +561,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Require this many final stats cells; mismatch blocks the phase.",
     )
     parser.add_argument(
+        "--item-id", default=None,
+        help="Select exactly one Emby item ID for controlled decoder phases.",
+    )
+    parser.add_argument(
         "--decoders", default=",".join(DEFAULT_DECODERS),
         help="Comma-separated decoder A/B phases; use one value to run one phase.",
     )
@@ -640,6 +655,7 @@ def main(argv: list[str] | None = None) -> int:
                 dwell=args.dwell,
                 watchdog=args.watchdog_grace,
                 expected_cells=args.expected_cells,
+                item_id=args.item_id,
             )
             result = _analyze_phase(
                 phase_dir,
