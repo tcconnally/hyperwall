@@ -37,7 +37,13 @@ PIDS=()
   printf 'host='; sw_vers
   printf 'hardware='; system_profiler SPHardwareDataType 2>/dev/null || true
   printf 'env=HYPERWALL_SOAK_MINUTES=%s HYPERWALL_SOAK_DWELL_S=%s HYPERWALL_SOAK_PROFILE=%s HYPERWALL_HWDEC=%s HYPERWALL_CACHE_BUDGET_MB=%s HYPERWALL_DEMUXER_PER_CELL_MB=%s\n' "$HYPERWALL_SOAK_MINUTES" "$HYPERWALL_SOAK_DWELL_S" "$HYPERWALL_SOAK_PROFILE" "${HYPERWALL_HWDEC:-}" "${HYPERWALL_CACHE_BUDGET_MB:-}" "${HYPERWALL_DEMUXER_PER_CELL_MB:-}"
-  printf 'power_evidence_required=AC_power_lid_open_no_sleep\n'
+  display_probe="$(system_profiler SPDisplaysDataType 2>/dev/null || true)"
+  if printf '%s\n' "$display_probe" | grep -Eqi 'Display Type: External|Connection Type: (DisplayPort|HDMI|DVI|USB|Thunderbolt|AirPlay)'; then
+    printf 'external_display_observed=1\n'
+  else
+    printf 'external_display_observed=0\n'
+  fi
+  printf 'power_evidence_required=AC_power_sleep_assertions_open_lid_or_docked_clamshell\n'
   printf 'power_evidence_artifact=power_sleep.log\n'
 } > "$REPORT_DIR/run.env"
 

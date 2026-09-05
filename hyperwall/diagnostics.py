@@ -429,8 +429,11 @@ def _find_file(root: Path, names: tuple[str, ...]) -> Path | None:
     return None
 
 
-def _power_sleep_summary(path: Path | None) -> dict[str, Any]:
-    """Summarize independent AC/lid/sleep evidence without calling macOS tools."""
+def _power_sleep_summary(
+    path: Path | None,
+    run_env_path: Path | None = None,
+) -> dict[str, Any]:
+    """Summarize AC, sleep, and open-lid/docked-clamshell evidence."""
     if path is None:
         return {
             "path": None,
@@ -439,13 +442,29 @@ def _power_sleep_summary(path: Path | None) -> dict[str, Any]:
             "assertion_samples": 0,
             "ac_power_samples": 0,
             "lid_open_samples": 0,
+            "lid_closed_samples": 0,
+            "lid_evidence_samples": 0,
             "ac_power_observed": False,
             "lid_open_observed": False,
+            "lid_closed_observed": False,
+            "external_display_observed": False,
+            "docked_clamshell_observed": False,
+            "lid_evidence_mode": None,
         }
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         text = ""
+    if run_env_path is None:
+        candidate = path.parent / "run.env"
+        run_env_path = candidate if candidate.is_file() else None
+    try:
+        run_env = (
+            run_env_path.read_text(encoding="utf-8", errors="replace")
+            if run_env_path is not None else ""
+        )
+    except OSError:
+        run_env = ""
     sections = re.split(r"(?m)^=== .* ===$", text)[1:]
     samples = len(sections)
     assertion_samples = sum(
@@ -472,8 +491,33 @@ def _power_sleep_summary(path: Path | None) -> dict[str, Any]:
         )
         for section in sections
     )
-    ac_power = ac_power_samples > 0
+    lid_closed_samples = sum(
+        bool(
+            re.search(
+                r'"?AppleClamshellState"?\s*=\s*(?:Yes|1|true)',
+                section,
+                re.IGNORECASE,
+            )
+        )
+        for section in sections
+    )
+    external_display_observed = bool(
+        re.search(r"(?im)^\s*external_display_observed\s*=\s*1\s*$", run_env)
+    )
     lid_open = lid_open_samples > 0
+    lid_closed = lid_closed_samples > 0
+    docked_clamshell = lid_closed and external_display_observed
+    lid_evidence_samples = max(
+        lid_open_samples,
+        lid_closed_samples if external_display_observed else 0,
+    )
+    lid_evidence_mode = (
+        "open"
+        if lid_open_samples > 0
+        else "docked_clamshell"
+        if docked_clamshell
+        else None
+    )
     return {
         "path": str(path),
         "present": bool(text.strip()),
@@ -481,8 +525,14 @@ def _power_sleep_summary(path: Path | None) -> dict[str, Any]:
         "assertion_samples": assertion_samples,
         "ac_power_samples": ac_power_samples,
         "lid_open_samples": lid_open_samples,
-        "ac_power_observed": ac_power,
+        "lid_closed_samples": lid_closed_samples,
+        "lid_evidence_samples": lid_evidence_samples,
+        "ac_power_observed": ac_power_samples > 0,
         "lid_open_observed": lid_open,
+        "lid_closed_observed": lid_closed,
+        "external_display_observed": external_display_observed,
+        "docked_clamshell_observed": docked_clamshell,
+        "lid_evidence_mode": lid_evidence_mode,
     }
 
 
@@ -793,7 +843,7 @@ def analyze_run(
     stats_candidates = sorted(_safe_children(root, "hyperwall_stats_*.json"))
     stats_path = stats_candidates[0] if len(stats_candidates) == 1 else None
     power_path = _find_file(root, ("power_sleep.log",))
-    power_summary = _power_sleep_summary(power_path)
+    power_summary = _power_sleep_summary(power_path, root / "run.env")
     stats_valid = _has_valid_stats(stats_path)
     stats_summary = _stats_summary(stats_path)
     manifest = (
@@ -973,7 +1023,7 @@ def analyze_run(
         power_summary["samples"] >= minimum_power_samples
         and power_summary["assertion_samples"] >= minimum_power_samples
         and power_summary["ac_power_samples"] >= minimum_power_samples
-        and power_summary["lid_open_samples"] >= minimum_power_samples
+        and power_summary["lid_evidence_samples"] >= minimum_power_samples
     )
     power_complete = (
         power_summary["present"]
@@ -982,7 +1032,8 @@ def analyze_run(
     gates["power_sleep_evidence"] = _gate(
         "PASS" if power_complete else "BLOCK" if expected_duration_seconds is not None else "WARNING",
         power_summary,
-        "A live soak requires independent AC-power, lid, and sleep-assertion evidence; "
+        "A live soak requires independent AC-power, sleep assertions, and "
+        "either an open lid or verified docked-clamshell external-display evidence; "
         "caffeinate alone is not proof that the Mac stayed awake.",
     )
     for key, note in (
