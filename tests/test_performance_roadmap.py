@@ -20,6 +20,7 @@ def test_performance_roadmap_contains_corrected_evidence_and_gates():
         "duration coverage",
         "videotoolbox-copy",
         "coalesce",
+        "power_sleep_evidence",
     )
     for marker in required:
         assert marker in text, marker
