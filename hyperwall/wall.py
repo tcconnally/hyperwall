@@ -69,8 +69,8 @@ from .playback_plan import (
     PlaybackPlan,
     PlaybackPolicy,
     budgeted_mib,
-    filter_stable_direct_candidates,
     plan_playback,
+    select_playback_candidates,
 )
 from .resource_governor import ResourceGovernor
 from .session_broker import EmbySessionBroker, SessionRecord
@@ -327,11 +327,19 @@ class WallController:
             self._bitrate_budget_mbps,
         )
         if self._stable_direct_only:
-            logger.info(
-                "Stable direct-only profile: 8-cell small-mac pool limited "
+            logger.warning(
+                "Explicit direct-only profile: 8-cell pool limited "
                 "to <=%dfps and <=%d Mbps; live transcoding disabled.",
                 STABLE_DIRECT_MAX_FPS,
                 STABLE_DIRECT_MAX_BITRATE_MBPS,
+            )
+        else:
+            logger.info(
+                "Full-library playback profile: direct sources capped at "
+                "<=%dfps and <=%d Mbps; heavy/unknown sources use "
+                "bounded server H.264/AAC transcoding.",
+                MAX_DIRECT_FPS,
+                self._bitrate_budget_mbps,
             )
 
         for win in self.windows:
@@ -680,17 +688,24 @@ class WallController:
         self.loader.start()
 
     def _on_items_loaded(self, items: list[dict[str, Any]]) -> None:
-        source_items = list(items)
+        source_items = select_playback_candidates(
+            list(items),
+            direct_only=getattr(self, "_stable_direct_only", False),
+            max_fps=STABLE_DIRECT_MAX_FPS,
+            max_bitrate_mbps=STABLE_DIRECT_MAX_BITRATE_MBPS,
+        )
         if getattr(self, "_stable_direct_only", False):
-            source_items = filter_stable_direct_candidates(
-                source_items,
-                max_fps=STABLE_DIRECT_MAX_FPS,
-                max_bitrate_mbps=STABLE_DIRECT_MAX_BITRATE_MBPS,
-            )
-            logger.info(
-                "Stable direct-only pool: admitted %d/%d items; excluded %d "
-                "heavy or unmeasured resources before playback.",
+            logger.warning(
+                "Explicit direct-only pool: admitted %d/%d items; excluded %d "
+                "heavy or unmeasured resources. Set "
+                "HYPERWALL_STABLE_DIRECT_ONLY=0 for the full library.",
                 len(source_items), len(items), len(items) - len(source_items),
+            )
+        else:
+            logger.info(
+                "Playback pool: retained full library (%d items); "
+                "auto-transcode enabled for heavy or unmeasured sources.",
+                len(source_items),
             )
         self.all_items = source_items
         self.filtered = source_items[:]
@@ -699,7 +714,7 @@ class WallController:
         if not source_items:
             logger.warning(
                 "No playable items returned — check config.ini libraries or "
-                "the stable direct-only media limits."
+                "the Emby library response."
             )
             for cell in self.cells:
                 # play() never runs for these cells: stop the endless

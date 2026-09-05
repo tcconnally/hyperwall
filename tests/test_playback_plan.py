@@ -13,6 +13,7 @@ from hyperwall.playback_plan import (
     filter_stable_direct_candidates,
     is_stable_direct_candidate,
     plan_playback,
+    select_playback_candidates,
 )
 from hyperwall.resource_governor import ResourceGovernor
 from hyperwall.urls import build_stream_url_for_plan
@@ -100,6 +101,38 @@ def test_stable_direct_pool_excludes_heavy_and_unmeasured_items():
     ) == [safe]
 
 
+def test_normal_playback_pool_retains_items_for_transcode_planning():
+    items = [
+        _item(fps=30, bitrate=15_000_000, item_id="safe"),
+        _item(fps=60, bitrate=40_000_000, item_id="heavy"),
+        _item(item_id="unknown"),
+    ]
+
+    assert select_playback_candidates(
+        items,
+        direct_only=False,
+        max_fps=30,
+        max_bitrate_mbps=20,
+    ) == items
+    assert select_playback_candidates(
+        items,
+        direct_only=True,
+        max_fps=30,
+        max_bitrate_mbps=20,
+    ) == [items[0]]
+
+
+def test_missing_source_metadata_uses_server_transcode_when_auto_enabled():
+    plan = plan_playback(
+        _item(),
+        policy=PlaybackPolicy(auto_transcode=True, max_fps=66, max_bitrate_mbps=50),
+        client_decoder="no",
+    )
+    assert plan.server_mode == "server_transcode"
+    assert plan.requires_transcode_lease is True
+    assert plan.reason == "missing_metadata_transcode"
+
+
 
 def test_client_decoder_fallback_updates_only_client_dimension():
     plan = plan_playback(_item(bitrate=80_000_000), client_decoder="videotoolbox-copy")
@@ -129,16 +162,17 @@ def test_missing_source_metadata_is_explicitly_planned():
         policy=PlaybackPolicy(auto_transcode=True, max_fps=66, max_bitrate_mbps=50),
         client_decoder="no",
     )
-    assert plan.server_mode == "direct"
-    assert plan.reason == "missing_metadata"
+    assert plan.server_mode == "server_transcode"
+    assert plan.reason == "missing_metadata_transcode"
+    assert plan.requires_transcode_lease is True
     assert plan.source_fps is None
     assert plan.source_bitrate_mbps is None
 
 
 def test_url_builder_uses_server_mode_from_plan():
     policy = PlaybackPolicy(auto_transcode=True, max_fps=66, max_bitrate_mbps=50)
-    direct = plan_playback(_item(bitrate=20_000_000), policy=policy, client_decoder="no")
-    transcode = plan_playback(_item(bitrate=80_000_000), policy=policy, client_decoder="no")
+    direct = plan_playback(_item(fps=30, bitrate=20_000_000), policy=policy, client_decoder="no")
+    transcode = plan_playback(_item(fps=30, bitrate=80_000_000), policy=policy, client_decoder="no")
 
     direct_url = build_stream_url_for_plan(
         base="http://emby:8096", item_id="direct", api_key="key",
@@ -187,11 +221,11 @@ def test_wall_controller_uses_explicit_plan_boundary():
     assert "_resource_governor" in wall_source
 
 
-def test_wall_controller_wires_fixed_m5_direct_only_pool():
+def test_wall_controller_wires_full_library_pool_and_explicit_direct_only_escape():
     wall_source = Path(__file__).resolve().parents[1].joinpath("hyperwall", "wall.py").read_text()
     assert "stable_direct_profile_for_platform" in wall_source
-    assert "filter_stable_direct_candidates" in wall_source
-    assert "Stable direct-only profile" in wall_source
+    assert "select_playback_candidates" in wall_source
+    assert "Full-library playback profile" in wall_source
 
 
 def test_resource_governor_limits_server_transcode_leases():
@@ -212,8 +246,8 @@ def test_resource_governor_limits_server_transcode_leases():
 def test_resource_governor_is_idempotent_and_direct_plans_need_no_lease():
     governor = ResourceGovernor(max_server_transcodes=1)
     policy = PlaybackPolicy(auto_transcode=True, max_fps=66, max_bitrate_mbps=50)
-    transcode_plan = plan_playback(_item(bitrate=80_000_000), policy=policy, client_decoder="no")
-    direct_plan = plan_playback(_item(bitrate=20_000_000, item_id="direct"), policy=policy, client_decoder="no")
+    transcode_plan = plan_playback(_item(fps=30, bitrate=80_000_000), policy=policy, client_decoder="no")
+    direct_plan = plan_playback(_item(fps=30, bitrate=20_000_000, item_id="direct"), policy=policy, client_decoder="no")
     assert governor.acquire(transcode_plan, "session-a") is True
     assert governor.acquire(transcode_plan, "session-a") is True
     assert governor.active_server_transcodes == 1

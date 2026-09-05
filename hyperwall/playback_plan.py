@@ -140,6 +140,28 @@ def filter_stable_direct_candidates(
     ]
 
 
+def select_playback_candidates(
+    items: list[dict[str, Any]],
+    *,
+    direct_only: bool,
+    max_fps: float,
+    max_bitrate_mbps: float,
+) -> list[dict[str, Any]]:
+    """Keep the library intact unless direct-only mode is explicit.
+
+    Normal playback must retain heavy and unmeasured items so ``plan_playback``
+    can route them to the server H.264/AAC transcode path. The measured
+    direct-only pool is still useful as an explicit emergency escape hatch.
+    """
+    if not direct_only:
+        return list(items)
+    return filter_stable_direct_candidates(
+        items,
+        max_fps=max_fps,
+        max_bitrate_mbps=max_bitrate_mbps,
+    )
+
+
 def plan_playback(
     item: dict[str, Any],
     *,
@@ -162,6 +184,13 @@ def plan_playback(
     if not resolved.auto_transcode:
         mode = "direct"
         reason = "auto_transcode_disabled"
+    elif fps is None or bitrate_mbps is None:
+        # The library loader can return a source with incomplete stream
+        # metadata. Retain it in the normal pool and ask Emby to inspect and
+        # normalize both video and audio instead of sending an unknown source
+        # straight into the software-decoded wall.
+        mode = "server_transcode"
+        reason = "missing_metadata_transcode"
     elif over_fps or over_bitrate:
         mode = "server_transcode"
         reason = (
@@ -171,9 +200,6 @@ def plan_playback(
             if over_fps
             else "bitrate_over_budget"
         )
-    elif fps is None or bitrate_mbps is None:
-        mode = "direct"
-        reason = "missing_metadata"
     else:
         mode = "direct"
         reason = "within_direct_budget"

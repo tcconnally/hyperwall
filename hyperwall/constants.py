@@ -163,12 +163,17 @@ def stable_direct_profile_for_platform(
     n_cells: int = 0,
     override: str | None = None,
 ) -> bool:
-    """Select the fail-closed direct-play profile for the fixed M5 wall.
+    """Return whether the explicit fail-closed direct-only escape is enabled.
 
-    The 16 GiB macOS 8-cell target cannot use VideoToolbox reliably, while
-    live HLS shaping overloaded the four-slot Emby transcode path.  In auto
-    mode only that measured hardware shape is affected.  Operators can force
-    the profile on/off with HYPERWALL_STABLE_DIRECT_ONLY.
+    The previous automatic M5/8-cell default removed heavy and unmeasured
+    resources from the library and disabled the server H.264/AAC path. That
+    made the wall look stable by silently hiding content. Normal playback now
+    retains the complete library and uses the bounded auto-transcode planner;
+    the direct-only pool remains available only as an explicit emergency
+    override via ``HYPERWALL_STABLE_DIRECT_ONLY=1``.
+
+    ``platform``, ``physical_memory_mb`` and ``n_cells`` remain accepted for
+    configuration/test compatibility, but no longer influence the default.
     """
     raw = (
         os.environ.get("HYPERWALL_STABLE_DIRECT_ONLY")
@@ -180,15 +185,7 @@ def stable_direct_profile_for_platform(
             return True
         if value in {"0", "false", "no", "off"}:
             return False
-    plat = sys.platform if platform is None else platform
-    memory_mb = (
-        _physical_memory_mb() if physical_memory_mb is None else physical_memory_mb
-    )
-    return bool(
-        plat == "darwin"
-        and (memory_mb is None or memory_mb <= 20 * 1024)
-        and n_cells == 8
-    )
+    return False
 
 
 STABLE_DIRECT_MAX_FPS = _int_env("HYPERWALL_STABLE_MAX_FPS", 30, 1, 240)
@@ -214,10 +211,10 @@ MAX_DIRECT_BITRATE_MBPS = _int_env("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", 60, 0, 1
 # changes — e.g. 2.5 GbE ≈ 2000, 10 GbE ≈ 8000.
 LINK_MBPS = _int_env("HYPERWALL_LINK_MBPS", 800, 50, 100_000)
 
-# Max cells that may transcode simultaneously. greg's Arc A310 media engine
-# handles a few concurrent 1080p transcodes fine, but 6-8 cold starts at once
-# (8-cell startup) stampede it → HTTP 500s + partial/pixelated segments
-# (2026-07-15). Over this ceiling, heavy clips direct-play instead. 0 = no gate.
+# Max cells that may transcode simultaneously. Greg's Arc A310 media engine
+# handles a few concurrent 1080p transcodes; the governor prevents a cold-start
+# stampede. When the cap is full, a normal auto-transcode admission is bounded
+# by the controller rather than turning the library into a filtered list.
 MAX_CONCURRENT_TRANSCODES = _int_env("HYPERWALL_MAX_CONCURRENT_TRANSCODES", 4, 0, 64)
 
 

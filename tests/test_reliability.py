@@ -659,21 +659,30 @@ def test_macos_8_cell_cache_is_256_mib_with_bounded_readahead():
     assert opts["cache_secs"] == 30
 
 
-def test_fixed_16gb_macos_8_cell_wall_uses_stable_direct_profile():
+def test_fixed_16gb_macos_8_cell_does_not_enable_direct_only_by_default():
     import hyperwall.constants as constants
     from hyperwall.constants import stable_direct_profile_for_platform
 
-    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "auto") is True
+    # The measured direct-only profile was a safety escape, not a library
+    # admission policy. The normal path must retain the complete library and
+    # let the playback planner select server H.264/AAC transcoding.
+    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "auto") is False
     original_probe = constants._physical_memory_mb
     constants._physical_memory_mb = lambda: None
     try:
-        assert stable_direct_profile_for_platform("darwin", None, 8, "auto") is True
+        assert stable_direct_profile_for_platform("darwin", None, 8, "auto") is False
     finally:
         constants._physical_memory_mb = original_probe
     assert stable_direct_profile_for_platform("darwin", 16 * 1024, 6, "auto") is False
     assert stable_direct_profile_for_platform("darwin", 32 * 1024, 8, "auto") is False
     assert stable_direct_profile_for_platform("linux", 16 * 1024, 8, "auto") is False
     assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "off") is False
+
+
+def test_direct_only_profile_remains_an_explicit_escape_hatch():
+    from hyperwall.constants import stable_direct_profile_for_platform
+
+    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "on") is True
     assert stable_direct_profile_for_platform("linux", 64 * 1024, 2, "on") is True
 
 
