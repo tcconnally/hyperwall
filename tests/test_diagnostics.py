@@ -81,6 +81,19 @@ def test_runner_clears_ambient_item_id_without_explicit_selector():
     assert "HYPERWALL_SOAK_ITEM_ID" not in env
 
 
+def test_runner_rejects_empty_item_id():
+    runner = _load_runner_module()
+    for value in ("", " ", "\t"):
+        try:
+            runner._validate_item_id(value)
+        except ValueError as exc:
+            assert "non-empty" in str(exc)
+        else:
+            raise AssertionError(f"empty item ID accepted: {value!r}")
+    runner._validate_item_id(None)
+    runner._validate_item_id("known-good-id")
+
+
 def test_runner_has_safe_preflight_and_manual_wizard_notice():
     source = open(
         os.path.join(
