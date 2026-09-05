@@ -78,6 +78,8 @@ def _video_stream(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         result = float(value)
     except (TypeError, ValueError):

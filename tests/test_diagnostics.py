@@ -210,7 +210,7 @@ def test_power_sleep_summary_accepts_quoted_ioreg_clamshell_key():
     assert summary["lid_open_observed"] is True
 
 
-def test_power_sleep_summary_rejects_empty_assertion_output():
+def test_power_sleep_summary_rejects_zero_assertion_output():
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory, "power_sleep.log")
         path.write_text(
@@ -218,6 +218,9 @@ def test_power_sleep_summary_rejects_empty_assertion_output():
             "--- pmset -g ps ---\n"
             "Now drawing from 'AC Power'\n"
             "--- pmset -g assertions ---\n"
+            "Assertion status system-wide:\n"
+            "PreventSystemSleep 0\n"
+            "Listed by owning process:\n"
             '"AppleClamshellState" = No\n',
             encoding="utf-8",
         )
