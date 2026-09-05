@@ -437,6 +437,8 @@ def _power_sleep_summary(path: Path | None) -> dict[str, Any]:
             "present": False,
             "samples": 0,
             "assertion_samples": 0,
+            "ac_power_samples": 0,
+            "lid_open_samples": 0,
             "ac_power_observed": False,
             "lid_open_observed": False,
         }
@@ -444,21 +446,42 @@ def _power_sleep_summary(path: Path | None) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         text = ""
-    samples = len(re.findall(r"pmset -g ps", text, re.IGNORECASE))
-    assertion_samples = len(re.findall(r"pmset -g assertions", text, re.IGNORECASE))
-    ac_power = bool(re.search(r"AC Power", text, re.IGNORECASE))
-    lid_open = bool(
-        re.search(
-            r'"?AppleClamshellState"?\s*=\s*(?:No|0|false)',
-            text,
-            re.IGNORECASE,
+    sections = re.split(r"(?m)^=== .* ===$", text)[1:]
+    samples = len(sections)
+    assertion_samples = sum(
+        bool(
+            re.search(
+                r"(?i)Assertion status system-wide:|"
+                r"Prevent(?:UserIdle|System)Sleep\s+\d+|"
+                r"Listed by owning process:",
+                section,
+            )
         )
+        for section in sections
     )
+    ac_power_samples = sum(
+        bool(re.search(r"AC Power", section, re.IGNORECASE))
+        for section in sections
+    )
+    lid_open_samples = sum(
+        bool(
+            re.search(
+                r'"?AppleClamshellState"?\s*=\s*(?:No|0|false)',
+                section,
+                re.IGNORECASE,
+            )
+        )
+        for section in sections
+    )
+    ac_power = ac_power_samples > 0
+    lid_open = lid_open_samples > 0
     return {
         "path": str(path),
         "present": bool(text.strip()),
         "samples": samples,
         "assertion_samples": assertion_samples,
+        "ac_power_samples": ac_power_samples,
+        "lid_open_samples": lid_open_samples,
         "ac_power_observed": ac_power,
         "lid_open_observed": lid_open,
     }
@@ -498,6 +521,12 @@ def _valid_sample_record(sample: Any) -> bool:
     if not isinstance(sample, dict):
         return False
     if not _finite_number(sample.get("wall_seconds"), nonnegative=True):
+        return False
+    cells = sample.get("cells")
+    if isinstance(cells, bool) or not isinstance(cells, int) or cells < 1:
+        return False
+    actions = sample.get("actions")
+    if not isinstance(actions, dict):
         return False
     resources = sample.get("resources")
     if not _valid_resource_map(resources):
@@ -704,6 +733,7 @@ def _has_valid_stats(stats_path: Path | None) -> bool:
         or value["n_cells"] != len(cells)
     ):
         return False
+    seen_ids: set[int] = set()
     for cell in cells:
         cell_id = cell.get("cell") if isinstance(cell, dict) else None
         if (
@@ -711,9 +741,16 @@ def _has_valid_stats(stats_path: Path | None) -> bool:
             or isinstance(cell_id, bool)
             or not isinstance(cell_id, int)
             or cell_id < 0
+            or cell_id in seen_ids
         ):
             return False
-        if not isinstance(cell.get("totals"), dict) or not isinstance(cell.get("info"), dict):
+        seen_ids.add(cell_id)
+        if (
+            not isinstance(cell.get("totals"), dict)
+            or not cell.get("totals")
+            or not isinstance(cell.get("info"), dict)
+            or not cell.get("info")
+        ):
             return False
         if "freezes" not in cell or "freeze_seconds" not in cell:
             return False
@@ -880,6 +917,14 @@ def analyze_run(
         or not _finite_number(manifest.get("sample_count", 0), nonnegative=True)
         or manifest.get("sample_count", 0) < 1
         or manifest.get("ws_metric") == "mixed"
+        or (
+            expected_duration_seconds is not None
+            and not re.search(r"Runtime: Hyperwall", log)
+        )
+        or (
+            expected_duration_seconds is not None
+            and not re.search(r"SOAK start:", log)
+        )
         or not _valid_event_shape({
             "baseline": {"ws_mb": manifest.get("baseline_ws_mb")},
             "resources": {"ws_mb": manifest.get("final_ws_mb")},
@@ -919,12 +964,21 @@ def analyze_run(
             "Active soak duration must cover at least 95% of the requested interval; "
             "sleep/suspend gaps invalidate the measurement.",
         )
+    minimum_power_samples = (
+        max(2, math.ceil(float(expected_duration_seconds) / 15.0))
+        if expected_duration_seconds is not None
+        else 2
+    )
+    power_summary["minimum_samples"] = minimum_power_samples
+    power_summary["coverage_ok"] = (
+        power_summary["samples"] >= minimum_power_samples
+        and power_summary["assertion_samples"] >= minimum_power_samples
+        and power_summary["ac_power_samples"] >= minimum_power_samples
+        and power_summary["lid_open_samples"] >= minimum_power_samples
+    )
     power_complete = (
         power_summary["present"]
-        and power_summary["samples"] > 0
-        and power_summary["assertion_samples"] > 0
-        and power_summary["ac_power_observed"]
-        and power_summary["lid_open_observed"]
+        and power_summary["coverage_ok"]
     )
     gates["power_sleep_evidence"] = _gate(
         "PASS" if power_complete else "BLOCK" if expected_duration_seconds is not None else "WARNING",
@@ -1025,7 +1079,12 @@ def redact_tree(report_dir: str | Path, destination: str | Path) -> None:
     _reject_symlink_components(target)
     force_private_permissions(target, 0o700)
     allowed_suffixes = {".env", ".json", ".jsonl", ".log", ".txt"}
-    for path in source.iterdir():
-        if path.is_symlink() or not path.is_file() or path.suffix.lower() not in allowed_suffixes:
+    for path in source.rglob("*"):
+        if path.is_symlink() or not path.is_file():
             continue
-        write_redacted_copy(path, target / path.name)
+        relative = path.relative_to(source)
+        if any(part.endswith("-redacted") for part in relative.parts):
+            continue
+        if path.suffix.lower() not in allowed_suffixes:
+            continue
+        write_redacted_copy(path, target / relative)

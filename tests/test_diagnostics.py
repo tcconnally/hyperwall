@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hyperwall.diagnostics import (  # noqa: E402
+    _has_valid_stats,
     _power_sleep_summary,
     analyze_run,
     parse_app_log,
@@ -193,6 +194,7 @@ def test_power_sleep_summary_accepts_quoted_ioreg_clamshell_key():
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory, "power_sleep.log")
         path.write_text(
+            "=== sample ===\n"
             "--- pmset -g ps ---\n"
             "Now drawing from 'AC Power'\n"
             "--- pmset -g assertions ---\n"
@@ -206,6 +208,22 @@ def test_power_sleep_summary_accepts_quoted_ioreg_clamshell_key():
     assert summary["assertion_samples"] == 1
     assert summary["ac_power_observed"] is True
     assert summary["lid_open_observed"] is True
+
+
+def test_power_sleep_summary_rejects_empty_assertion_output():
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory, "power_sleep.log")
+        path.write_text(
+            "=== sample ===\n"
+            "--- pmset -g ps ---\n"
+            "Now drawing from 'AC Power'\n"
+            "--- pmset -g assertions ---\n"
+            '"AppleClamshellState" = No\n',
+            encoding="utf-8",
+        )
+        summary = _power_sleep_summary(path)
+    assert summary["samples"] == 1
+    assert summary["assertion_samples"] == 0
 
 
 def test_source_health_records_latency_without_response_body():
@@ -326,7 +344,7 @@ def test_analyze_run_blocks_when_expected_cell_count_mismatches():
 
 def test_analyze_run_accepts_matching_expected_cell_count():
     cells = [
-        {"cell": index, "totals": {}, "info": {}, "freezes": 0, "freeze_seconds": 0}
+        {"cell": index, "totals": {"frame-drop-count": 0}, "info": {"hwdec-current": "no"}, "freezes": 0, "freeze_seconds": 0}
         for index in range(2)
     ]
     with tempfile.TemporaryDirectory() as directory:
@@ -367,6 +385,7 @@ def test_analyze_run_blocks_when_active_duration_is_short():
 
     gate = result["gates"]["duration_coverage"]
     assert gate["status"] == "BLOCK"
+    assert result["gates"]["required_events"]["status"] == "BLOCK"
     assert gate["value"]["observed_seconds"] == 2673
     assert gate["value"]["expected_seconds"] == 3600
 
@@ -595,6 +614,27 @@ def test_stats_schema_rejects_boolean_negative_and_missing_cell_fields():
             assert result["gates"]["stats_presence"]["status"] == "BLOCK"
 
 
+def test_stats_schema_rejects_duplicate_or_empty_cell_payloads():
+    duplicate = {
+        "cells": [
+            {"cell": 0, "totals": {"frame-drop-count": 0}, "info": {"hwdec-current": "no"}, "freezes": 0, "freeze_seconds": 0},
+            {"cell": 0, "totals": {"frame-drop-count": 0}, "info": {"hwdec-current": "no"}, "freezes": 0, "freeze_seconds": 0},
+        ]
+    }
+    empty = {
+        "cells": [
+            {"cell": 0, "totals": {}, "info": {}, "freezes": 0, "freeze_seconds": 0},
+        ]
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        duplicate_path = Path(directory, "duplicate.json")
+        empty_path = Path(directory, "empty.json")
+        duplicate_path.write_text(json.dumps(duplicate), encoding="utf-8")
+        empty_path.write_text(json.dumps(empty), encoding="utf-8")
+        assert _has_valid_stats(duplicate_path) is False
+        assert _has_valid_stats(empty_path) is False
+
+
 def test_sample_without_required_shape_blocks_complete_run():
     with tempfile.TemporaryDirectory() as directory:
         Path(directory, "hyperwall.log").write_text("ready\n", encoding="utf-8")
@@ -812,6 +852,21 @@ def test_redacted_tree_excludes_unexpected_binary_artifacts():
         redact_tree(source, target)
         assert Path(target, "safe.log").exists()
         assert not Path(target, "capture.png").exists()
+
+
+def test_redacted_tree_copies_nested_phase_artifacts():
+    from hyperwall.diagnostics import redact_tree
+
+    with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as target:
+        nested = Path(source, "phase-01-no")
+        nested.mkdir()
+        Path(nested, "analysis.json").write_text(
+            json.dumps({"token": "secret", "ok": True}), encoding="utf-8"
+        )
+        redact_tree(source, target)
+        output = Path(target, "phase-01-no", "analysis.json")
+        assert output.exists()
+        assert "secret" not in output.read_text(encoding="utf-8")
 
 
 def test_redacted_tree_refuses_source_or_nested_destination():
