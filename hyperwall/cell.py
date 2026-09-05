@@ -1717,7 +1717,7 @@ class VideoCell(QWidget):
             PlaybackEvent.LOAD_REQUESTED,
             self._playback_state_identity(self._pending_native_context),
         )
-        if sys.platform == "darwin" and not need_create:
+        if sys.platform == "darwin":
             token = self._current_playback_token()
             if token is None or not self._queue_async_play(token, url, on_started):
                 self._switching = False

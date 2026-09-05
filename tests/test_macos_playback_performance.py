@@ -101,6 +101,7 @@ def test_macos_normal_load_is_deferred_off_gui_thread():
     assert "sys.platform == \"darwin\"" in body
     async_start = body.index("        if sys.platform == \"darwin\"")
     async_end = body.index("        try:", async_start)
+    assert "and not need_create" not in body[async_start:async_end]
     assert "self._mpv.command(\"loadfile\", url)" not in body[async_start:async_end]
     worker_start = cell.index("    def _async_play_worker")
     worker_end = cell.index("\n    def _finish_async_play", worker_start)
