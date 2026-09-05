@@ -960,7 +960,14 @@ class WallController:
             return
         key = id(cell)
         token = cell._current_playback_token()
+        cell_identity = (
+            getattr(cell, "_mpv_gen", None),
+            getattr(cell, "_track_generation", None),
+            (getattr(cell, "current_item", None) or {}).get("Id"),
+            getattr(cell, "_stream_url", None),
+        )
         state = (
+            cell_identity,
             token,
             item,
             force_transcode,
@@ -969,7 +976,7 @@ class WallController:
         )
         existing = self._transcode_handoff_retries.get(key)
         if existing is not None:
-            if existing[1] is item:
+            if existing[2] is item:
                 return
             self._transcode_handoff_retries.pop(key, None)
         self._transcode_handoff_retries[key] = state
@@ -979,6 +986,14 @@ class WallController:
                 return
             self._transcode_handoff_retries.pop(key, None)
             if self._shutdown_requested or self.in_outage():
+                return
+            current_identity = (
+                getattr(cell, "_mpv_gen", None),
+                getattr(cell, "_track_generation", None),
+                (getattr(cell, "current_item", None) or {}).get("Id"),
+                getattr(cell, "_stream_url", None),
+            )
+            if current_identity != cell_identity:
                 return
             if token is not None and not cell._playback_token_is_current(token):
                 return
@@ -1019,7 +1034,10 @@ class WallController:
         )
         if plan is None:
             self.playlists.push_front(self._cell_group(cell), item)
-            if requested_plan.reason == "missing_metadata_transcode":
+            if (
+                requested_plan.reason == "missing_metadata_transcode"
+                or force_transcode
+            ):
                 self._schedule_transcode_handoff_retry(
                     cell,
                     item,
