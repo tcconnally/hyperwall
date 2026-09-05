@@ -36,7 +36,7 @@ PIDS=()
   printf 'started_at=%s\n' "$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"
   printf 'host='; sw_vers
   printf 'hardware='; system_profiler SPHardwareDataType 2>/dev/null || true
-  printf 'env=HYPERWALL_SOAK_MINUTES=%s HYPERWALL_SOAK_DWELL_S=%s HYPERWALL_SOAK_PROFILE=%s HYPERWALL_HWDEC=%s HYPERWALL_CACHE_BUDGET_MB=%s HYPERWALL_DEMUXER_PER_CELL_MB=%s\n' "$HYPERWALL_SOAK_MINUTES" "$HYPERWALL_SOAK_DWELL_S" "$HYPERWALL_SOAK_PROFILE" "${HYPERWALL_HWDEC:-}" "${HYPERWALL_CACHE_BUDGET_MB:-}" "${HYPERWALL_DEMUXER_PER_CELL_MB:-}"
+  printf 'env=HYPERWALL_SOAK_MINUTES=%s HYPERWALL_SOAK_DWELL_S=%s HYPERWALL_SOAK_PROFILE=%s HYPERWALL_SOAK_FILTER=%s HYPERWALL_HWDEC=%s HYPERWALL_CACHE_BUDGET_MB=%s HYPERWALL_DEMUXER_PER_CELL_MB=%s\n' "$HYPERWALL_SOAK_MINUTES" "$HYPERWALL_SOAK_DWELL_S" "$HYPERWALL_SOAK_PROFILE" "${HYPERWALL_SOAK_FILTER:-}" "${HYPERWALL_HWDEC:-}" "${HYPERWALL_CACHE_BUDGET_MB:-}" "${HYPERWALL_DEMUXER_PER_CELL_MB:-}"
   display_probe="$(system_profiler SPDisplaysDataType 2>/dev/null || true)"
   if printf '%s\n' "$display_probe" | python3 -c '
 import sys

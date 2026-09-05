@@ -213,6 +213,7 @@ def test_macos_soak_launcher_collects_system_telemetry():
     for expected in (
         "HYPERWALL_SOAK_PROFILE:-audio",
         "HYPERWALL_SOAK_REPORT_DIR",
+        "HYPERWALL_SOAK_FILTER",
         "HYPERWALL_STATS=1",
         "HYPERWALL_PERFTRACE=1",
         "powermetrics",
@@ -239,6 +240,7 @@ def test_normal_launcher_clears_stale_soak_environment():
     assert 'HYPERWALL_SOAK_ACTIVE:-0' in source
     assert 'unset HYPERWALL_SOAK_MINUTES' in source
     assert 'unset HYPERWALL_SOAK_REPORT_DIR' in source
+    assert 'unset HYPERWALL_SOAK_FILTER' in source
     assert 'unset HYPERWALL_NO_LOG_SETUP' in source
 
 
