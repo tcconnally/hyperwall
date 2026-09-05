@@ -18,6 +18,7 @@ from hyperwall.diagnostics import (  # noqa: E402
     _has_valid_stats,
     _power_sleep_summary,
     analyze_run,
+    external_display_observed_from_system_profiler,
     parse_app_log,
     parse_soak_jsonl,
     redact_text,
@@ -233,6 +234,36 @@ def test_power_sleep_summary_accepts_docked_clamshell_with_external_display():
     assert summary["lid_closed_observed"] is True
     assert summary["external_display_observed"] is True
     assert summary["docked_clamshell_observed"] is True
+
+
+def test_external_display_probe_accepts_named_m5_external_displays():
+    system_profiler_output = (
+        "Graphics/Displays:\n"
+        "      Apple M5:\n"
+        "        Chipset Model: Apple M5\n"
+        "        Displays:\n"
+        "          LG ULTRAGEAR+:\n"
+        "            Main Display: Yes\n"
+        "          LG ULTRAGEAR+:\n"
+    )
+
+    assert external_display_observed_from_system_profiler(system_profiler_output) is True
+
+
+def test_external_display_probe_accepts_legacy_connection_marker():
+    assert external_display_observed_from_system_profiler("Connection Type: HDMI") is True
+
+
+def test_external_display_probe_rejects_internal_display_only():
+    system_profiler_output = (
+        "Graphics/Displays:\n"
+        "      Apple M5:\n"
+        "        Displays:\n"
+        "          Color LCD:\n"
+        "            Main Display: Yes\n"
+    )
+
+    assert external_display_observed_from_system_profiler(system_profiler_output) is False
 
 
 def test_analyze_run_accepts_docked_clamshell_power_evidence():

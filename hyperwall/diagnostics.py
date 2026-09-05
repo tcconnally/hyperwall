@@ -85,6 +85,45 @@ _STATS_RE = re.compile(
 )
 
 
+def external_display_observed_from_system_profiler(text: str) -> bool:
+    """Return whether ``system_profiler`` lists a non-built-in display.
+
+    macOS versions differ in whether ``SPDisplaysDataType`` includes a
+    ``Display Type`` or ``Connection Type`` field. The stable structure is a
+    ``Displays:`` block whose immediate child keys are display names. Treat a
+    name as external unless it clearly identifies the built-in panel.
+    """
+    legacy_external = re.compile(
+        r"(?i)(?:Display Type:\s*External|Connection Type:\s*"
+        r"(?:DisplayPort|HDMI|DVI|USB|Thunderbolt|AirPlay))"
+    )
+    if legacy_external.search(text):
+        return True
+
+    internal_name = re.compile(
+        r"(?i)(?:built[- ]in|internal|color\s+lcd|liquid\s+retina|apple\s+display)"
+    )
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != "Displays:":
+            continue
+        block_indent = len(line) - len(line.lstrip(" \t"))
+        display_indent = block_indent + 2
+        for candidate in lines[index + 1 :]:
+            stripped = candidate.strip()
+            if not stripped:
+                continue
+            indent = len(candidate) - len(candidate.lstrip(" \t"))
+            if indent <= block_indent:
+                break
+            if indent != display_indent or not stripped.endswith(":"):
+                continue
+            name = stripped[:-1].strip()
+            if name and not internal_name.search(name):
+                return True
+    return False
+
+
 def redact_text(text: str) -> str:
     """Redact credentials and host identifiers before an artifact is shared."""
     for pattern, replacement in _REDACTIONS:
