@@ -538,3 +538,25 @@ def starvation_fault_reached(
     the resource instead of stuttering to its natural end.
     """
     return track_events >= max_events or track_total_s >= max_total_s
+
+
+def cache_starvation_recovery_plan(
+    *,
+    auto_transcode: bool,
+    server_mode: str | None,
+    already_requested: bool,
+) -> dict[str, str]:
+    """Choose one bounded recovery for a direct-play starvation.
+
+    Normal playback keeps the complete library. A direct item that proves
+    itself cache-starved should get one server-transcode attempt instead of
+    being removed from the user's library. The explicit direct-only diagnostic
+    profile and an already-transcoded item remain unchanged.
+    """
+    if not auto_transcode:
+        return {"action": "observe", "reason": "auto_transcode_disabled"}
+    if server_mode != "direct":
+        return {"action": "observe", "reason": "already_transcoded"}
+    if already_requested:
+        return {"action": "observe", "reason": "recovery_already_requested"}
+    return {"action": "transcode", "reason": "cache_starvation"}

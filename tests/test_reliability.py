@@ -20,6 +20,7 @@ from hyperwall.reliability import (  # noqa: E402
     context_for_prefetch_fault,
     context_for_unscoped_fault,
     count_recent,
+    cache_starvation_recovery_plan,
     decoder_recovery_plan,
     end_file_reason,
     is_malformed_stream_fault,
@@ -718,6 +719,32 @@ def test_starvation_thresholds_are_configurable():
     assert starvation_fault_reached(4, 0.0, max_events=4)
     assert not starvation_fault_reached(0, 30.0, max_total_s=60.0)
     assert starvation_fault_reached(0, 30.0, max_total_s=30.0)
+
+
+def test_cache_starvation_escalates_one_direct_item_once():
+    assert cache_starvation_recovery_plan(
+        auto_transcode=True,
+        server_mode="direct",
+        already_requested=False,
+    ) == {"action": "transcode", "reason": "cache_starvation"}
+    assert cache_starvation_recovery_plan(
+        auto_transcode=True,
+        server_mode="direct",
+        already_requested=True,
+    ) == {"action": "observe", "reason": "recovery_already_requested"}
+
+
+def test_cache_starvation_does_not_escalate_in_direct_only_or_transcoded_modes():
+    assert cache_starvation_recovery_plan(
+        auto_transcode=False,
+        server_mode="direct",
+        already_requested=False,
+    ) == {"action": "observe", "reason": "auto_transcode_disabled"}
+    assert cache_starvation_recovery_plan(
+        auto_transcode=True,
+        server_mode="server_transcode",
+        already_requested=False,
+    ) == {"action": "observe", "reason": "already_transcoded"}
 
 
 def run_all() -> int:

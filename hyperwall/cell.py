@@ -76,6 +76,7 @@ from .constants import (
 from .reliability import (
     apply_jitter,
     audio_track_for_mute,
+    cache_starvation_recovery_plan,
     classify_playback_fault,
     context_for_prefetch_fault,
     context_for_unscoped_fault,
@@ -284,6 +285,7 @@ class VideoCell(QWidget):
         self._starvation_track_events = 0
         self._starvation_track_total_s = 0.0
         self._starvation_fault_scheduled = False
+        self._starvation_transcode_requested = False
         self._last_seek_ts = 0.0
         self._buffering_card = False
         self._retry_count = 0
@@ -1329,6 +1331,7 @@ class VideoCell(QWidget):
             self._starvation_track_events = 0
             self._starvation_track_total_s = 0.0
             self._starvation_fault_scheduled = False
+            self._starvation_transcode_requested = False
         self._pending_next = False
         self._pending_next_token = None
         self._prefetch_request_token = None
@@ -3116,6 +3119,37 @@ class VideoCell(QWidget):
                 if tag == "cache starvation":
                     self._starvation_track_events += 1
                     self._starvation_track_total_s += dur
+                    recovery = cache_starvation_recovery_plan(
+                        auto_transcode=bool(
+                            getattr(
+                                getattr(self.controller, "_playback_policy", None),
+                                "auto_transcode",
+                                False,
+                            )
+                        ),
+                        server_mode=getattr(
+                            getattr(self, "_playback_plan", None),
+                            "server_mode",
+                            None,
+                        ),
+                        already_requested=self._starvation_transcode_requested,
+                    )
+                    recovery_token = self._current_playback_token()
+                    if (
+                        recovery["action"] == "transcode"
+                        and recovery_token is not None
+                    ):
+                        self._starvation_transcode_requested = True
+                        self._force_transcode = True
+                        logger.warning(
+                            "CACHE RECOVERY: escalating '%s' to one "
+                            "bounded server-transcode retry after cache starvation.",
+                            (self.current_item or {}).get("Name", "?"),
+                        )
+                        self._request_next_throttled(
+                            True,
+                            token=recovery_token,
+                        )
                     if (
                         not self._starvation_fault_scheduled
                         and not self._track_done
