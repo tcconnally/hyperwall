@@ -206,7 +206,7 @@ def test_wall_does_not_rearm_prefetch_before_async_advance_finishes():
     start = source.index("    def next_video(")
     end = source.index("\n    def _on_resource_quarantined", start)
     body = source[start:end]
-    fast = body[body.index("if cell.advance_to_prefetched()"):body.index("item = self.playlists.next", body.index("if cell.advance_to_prefetched()"))]
+    fast = body[body.index("if cell.advance_to_prefetched()"):body.index("item = self._next_item_for_cell", body.index("if cell.advance_to_prefetched()"))]
     assert "_arm_prefetch(cell)" not in fast
     assert "sync_broadcast_cell_update(cell)" not in fast
 
@@ -304,6 +304,21 @@ def test_over_budget_transcode_is_queued_not_demoted_when_capacity_is_full():
     handoff = wall[start:end]
     assert "requested_plan.requires_transcode_lease" in handoff
     assert "_schedule_transcode_handoff_retry" in handoff
+
+
+def test_full_wall_finds_direct_item_when_transcode_slot_is_full():
+    wall = _source("hyperwall/wall.py")
+    helper_start = wall.index("    def _next_item_for_cell")
+    helper_end = wall.index("\n    @traced(\"wall.next_video\")", helper_start)
+    helper = wall[helper_start:helper_end]
+    assert "deferred" in helper
+    assert "_transcode_load_count" in helper
+    assert "MAX_CONCURRENT_TRANSCODES" in helper
+    assert "_plan_for_item" in helper
+
+    start = wall.index("    def next_video(")
+    end = wall.index("\n    def _on_resource_quarantined", start)
+    assert "_next_item_for_cell" in wall[start:end]
 
 
 def test_decoder_faults_have_per_cell_software_fallback_path():

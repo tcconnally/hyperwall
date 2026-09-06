@@ -1336,6 +1336,51 @@ class WallController:
         per-monitor sourcing sets cell._source_group to a distinct key."""
         return getattr(cell, "_source_group", DEFAULT_GROUP) or DEFAULT_GROUP
 
+    def _next_item_for_cell(self, cell: VideoCell) -> dict[str, Any] | None:
+        """Choose a playable item without abandoning a queued heavy source.
+
+        A full transcode governor must not turn an unknown/heavy source into a
+        direct stream, but it also must not leave a wall cell blank merely
+        because that source happened to be first in the shuffled queue. Scan
+        the current de-dup cycle for a direct-safe candidate, restoring any
+        deferred heavy items in their original order. If the whole cycle is
+        heavy, return its first item so ``_hand_off`` can retain the bounded
+        retry path instead of losing the cell's advance entirely.
+        """
+        group = self._cell_group(cell)
+        deferred: list[dict[str, Any]] = []
+        scan_limit = max(1, self.playlists.pool_size(group))
+        for _ in range(scan_limit):
+            item = self.playlists.next(
+                group,
+                skip_ids=self._starvation_quarantined,
+            )
+            if item is None:
+                break
+            plan = self._plan_for_item(item)
+            occupied = self._transcode_load_count(
+                cell=cell,
+                include_cell=True,
+            )
+            saturated = (
+                MAX_CONCURRENT_TRANSCODES > 0
+                and plan.requires_transcode_lease
+                and occupied >= MAX_CONCURRENT_TRANSCODES
+            )
+            if saturated:
+                deferred.append(item)
+                continue
+            for deferred_item in reversed(deferred):
+                self.playlists.push_front(group, deferred_item)
+            return item
+
+        if deferred:
+            retry_item = deferred.pop(0)
+            for deferred_item in reversed(deferred):
+                self.playlists.push_front(group, deferred_item)
+            return retry_item
+        return None
+
     @traced("wall.next_video")
     def next_video(self, cell: VideoCell, is_retry: bool = False) -> None:
         if is_retry and cell.current_item:
@@ -1364,10 +1409,7 @@ class WallController:
                 (prefetched[0] if prefetched else cell.current_item or {}).get("Name"),
             )
             return
-        item = self.playlists.next(
-            self._cell_group(cell),
-            skip_ids=self._starvation_quarantined,
-        )
+        item = self._next_item_for_cell(cell)
         if item is None:
             return
         if prev:
