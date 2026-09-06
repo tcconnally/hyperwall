@@ -1,7 +1,7 @@
 """Tests for the preview-display / solo-fullscreen feature.
 
 Pure-logic tests run everywhere. Wizard Qt tests run wherever PyQt6 +
-offscreen are available; wall/solo construction remains Windows-only.
+offscreen Qt is available; wall/solo construction exercises the macOS GUI path.
 """
 import json
 import os
@@ -368,7 +368,7 @@ def test_wizard_restores_each_monitor_grid_between_sessions():
 
 
 
-# ── WallController construction (Windows/Qt only) ──
+# ── WallController construction (macOS/Qt only) ──
 
 def _build_bare_wall(
     screens, client, display_roles, display_layouts=None,

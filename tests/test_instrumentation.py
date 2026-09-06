@@ -17,14 +17,12 @@ os.environ["HYPERWALL_SOAK_MINUTES"] = "1"
 # an advance.
 os.environ["HYPERWALL_SOAK_ACTIONS"] = "0"
 
-# The ubuntu CI job is the pure-logic lane and deliberately has no PyQt
-# (and hyperwall.soak needs ctypes.wintypes anyway); these tests then skip
-# there and run for real on the windows-build job, which installs pyqt6
-# and runs the suite before building.
+# The CI job is the pure-logic lane unless PyQt6 is installed. These tests are
+# target-host coverage for the macOS Qt/libmpv path.
 try:
     from PyQt6.QtWidgets import QApplication
     _app = QApplication.instance() or QApplication([])
-    _PYQT = os.name == "nt"
+    _PYQT = True
 except ImportError:
     _PYQT = False
 
@@ -59,17 +57,12 @@ def test_loop_lag_sampler_constructs_and_ticks():
 
 
 def test_resource_snapshot_returns_real_values():
-    # Regression: truncated GetCurrentProcess pseudo-handle made every
-    # Win32 call fail silently — an hour-long soak logged gdi=0/ws=None.
-    # A live process always has a nonzero working set and ≥1 thread.
+    # A live macOS process always has a nonzero resident set and ≥1 thread.
     from hyperwall.soak import _resource_snapshot
     snap = _resource_snapshot()
-    assert snap.get("ws_mb", 0) > 0, f"working set missing/zero: {snap}"
-    assert snap.get("private_mb", 0) > 0, f"private bytes missing/zero: {snap}"
-    assert snap.get("threads", 0) >= 1
-    # USER objects: any process with a QCoreApplication has at least one
-    # (message-only) window on Windows; GDI can legitimately be 0 offscreen.
-    assert "user" in snap and "gdi" in snap
+    assert int(snap.get("ws_mb", 0)) > 0, f"working set missing/zero: {snap}"
+    assert int(snap.get("threads", 0)) >= 1
+    assert int(snap.get("current_ws_mb", 0)) > 0
 
 
 def test_traced_slot_survives_qt_signal_payload_args():
@@ -167,8 +160,7 @@ def test_soak_controller_constructs_against_plain_wall():
 
 def run_all() -> int:
     if not _PYQT:
-        print("  SKIP  PyQt6/Windows unavailable — instrumentation tests "
-              "run on the windows-build job.")
+        print("  SKIP  PyQt6 unavailable — macOS instrumentation tests need Qt.")
         return 0
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0

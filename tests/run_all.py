@@ -50,6 +50,7 @@ SUITES = [
     "test_capacity_policy",
     "test_macos_playback_performance",
     "test_endpoint_override",
+    "test_macos_native",
 ]
 
 

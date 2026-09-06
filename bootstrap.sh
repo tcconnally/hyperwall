@@ -38,8 +38,8 @@ if [ ! -d .venv ]; then
     "$PY" -m venv .venv
 fi
 ./.venv/bin/pip install --quiet --upgrade pip
-./.venv/bin/pip install --quiet python-mpv pyqt6 requests flask
-echo "[OK] Python deps installed (python-mpv, pyqt6, requests, flask)"
+./.venv/bin/pip install --quiet python-mpv pyqt6 flask
+echo "[OK] Python deps installed (python-mpv, pyqt6, flask)"
 
 # ── 5. config ────────────────────────────────────────────────────────
 if [ ! -f config.ini ]; then

@@ -61,7 +61,7 @@ from .constants import (
     effective_bitrate_budget_mbps,
     MPV_OPTS,
     normalize_display_layout,
-    stable_direct_profile_for_platform,
+    stable_direct_profile,
     SCRIPT_DIR,
 )
 from .emby import EmbyClient, ContentLoader
@@ -283,7 +283,7 @@ class WallController:
         # Memory-aware demuxer budget: now that every cell exists, scale the
         # per-cell demuxer cache so the grid total stays under CACHE_BUDGET_MB.
         n_cells = len(self.cells)
-        self._stable_direct_only = stable_direct_profile_for_platform(
+        self._stable_direct_only = stable_direct_profile(
             n_cells=n_cells,
         )
         budgeted = apply_cache_budget(apply_env_overrides(MPV_OPTS), n_cells)
@@ -739,8 +739,7 @@ class WallController:
             for cell in self.cells:
                 # play() never runs for these cells: stop the endless
                 # LOADING pulse explicitly, and raise the label — an
-                # unraised Qt sibling can render BEHIND the native video
-                # HWND (2026-07-13 audit).
+                # unraised Qt sibling can render behind the video surface.
                 cell._hide_overlay()
                 lbl = QLabel("No items found — check config.ini libraries", cell)
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1631,8 +1630,7 @@ class WallController:
                 k: os.environ.get(k)
                 for k in (
                     "HYPERWALL_STATS", "HYPERWALL_HDR_HINT",
-                    "HYPERWALL_HWDEC", "HYPERWALL_GPU_API",
-                    "HYPERWALL_PROFILE", "HYPERWALL_RENDER_PROFILE",
+                    "HYPERWALL_HWDEC", "HYPERWALL_PROFILE", "HYPERWALL_RENDER_PROFILE",
                     "HYPERWALL_VIDEO_SYNC",
                 )
                 if os.environ.get(k) is not None

@@ -281,8 +281,6 @@ def _base_env(
     env = os.environ.copy()
     for key in (
         "HYPERWALL_HWDEC",
-        "HYPERWALL_VO",
-        "HYPERWALL_GPU_API",
         "HYPERWALL_PROFILE",
         "HYPERWALL_SOAK_ITEM_ID",
     ):

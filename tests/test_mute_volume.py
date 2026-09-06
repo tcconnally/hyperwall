@@ -4,7 +4,7 @@ with a recording fake mpv.
 Regressions for the 2026-07-13 owner report: unmute didn't restore an
 audible volume (old bump only fired from exactly 0), and mute-state
 visuals were updated piecemeal by three writers. Runs on the
-windows-build CI job; skips on the pure-logic ubuntu lane.
+macOS Qt test lane; skips when PyQt6 is unavailable.
 """
 import os
 import sys
@@ -215,8 +215,7 @@ def test_drag_to_zero_mutes_and_syncs_ui():
 
 def run_all() -> int:
     if not _PYQT:
-        print("  SKIP  PyQt6/Windows unavailable — mute/volume tests run on "
-              "the windows-build job.")
+        print("  SKIP  PyQt6 unavailable — mute/volume tests need Qt.")
         return 0
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0

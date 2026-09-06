@@ -26,18 +26,13 @@ PERF lines (loop lag over time), [PREFETCH→]/[DIRECT]/stall/error lines
 
 from __future__ import annotations
 
-import ctypes
 import json
 import logging
 import os
 import random
 import subprocess
-import sys
 import time
 from pathlib import Path
-
-if os.name == "nt":
-    import ctypes.wintypes as wt
 
 from PyQt6.QtCore import QObject, QTimer
 
@@ -57,97 +52,29 @@ _RES_SAMPLE_S = 60
 
 def _current_rss_mb() -> int | None:
     """Return current resident memory without confusing it with peak RSS."""
-    if sys.platform == "darwin":
-        try:
-            result = subprocess.run(
-                ["ps", "-o", "rss=", "-p", str(os.getpid())],
-                capture_output=True,
-                text=True,
-                timeout=1.0,
-                check=False,
-            )
-            value = result.stdout.strip().splitlines()[0]
-            return max(0, int(value) // 1024)
-        except (IndexError, OSError, ValueError, subprocess.SubprocessError):
-            return None
-    if sys.platform.startswith("linux"):
-        try:
-            resident_pages = int(Path("/proc/self/statm").read_text().split()[1])
-            page_size = int(os.sysconf("SC_PAGE_SIZE"))
-            return max(0, resident_pages * page_size // (1024 * 1024))
-        except (IndexError, OSError, ValueError):
-            return None
-    return None
-
-
-class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
-    _fields_ = [
-        ("cb", wt.DWORD),
-        ("PageFaultCount", wt.DWORD),
-        ("PeakWorkingSetSize", ctypes.c_size_t),
-        ("WorkingSetSize", ctypes.c_size_t),
-        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-        ("QuotaPagedPoolUsage", ctypes.c_size_t),
-        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-        ("PagefileUsage", ctypes.c_size_t),
-        ("PeakPagefileUsage", ctypes.c_size_t),
-    ] if os.name == "nt" else []
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(os.getpid())],
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+        value = result.stdout.strip().splitlines()[0]
+        return max(0, int(value) // 1024)
+    except (IndexError, OSError, ValueError, subprocess.SubprocessError):
+        return None
 
 
 def _resource_snapshot() -> dict[str, int | str]:
-    """Working set / private bytes / GDI / USER / threads for this process.
-
-    GDI/USER counts are Windows-only; POSIX gets a peak RSS high-water mark
-    from getrusage, which is labeled explicitly for offline analysis.
-    """
+    """Return macOS RSS and thread telemetry for offline soak analysis."""
     out: dict[str, int | str] = {}
-    if os.name != "nt":
-        out["ws_metric"] = "peak_rss_mb"
-        try:
-            import resource
-            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            # ru_maxrss units: KiB on Linux, BYTES on macOS.
-            out["ws_mb"] = int(
-                rss // (1024 * 1024) if sys.platform == "darwin" else rss // 1024
-            )
-        except Exception as e:
-            logger.debug("SOAK resource snapshot failed: %s", e)
-        try:
-            import threading
-            out["threads"] = threading.active_count()
-        except Exception:
-            pass
-        current_rss = _current_rss_mb()
-        if current_rss is not None:
-            out["current_ws_metric"] = "resident_rss_mb"
-            out["current_ws_mb"] = current_rss
-        return out
+    out["ws_metric"] = "peak_rss_mb"
     try:
-        k32 = ctypes.windll.kernel32
-        u32 = ctypes.windll.user32
-        psapi = ctypes.windll.psapi
-        # Declare 64-bit handle types explicitly: the default c_int restype
-        # truncates the pseudo-handle, every call below then fails silently
-        # and the first soak run logged gdi=0/ws=None for the whole hour.
-        k32.GetCurrentProcess.restype = ctypes.c_void_p
-        u32.GetGuiResources.argtypes = [ctypes.c_void_p, wt.DWORD]
-        psapi.GetProcessMemoryInfo.argtypes = [
-            ctypes.c_void_p,
-            ctypes.POINTER(_PROCESS_MEMORY_COUNTERS),
-            wt.DWORD,
-        ]
-        h = k32.GetCurrentProcess()
-        pmc = _PROCESS_MEMORY_COUNTERS()
-        pmc.cb = ctypes.sizeof(pmc)
-        if psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb):
-            out["ws_metric"] = "working_set_mb"
-            out["ws_mb"] = pmc.WorkingSetSize // (1024 * 1024)
-            out["current_ws_metric"] = "working_set_mb"
-            out["current_ws_mb"] = out["ws_mb"]
-            out["private_mb"] = pmc.PagefileUsage // (1024 * 1024)
-        out["gdi"] = u32.GetGuiResources(h, 0)   # GR_GDIOBJECTS
-        out["user"] = u32.GetGuiResources(h, 1)  # GR_USEROBJECTS
+        import resource
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # macOS ru_maxrss is bytes, not KiB.
+        out["ws_mb"] = int(rss // (1024 * 1024))
     except Exception as e:
         logger.debug("SOAK resource snapshot failed: %s", e)
     try:
@@ -155,6 +82,10 @@ def _resource_snapshot() -> dict[str, int | str]:
         out["threads"] = threading.active_count()
     except Exception:
         pass
+    current_rss = _current_rss_mb()
+    if current_rss is not None:
+        out["current_ws_metric"] = "resident_rss_mb"
+        out["current_ws_mb"] = current_rss
     return out
 
 

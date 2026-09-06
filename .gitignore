@@ -9,19 +9,9 @@ __pycache__/
 build/
 dist/
 *.spec
-hyperwall.exe
-hyperwall_v8.exe
 
-# ── NVIDIA sentinel (driver-version tracking) ──────────────────────────────
-.hyperwall_nvprofile.sentinel
-.hyperwall_v8_nvprofile.sentinel
-
-# ── Downloaded tools / DLLs ────────────────────────────────────────────────
+# ── Downloaded tools / native libraries ─────────────────────────────────────
 tools/
-mpv-2.dll
-libmpv-2.dll
-7zr.exe
-mpv-temp.7z
 
 # ── Stats dumps ────────────────────────────────────────────────────────────
 hyperwall_stats_*.json

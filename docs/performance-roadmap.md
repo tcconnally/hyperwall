@@ -22,7 +22,7 @@ another 30- or 60-minute soak.
   exported in final stats.
 - `HYPERWALL_RENDER_PROFILE=low-cost` is an explicit macOS-only render tier.
   It uses bilinear scaling and disables debanding. The default HQ filters stay
-  unchanged, and Windows/Linux ignore this variable.
+  unchanged.
 - Decoder telemetry records the requested and active decoder, hardware attempts
   and activations, software fallbacks, exhausted recovery, and quarantine.
 - `scripts/run-soak-diagnostics.py --item-id <id>` selects one exact Emby item

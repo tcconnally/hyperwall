@@ -11,7 +11,6 @@ import math
 import os
 import re
 import stat
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -182,34 +181,10 @@ def _reject_existing_symlink_children(root: Path) -> None:
 
 
 def force_private_permissions(path: str | Path, mode: int) -> None:
-    """Enforce owner-only diagnostic permissions on every supported OS."""
+    """Enforce owner-only diagnostic permissions on macOS."""
     # Preserve an already-constructed Path; this also keeps callers that
     # pass a POSIX Path stable when platform detection is mocked in tests.
     target = path if isinstance(path, Path) else Path(path)
-    if os.name == "nt":
-        # chmod is still a useful writable-bit check on Windows; the ACL is
-        # the privacy boundary, because Windows does not model 0700/0600 as
-        # POSIX permission bits.
-        target.chmod(mode)
-        principal = os.environ.get("USERNAME", "").strip()
-        if not principal:
-            raise PermissionError("cannot identify the Windows diagnostic owner")
-        result = subprocess.run(
-            [
-                "icacls",
-                os.fspath(target),
-                "/inheritance:r",
-                "/grant:r",
-                f"{principal}:F",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            raise PermissionError(f"private ACL enforcement failed for {target}")
-        return
     target.chmod(mode)
     actual = target.stat().st_mode & 0o777
     if actual != mode:

@@ -1000,30 +1000,13 @@ def test_redaction_masks_home_paths():
     assert "/Users/<user>/hyperwall/report.log" in safe
 
 
-def test_windows_private_permissions_uses_owner_acl():
-    from unittest import mock
-
+def test_macos_private_permissions_enforces_owner_mode():
     from hyperwall import diagnostics
 
     with tempfile.TemporaryDirectory() as directory:
         target = Path(directory)
-        with (
-            mock.patch.object(diagnostics.os, "name", "nt"),
-            mock.patch.dict(os.environ, {"USERNAME": "fixture-user"}, clear=False),
-            mock.patch.object(
-                diagnostics.subprocess, "run", return_value=mock.Mock(returncode=0)
-            ) as run,
-        ):
-            diagnostics.force_private_permissions(target, 0o700)
-
-        assert run.call_args.args[0] == [
-            "icacls",
-            str(target),
-            "/inheritance:r",
-            "/grant:r",
-            "fixture-user:F",
-        ]
-        assert run.call_args.kwargs["check"] is False
+        diagnostics.force_private_permissions(target, 0o700)
+        assert target.stat().st_mode & 0o777 == 0o700
 
 
 def test_redacted_tree_excludes_unexpected_binary_artifacts():

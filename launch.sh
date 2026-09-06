@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HyperWall — macOS launcher (script mode; the .exe/G-Sync path is Windows-only)
+# HyperWall — macOS native launcher
 set -euo pipefail
 
 # A benchmark shell may have exported soak-only variables.  Keep the normal

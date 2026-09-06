@@ -12,8 +12,6 @@ import os
 import threading
 from typing import Any
 
-import requests
-import urllib3
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 from . import VERSION_SHORT
@@ -23,6 +21,7 @@ from .backends import (
     auth_request_headers,
     token_headers,
 )
+from .http_client import HttpRequestError, HttpResponse, JsonHttpSession
 
 logger = logging.getLogger("HyperWall")
 
@@ -71,12 +70,13 @@ class EmbyClient:
         self._device_id = f"hyperwall-{os.urandom(4).hex()}"
         self.backend = backend or EMBY
 
-        self._session = requests.Session()
-        self._session.headers.update({
-            "User-Agent": f"HyperWall/{VERSION_SHORT}",
-            "Accept": "application/json",
-            "Accept-Encoding": "gzip, deflate",
-        })
+        self._session = JsonHttpSession(
+            verify_ssl=verify_ssl,
+            headers={
+                "User-Agent": f"HyperWall/{VERSION_SHORT}",
+                "Accept": "application/json",
+            },
+        )
 
     # ── connection lifecycle ──────────────────────────────────────────────
 
@@ -86,10 +86,9 @@ class EmbyClient:
             r = self._session.get(
                 f"{self.server_url}/System/Info/Public",
                 timeout=5,
-                verify=self.verify_ssl,
             )
             return r.status_code == 200
-        except requests.RequestException:
+        except HttpRequestError:
             return False
 
     def authenticate(self) -> bool:
@@ -103,7 +102,6 @@ class EmbyClient:
                     ),
                     json={"Username": self.username, "Pw": self._password},
                     timeout=10,
-                    verify=self.verify_ssl,
                 )
                 r.raise_for_status()
                 d = r.json()
@@ -111,7 +109,7 @@ class EmbyClient:
                 self.user_id = d.get("User", {}).get("Id")
                 logger.info("Authenticated. User ID: %s", self.user_id)
                 return bool(self.access_token and self.user_id)
-            except requests.RequestException as e:
+            except HttpRequestError as e:
                 logger.error("Authentication error: %s", e)
                 return False
 
@@ -123,27 +121,24 @@ class EmbyClient:
     def _headers(self) -> dict[str, str]:
         return token_headers(self.backend, self.access_token)
 
-    def get(self, path: str, **kw: Any) -> requests.Response:
+    def get(self, path: str, **kw: Any) -> HttpResponse:
         return self._session.get(
             f"{self.server_url}{path}",
             headers=self._headers(),
-            verify=self.verify_ssl,
             **kw,
         )
 
-    def post(self, path: str, **kw: Any) -> requests.Response:
+    def post(self, path: str, **kw: Any) -> HttpResponse:
         return self._session.post(
             f"{self.server_url}{path}",
             headers=self._headers(),
-            verify=self.verify_ssl,
             **kw,
         )
 
-    def delete(self, path: str, **kw: Any) -> requests.Response:
+    def delete(self, path: str, **kw: Any) -> HttpResponse:
         return self._session.delete(
             f"{self.server_url}{path}",
             headers=self._headers(),
-            verify=self.verify_ssl,
             **kw,
         )
 
@@ -205,7 +200,7 @@ class EmbyClient:
                             break
                     logger.info("Library '%s': %d items", lib, len(items))
                     all_items.extend(items)
-                except requests.RequestException as e:
+                except HttpRequestError as e:
                     logger.error(
                         "Library '%s' failed (%s) — keeping %d items from prior libs.",
                         lib, e, len(all_items),

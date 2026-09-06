@@ -1,119 +1,118 @@
-# Hyperwall Roadmap — the road to v10
+# Hyperwall macOS/M5 roadmap
 
-> Deep-dive review of v9.0.0 (3,069 LOC, 11 modules) and the plan to take
-> Hyperwall to the next level. Every task carries forward hard-won lessons
-> as guardrails so we don't relearn them.
+This repository targets Apple Silicon macOS. The runtime path is libmpv's render
+API in `MpvGLWidget`, CoreAudio, the coalescing frame pump, and bounded Emby
+session/cache lifecycles. No alternate desktop renderer or executable wrapper is
+part of the product path.
 
-## Where v9 stands
+## Current architecture
 
-The v8→v9 ground-up rewrite paid off. The package is clean, typed, and most
-classic footguns are already closed:
+- `macos_runtime.py` rejects non-macOS application starts and resolves an
+  explicit decoder profile.
+- `constants.py` owns the single libmpv option set and M5 Air cache budget.
+- `cell.py` always uses `MpvGLWidget`; all load, prefetch, mute, and volume
+  native calls are serialized or deferred away from the GUI handler.
+- `wall.py` releases Qt/OpenGL render contexts on the GUI thread before mpv
+  core termination.
+- `http_client.py` provides the Emby JSON transport with Python stdlib only.
+- `soak.py` records current RSS, peak RSS, threads, frame/render counters, and
+  playback reliability events.
 
-| Previously flagged | Status in v9 |
-|---|---|
-| O(n) list-compare for filter state | ✅ Fixed — explicit `filter_mode` (`wall.py:118`) |
-| Cross-thread mpv IPC from Flask thread | ✅ Fixed — main-thread `_paused` cache (`web.py:59`) |
-| String fallbacks to `getint`/`getboolean` | ✅ Fixed — typed fallbacks (`config.py:56–60`) |
-| Unbounded mpv terminate hang | ✅ Fixed — bounded `ThreadPoolExecutor` (`cell.py:312`) |
-| Stale observer callbacks after reload | ✅ Fixed — generation counter (`_mpv_gen`) |
-| Unauthenticated shutdown | ✅ Fixed — `HYPERWALL_WEB_TOKEN` guard (`web.py:43`) |
+## Decoder policy
 
-**v10 is not a bug-fix release — it's a "next level" release.**
+The default `safe` profile uses software decode because the available M5
+VideoToolbox run was not clean. RAM size must not silently choose a decoder.
+Hardware profiles remain explicit experiments:
 
-## Findings that still matter (file:line grounded)
-
-- **🔴 Version identity is a landmine.** Package says v9 (`__init__.py:11`) but the
-  binary is `hyperwall_v8.exe` everywhere, and G-Sync isolation is hard-gated on
-  that exact basename (`nvidia.py:85`). The `v8`/`9.0`/`HyperWall/9.0` string is
-  duplicated across `constants.py`, `nvidia.py`, `emby.py:59,88`, `wizard.py`,
-  `build.bat`, `build.ps1`, `bootstrap_v8.ps1`, `launch.bat`, and the tests.
-  Bumping to v10 will silently break G-Sync isolation unless all references move
-  in lockstep.
-- **🟠 No stall watchdog.** The retry/escalation chain (`cell.py:785`) fires only
-  on EOF or explicit error. A silent mid-stream freeze produces neither — the
-  cell sits dead forever. Highest-value reliability gap for a 24/7 wall.
-- **🟠 `_switching` leaks on the error path.** Set in `play()` (`cell.py:448`),
-  cleared only on the first `eof`. The `reason == "error"` branch (`cell.py:748`)
-  returns without clearing it.
-- **🟠 Memory scales unbounded with cell count.** `demuxer_max_bytes=512MiB` +
-  `cache_secs=30` + `demuxer_readahead_secs=30` are per cell (`constants.py:63–65`).
-  A 6×6 grid can reach ~18 GB of demuxer buffer.
-- **🟡 Single global playlist** (`wall.py:302–310`) — no per-cell/per-monitor sourcing.
-- **🟡 Emby-only.** Jellyfin is one `MediaBackend` abstraction away (`emby.py`).
-- **🟡 Shallow tests.** The 7 repo guards (`tests/run_repo_guards.py`) are
-  import/structure smoke tests. None of the bug-prone logic (`_build_url`,
-  `needs_transcode`, retry transitions, config round-trip) is tested. No CI.
-- **🟡 Web remote** polls every 3s (`web.py:277`); dead `esc()` helper (`web.py:276`).
-
-## Guardrails carried into every task
-
-- **`static=true` is load-bearing** — Emby 4.9.5.0 returns HTTP 500 on `/stream`
-  without it. Never remove without live `curl` proof against the target instance.
-- **Never assume a fix works from code inspection** — validate playback against a
-  real Emby server before declaring done.
-- **Don't ship speculative behavior** — ground every change in observed code.
-- **Build hygiene** — stale exe lags source; `python -m pip` / `python -m PyInstaller`
-  on skyhawk; PowerShell ≠ cmd (`Copy-Item -Force`, `$env:VAR`).
-
----
-
-## The v10 epics
-
-### Epic 1 — Identity Unification (`v8`→`v10`, single source of truth) · foundation, first
-Prerequisite for calling it v10 without breaking G-Sync.
-1. One canonical `__version__`; derive everything (User-Agent, auth Version, titles).
-2. Decouple G-Sync isolation from the literal `hyperwall_v8.exe` basename — gate on
-   a `hyperwall` prefix or an explicit `HYPERWALL_ISOLATED=1` the launcher sets
-   (`nvidia.py:85`, `maybe_relaunch_in_isolation`).
-3. Parameterize `LAUNCHER_EXE` / `NV_SENTINEL` off the version (`constants.py:23,27`).
-4. Rename build output → `hyperwall.exe` (drop version suffix) across build scripts.
-5. Add a repo-guard test asserting no `_v8`/`9.0` literals survive outside `__init__.py`.
-
-### Epic 2 — 24/7 Reliability & Self-Healing · highest operational value
-1. **Per-cell stall watchdog**: track last `time-pos` advance; QTimer every ~5s —
-   if not paused and `time-pos` hasn't moved in N seconds, run the existing
-   escalation chain via `_on_error()`. No new failure semantics.
-2. Fix the `_switching` leak on the error branch (`cell.py:748`).
-3. **Memory-aware cache budget**: scale `demuxer_max_bytes`/`cache_secs` by cell
-   count under a total ceiling (`HYPERWALL_CACHE_BUDGET_MB`).
-4. **Crash-loop guard**: park a repeatedly-failing cell on a "media unavailable"
-   card instead of hammering Emby.
-
-### Epic 3 — Test Harness & CI · locks in everything above
-1. Mock-only unit tests (no PyQt/mpv/Emby): `_build_url` DIRECT vs TRANSCODE +
-   `static=true` assertion, `needs_transcode` boundaries, retry→transcode→skip
-   transitions, config save/load round-trip.
-2. GitHub Actions: repo guards + unit tests on push (headless Linux).
-3. Optional Windows runner doing a PyInstaller smoke build.
-
-### Epic 4 — Multi-Source Walls (per-monitor / per-cell sourcing) · marquee feature
-1. Wizard can bind libraries per monitor (default: current global behavior).
-2. Refactor the single deque into a `PlaylistManager` keyed by source-group,
-   preserving global de-dup within a group.
-3. **Scene presets**: save/name/recall `{grid, screens, libraries, filter}` —
-   persisted in config, exposed on the web remote and as `/api/scene/<name>`.
-
-### Epic 5 — Backend Abstraction (Emby + Jellyfin) · audience expansion
-1. Extract a `MediaBackend` protocol (`authenticate`, `fetch_libraries`,
-   `fetch_items`, `build_stream_url`, `needs_transcode`, tag/favorite mutations).
-2. `EmbyBackend` = current code verbatim; add `JellyfinBackend`.
-3. Keep the Emby `static=true` / 500-bug workaround intact and documented
-   per-backend; validate each against a live server before merge.
-
-### Epic 6 — Web Remote 2.0 & Observability · polish + monitorability
-1. Replace 3s polling with SSE/WebSocket push; remove dead `esc()` helper.
-2. Optional full-auth mode (token gates all control endpoints).
-3. `/api/health` + lightweight `/metrics` (cells alive, retry counts, frame-drop
-   totals, uptime).
-4. Optional schedule: auto on/off windows (ambient-installation use case).
-
----
-
-## Suggested sequencing
-
-| Release | Contents | Theme |
+| Profile | Decoder | Use |
 |---|---|---|
-| **v10.0** | Epics 1 + 2 + 3 | Identity clean, self-healing, tested — a rock-solid core |
-| **v10.1** | Epic 4 | Multi-source walls + scene presets |
-| **v10.2** | Epic 5 | Jellyfin support |
-| **v10.3** | Epic 6 | Web Remote 2.0 + observability |
+| `safe` | `no` | measured baseline |
+| `hardware-copy` | `videotoolbox-copy` | first VideoToolbox pilot |
+| `hardware` | `videotoolbox` | direct VideoToolbox pilot |
+
+A target Mac must pass a short pilot before a profile is used for a long soak.
+The report must separate GUI stalls, cache starvation, decoder faults, transport
+errors, audio underruns, and teardown failures.
+
+## Performance stages
+
+### Stage 0: target-host probe
+
+Run a 60 to 120 second fixed-content profile at 1, 2, 4, 6, and 8 cells with
+random churn disabled. Record exact HEAD, decoder state, callback/paint/render
+counts, render duration, paint gaps, loop lag, process CPU, thermal state, GPU
+residency, and decoder faults. Use `sample` and `powermetrics` when available.
+Missing privileged telemetry is incomplete evidence, not a pass.
+
+### Stage 1: frame-pump gate
+
+Verify coalescing under callback bursts. The newest frame must win, queued GUI
+notifications must remain bounded, and teardown must retain the C callback
+trampoline until the render context is freed.
+
+### Stage 2: render-quality gate
+
+Compare `hq` and `low-cost` one variable at a time. The low-cost profile changes
+scaling/debanding only. The pilot gate is p95 loop lag at or below 25 ms, no
+100 ms loop stall, no freeze, no audio underrun, no A/V desync, no decoder fault,
+and at least 95% active-duration coverage.
+
+### Stage 3: decoder gate
+
+Use hardware decode only when a known-good corpus passes on the target Mac.
+Hardware faults trigger a bounded per-cell software fallback and resource
+quarantine. One bad file must not change the wall-wide decoder policy.
+
+### Stage 4: capacity gate
+
+Measure 4, 6, and 8 cells with the same corpus and profile. Promote the highest
+passing capacity. If 8 cells fail, keep the lower passing capacity as the M5
+recommendation and document 8 cells as experimental. Missing evidence returns
+`BLOCK` rather than selecting a default by guesswork.
+
+### Stage 5: long validation
+
+Only after the short and capacity gates pass, run one physically awake,
+uninterrupted 30 to 60 minute validation with exact-HEAD, redacted artifacts.
+The final gate requires no blocking freezes, decoder faults, audio underruns,
+A/V desyncs, transport errors, or unexplained CPU escalation.
+
+## Operator commands
+
+Pure checks:
+
+```bash
+python3 tests/run_all.py
+python3 -m compileall -q hyperwall tests
+```
+
+Render profiling:
+
+```bash
+HYPERWALL_RENDER_PROFILE=low-cost ./launch.sh
+python3 scripts/profile-macos-render.py --matrix \
+  profile-4.json profile-6.json profile-8.json
+```
+
+One-cell decoder pilot:
+
+```bash
+HYPERWALL_SOAK_ACTIVE=1 \
+HYPERWALL_SOAK_FILTER=favorites \
+python3 scripts/run-soak-diagnostics.py \
+  --minutes 10 --expected-cells 1 --decoders no
+```
+
+Run each hardware decoder as a separate otherwise-identical phase. The live
+phase still requires manual SetupWizard acceptance. Raw reports remain private;
+share only redacted copies.
+
+## Evidence rules
+
+- A clean process exit does not prove smooth playback.
+- A headless CI pass does not certify VideoToolbox, OpenGL, WindowServer, or
+  multi-display timing.
+- `ru_maxrss` is a high-water value on macOS; pair it with current RSS samples
+  before classifying retained cache as a leak.
+- Every final claim names the exact HEAD, cell count, decoder, duration, active
+  coverage, and optional telemetry that was unavailable.

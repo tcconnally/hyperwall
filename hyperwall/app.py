@@ -1,24 +1,18 @@
-"""
-Hyperwall — application bootstrap and main().
-
-Orchestrates startup: DLL registration, NVIDIA profile, config loading,
-Emby authentication, wizard, wall launch, and web remote.
-"""
+"""Hyperwall macOS-native application bootstrap and main()."""
 
 from __future__ import annotations
 
 import argparse
-import ctypes
 import json
 import logging
+import locale
 import os
 import socket
 import sys
 from logging.handlers import RotatingFileHandler
 
-import requests
-
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QSurfaceFormat
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -40,7 +34,7 @@ from .constants import (
 )
 from .emby import EmbyClient, CleanupWorker
 from .backends import resolve_backend
-from .nvidia import ensure_nvidia_profile, maybe_relaunch_in_isolation
+from .macos_runtime import require_macos
 from . import theme
 from .wizard import SetupWizard
 from .wall import WallController, MouseIdleHider
@@ -54,34 +48,6 @@ try:
     _WEB_AVAILABLE = os.environ.get("HYPERWALL_WEB") == "1"
 except ImportError:
     pass
-
-
-# ── mpv DLL registration ─────────────────────────────────────────────────────
-# Must happen once, before any mpv import. Every cookie must stay alive
-# (held at module level) to prevent GC from removing its DLL directory —
-# a single variable here would drop all but the last directory registered.
-
-_mpv_dll_cookies: list = []
-
-if os.name == "nt":
-    _dll_dirs = [SCRIPT_DIR]
-    if getattr(sys, "frozen", False):
-        _dll_dirs.insert(0, sys._MEIPASS)
-
-    for _d in _dll_dirs:
-        if os.path.isdir(_d):
-            try:
-                _mpv_dll_cookies.append(os.add_dll_directory(_d))
-            except AttributeError:
-                os.environ["PATH"] = (
-                    _d + os.pathsep + os.environ.get("PATH", "")
-                )
-
-    # Also prepend to PATH for python-mpv's internal loader
-    if getattr(sys, "frozen", False):
-        os.environ["PATH"] = (
-            sys._MEIPASS + os.pathsep + os.environ.get("PATH", "")
-        )
 
 
 # ── logging setup ────────────────────────────────────────────────────────────
@@ -143,7 +109,7 @@ def _handle_exception(et: type, ev: BaseException, tb: object) -> None:
 
 
 def _ordered_screens(app: QApplication) -> list:
-    """Return screens sorted left-to-right like Windows Display Settings."""
+    """Return screens in a stable left-to-right order on macOS."""
     screens = list(app.screens())
     if not screens:
         return screens
@@ -190,33 +156,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    require_macos()
+
     if args.sync_relay:
         from .sync import run_sync_relay
         run_sync_relay(host=args.sync_host, port=args.sync_port)
         return
 
-    # 1. NVIDIA isolation: re-exec into bundled exe if needed
-    maybe_relaunch_in_isolation()
-
-    # 2. Verify libmpv is importable
+    # Verify libmpv is importable through the native Homebrew path.
     try:
         import mpv  # noqa: F401
     except Exception as e:
-        if sys.platform == "darwin":
-            hint = (
-                "Install libmpv via Homebrew:\n  brew install mpv\n\n"
-                "Then launch via ./launch.sh — it exports\n"
-                "DYLD_FALLBACK_LIBRARY_PATH so python-mpv finds\n"
-                "/opt/homebrew/lib/libmpv.dylib on Apple Silicon."
-            )
-        elif os.name == "nt":
-            hint = (
-                f"And place mpv-2.dll next to this script:\n  {SCRIPT_DIR}\n\n"
-                f"Download: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\n"
-                f"  (shinchiro build — extract libmpv-2.dll, place in script dir)"
-            )
-        else:
-            hint = "Install libmpv via your distro (mpv-libs / libmpv-dev)."
+        hint = (
+            "Install libmpv and python-mpv with Homebrew:\n"
+            "  brew install mpv\n"
+            "  python3 -m pip install python-mpv\n\n"
+            "Then launch through ./launch.sh so Apple Silicon library paths "
+            "are exported before Python starts."
+        )
         msg = (
             f"python-mpv failed to load: {e}\n\n"
             f"Install:\n  pip install python-mpv\n\n{hint}"
@@ -232,58 +189,21 @@ def main() -> None:
     _setup_logging()
     logger.info("Runtime: %s", runtime_banner())
 
-    # 3b. libmpv hard-fails mpv_create() (returns NULL → python-mpv then
-    # segfaults dereferencing it in mpv_set_option) when LC_NUMERIC is not
-    # "C"/"C.UTF-8" (mpv player/main.c check_locale). CPython calls
-    # setlocale(LC_ALL, "") at startup on POSIX, so a normal en_US.UTF-8
-    # macOS shell kills every libmpv embed at first MPV() — the Windows CRT
-    # keeps LC_NUMERIC=C, which is why this only bites POSIX.
-    if os.name != "nt":
-        import locale as _locale
-        try:
-            _locale.setlocale(_locale.LC_NUMERIC, "C")
-        except _locale.Error as e:
-            logger.warning("Could not force LC_NUMERIC=C: %s", e)
+    # libmpv hard-fails mpv_create() when LC_NUMERIC is not C.
+    try:
+        locale.setlocale(locale.LC_NUMERIC, "C")
+    except locale.Error as e:
+        logger.warning("Could not force LC_NUMERIC=C: %s", e)
 
-    # 4. Process priority (HIGH)
-    if os.name == "nt" and not os.environ.get("HYPERWALL_NO_LOG_SETUP"):
-        try:
-            # Explicit 64-bit handle types: with ctypes' default c_int
-            # restype the pseudo-handle truncates and SetPriorityClass
-            # fails silently (returns 0) — this call was a no-op from v9
-            # through v10.9 while logging success (2026-07-13 audit).
-            k32 = ctypes.windll.kernel32
-            k32.GetCurrentProcess.restype = ctypes.c_void_p
-            k32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-            k32.GetPriorityClass.argtypes = [ctypes.c_void_p]
-            ok = k32.SetPriorityClass(k32.GetCurrentProcess(), 0x00000080)
-            got = k32.GetPriorityClass(k32.GetCurrentProcess())
-            if ok and got == 0x00000080:
-                logger.info("Kernel: Priority set to HIGH (verified).")
-            else:
-                logger.warning(
-                    "Kernel: HIGH priority NOT applied "
-                    "(SetPriorityClass=%s, class=%#x).", ok, got,
-                )
-        except Exception as e:
-            logger.warning("Kernel: priority change failed: %s", e)
-
-    if sys.platform == "darwin":
-        # macOS cells render through QOpenGLWidget (macembed.py): default a
-        # 3.2 core-profile context (resolves to 4.1 on Apple Silicon) before
-        # any GL context can be created.
-        from PyQt6.QtGui import QSurfaceFormat
-        _fmt = QSurfaceFormat()
-        _fmt.setVersion(3, 2)
-        _fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-        _fmt.setDepthBufferSize(0)  # 2D video only
-        QSurfaceFormat.setDefaultFormat(_fmt)
+    # Apple Silicon uses the libmpv render API inside a core-profile widget.
+    fmt = QSurfaceFormat()
+    fmt.setVersion(3, 2)
+    fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+    fmt.setDepthBufferSize(0)
+    QSurfaceFormat.setDefaultFormat(fmt)
 
     app = QApplication(sys.argv)
     theme.apply(app)
-
-    # 5. NVIDIA profile
-    ensure_nvidia_profile()
 
     # Mouse idle hider
     _mouse_hider = MouseIdleHider(MOUSE_IDLE_MS)  # noqa: F841
@@ -314,8 +234,6 @@ def main() -> None:
         backend=resolve_backend(cfg.backend),
     )
     if not cfg.verify_ssl:
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         logger.warning(
             "SSL verification disabled — set verify_ssl=true for production."
         )
@@ -406,14 +324,11 @@ def main() -> None:
 
     # 11. Perf env
     _eff = apply_env_overrides(MPV_OPTS)
-    _render_profile = os.environ.get(
-        "HYPERWALL_RENDER_PROFILE",
-        "hq" if sys.platform == "darwin" else "platform-default",
-    )
+    _render_profile = os.environ.get("HYPERWALL_RENDER_PROFILE", "hq")
     logger.info(
-        "Perf: vo=%s gpu_api=%s hwdec=%s profile=%s render_profile=%s video_sync=%s "
+        "Perf: vo=%s hwdec=%s profile=%s render_profile=%s video_sync=%s "
         "hdr_hint=%s stats=%s",
-        _eff.get("vo"), _eff.get("gpu_api"), _eff.get("hwdec"),
+        _eff.get("vo"), _eff.get("hwdec"),
         _eff.get("profile"), _render_profile, _eff.get("video_sync"),
         _eff.get("target_colorspace_hint"),
         "on" if STATS_ENABLED else "off",

@@ -208,8 +208,7 @@ def test_starvation_counters_reset_per_track():
 
 def run_all() -> int:
     if not _PYQT:
-        print("  SKIP  PyQt6/Windows unavailable — freeze tests run on the "
-              "windows-build job.")
+        print("  SKIP  PyQt6 unavailable — freeze tests need Qt.")
         return 0
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0

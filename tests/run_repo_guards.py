@@ -27,7 +27,7 @@ def test_01_entry_point_imports():
     # (PyQt6, requests, flask, mpv) are installed. In a bare CI/dev env any one
     # of them may be the first to be missing — skip gracefully on any of them
     # rather than only PyQt6 (which was environment-dependent and flaky).
-    _OPTIONAL_DEPS = ("PyQt6", "requests", "flask", "mpv")
+    _OPTIONAL_DEPS = ("PyQt6", "flask", "mpv")
     try:
         from hyperwall.app import main
         assert callable(main)
@@ -91,10 +91,32 @@ def test_05_config_template_exists():
     assert "[Settings]" in content
 
 
-def test_06_nip_file_exists():
-    """NVIDIA profile .nip file is present."""
-    nip = os.path.join(REPO_ROOT, "hyperwall.nip")
-    assert os.path.exists(nip), f"Missing: {nip}"
+def test_06_macos_native_support_surface():
+    """The checkout contains no Windows launcher or NVIDIA support artifact."""
+    forbidden_suffixes = {".bat", ".ps1", ".nip"}
+    artifacts = sorted(
+        os.path.relpath(path.path, REPO_ROOT)
+        for path in os.scandir(REPO_ROOT)
+        if path.is_file() and os.path.splitext(path.name)[1].lower() in forbidden_suffixes
+    )
+    for directory in ("scripts", "tests", "hyperwall"):
+        root = os.path.join(REPO_ROOT, directory)
+        if not os.path.isdir(root):
+            continue
+        for current, _dirs, files in os.walk(root):
+            for name in files:
+                if os.path.splitext(name)[1].lower() in forbidden_suffixes:
+                    artifacts.append(os.path.relpath(os.path.join(current, name), REPO_ROOT))
+    assert not artifacts, f"Windows/native-foreign artifacts remain: {sorted(artifacts)}"
+
+    nvidia = os.path.join(REPO_ROOT, "hyperwall", "nvidia.py")
+    assert not os.path.exists(nvidia), f"NVIDIA platform module remains: {nvidia}"
+
+    app = os.path.join(REPO_ROOT, "hyperwall", "app.py")
+    with open(app, encoding="utf-8") as f:
+        app_source = f.read()
+    assert "HYPERWALL_GPU_API" not in app_source
+    assert "import requests" not in app_source
 
 
 def test_07_empty_init_clean():
@@ -103,47 +125,10 @@ def test_07_empty_init_clean():
     assert __version__
 
 
-def test_08_no_versioned_exe_literals():
-    """No 'hyperwall_v<N>' or hardcoded old-version literals survive.
-
-    Epic 1 (Identity Unification): the exe is versionless ('hyperwall.exe')
-    and every version string derives from hyperwall.__init__.__version__.
-    A stray 'hyperwall_v8' / 'hyperwall_v9' literal or a hardcoded
-    'HyperWall/9.0'-style string means the drift is creeping back and G-Sync
-    isolation (gated on the exe basename) can silently break on the next bump.
-
-    __init__.py is exempt (it defines the single source of truth). This test
-    scans tracked Python + build scripts.
-    """
-    import re
-
-    # Files that carry exe names / version strings. Skip __init__.py (source
-    # of truth) and this test file (which references the forbidden patterns).
-    targets = [
-        "hyperwall/app.py", "hyperwall/cell.py", "hyperwall/config.py",
-        "hyperwall/constants.py", "hyperwall/emby.py", "hyperwall/nvidia.py",
-        "hyperwall/wall.py", "hyperwall/web.py", "hyperwall/wizard.py",
-        "build.bat", "build.ps1", "bootstrap.ps1", "launch.bat",
-    ]
-    # Forbidden: versioned exe basename, or a hardcoded HyperWall/<major>.<minor>
-    # / Version="<major>.<minor>" string (these must derive from VERSION_SHORT).
-    versioned_exe = re.compile(r"hyperwall_v\d")
-    hardcoded_ver = re.compile(r'(HyperWall/|Version=")\d+\.\d+')
-
-    offenders = []
-    for rel in targets:
-        path = os.path.join(REPO_ROOT, rel)
-        if not os.path.exists(path):
-            continue
-        with open(path, encoding="utf-8") as f:
-            for lineno, line in enumerate(f, 1):
-                if versioned_exe.search(line) or hardcoded_ver.search(line):
-                    offenders.append(f"{rel}:{lineno}: {line.strip()}")
-    assert not offenders, (
-        "Version drift detected — derive from hyperwall.__version__ / "
-        "VERSION_SHORT and use versionless 'hyperwall.exe':\n  "
-        + "\n  ".join(offenders)
-    )
+def test_07_package_exports_version():
+    """Package identity remains available without an executable wrapper."""
+    from hyperwall import __version__
+    assert __version__
 
 
 def run_all() -> int:
@@ -154,9 +139,8 @@ def run_all() -> int:
         test_03_config_loads,
         test_04_constants_present,
         test_05_config_template_exists,
-        test_06_nip_file_exists,
-        test_07_empty_init_clean,
-        test_08_no_versioned_exe_literals,
+        test_06_macos_native_support_surface,
+        test_07_package_exports_version,
     ]
     passed = 0
     failed = 0

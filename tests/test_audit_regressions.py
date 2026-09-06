@@ -1,7 +1,7 @@
 """Regressions from the 2026-07-13 full performance/quality audit.
 
 Each test pins a specific certain-confidence finding. Offscreen-Qt tests
-skip on the pure-logic ubuntu CI lane (they run on windows-build).
+skip on the pure-logic lane when PyQt6 is unavailable.
 """
 import os
 import sys
@@ -153,8 +153,7 @@ def test_fetch_items_paginates_beyond_page_limit():
 
 def run_all() -> int:
     if not _PYQT:
-        print("  SKIP  PyQt6/Windows unavailable — audit regressions run on "
-              "the windows-build job.")
+        print("  SKIP  PyQt6 unavailable — GUI audit regressions need Qt.")
         return 0
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0

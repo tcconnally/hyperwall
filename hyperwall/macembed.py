@@ -1,11 +1,7 @@
 """Hyperwall — macOS video surface (libmpv render API).
 
-mpv's Swift macOS backend does NOT support --wid window embedding (mpv
-maintainer in mpv-examples#29: "isn't supported by the new swift backend";
-independently confirmed by IPTVnator — audio with a black video surface).
-The only supported embed path on macOS is the render API: the cell's mpv
-runs vo=libmpv and renders into this QOpenGLWidget's framebuffer. This is
-the same architecture IINA and IPTVnator use.
+The macOS path uses libmpv's render API: each cell runs vo=libmpv and renders
+into this QOpenGLWidget's framebuffer.
 
 Threading rules honored here (libmpv render.h + CLAUDE.md observer rules):
 - The update callback fires on an mpv thread. It must not call mpv or touch
@@ -201,7 +197,7 @@ class MpvGLWidget(QOpenGLWidget):
         try:
             if self._ctx is None:
                 # No mpv yet (staggered startup) — paint solid black so the
-                # composited cell matches the Windows background.
+                # composited cell matches the native macOS background.
                 p = QPainter(self)
                 p.fillRect(self.rect(), Qt.GlobalColor.black)
                 p.end()

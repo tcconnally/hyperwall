@@ -6,30 +6,26 @@ check the rule. Before claiming one of these is fixed, run the probe.
 
 ## Platforms
 
-- **macOS has no `--wid` embed.** mpv's Swift backend doesn't support it
-  (mpv-examples#29, maintainer-confirmed; IPTVnator hit the black-surface
-  failure). macOS cells render via the libmpv render API (`vo=libmpv`) into
-  `macembed.MpvGLWidget` (QOpenGLWidget) — the platform opts in
-  `constants.mpv_opts_for_platform()` pick this; never pass `wid=` on darwin.
+- **Use the macOS render path only.** Each cell renders via the libmpv render API
+  (`vo=libmpv`) into `macembed.MpvGLWidget` (QOpenGLWidget). Do not add a
+  native-window embedding path; `constants.macos_mpv_opts()` supplies the
+  supported configuration.
 - Render API threading (render.h): the update callback fires on an mpv
   thread — bare signal emit only; all `mpv_render_*` calls run on the GUI
   thread with the widget's GL context current; free the render context
   BEFORE `mpv.terminate()` (`VideoCell._destroy_mpv` order is load-bearing).
 - Never let `mpv_render_context_render` block the GUI thread on the audio
   clock: `block_for_target_time=False` + `video-timing-offset=0` on darwin.
-- The `& 0xFFFFFFFF` HWND mask is Windows-only (`constants.native_wid`) —
-  it would truncate the 64-bit NSView pointer on macOS.
 - libmpv discovery on macOS: `DYLD_FALLBACK_LIBRARY_PATH` must include the
   Homebrew prefix lib dir BEFORE python starts (launch.sh) — setting it
   from inside Python is a no-op.
-- **libmpv refuses non-C LC_NUMERIC.** `mpv_create()` returns NULL under
+- libmpv refuses non-C LC_NUMERIC. `mpv_create()` returns NULL under
   e.g. en_US.UTF-8 (mpv player/main.c check_locale) and python-mpv then
-  SEGFAULTS in mpv_set_option — the crash surfaces at first MPV(), not at
-  import. POSIX Python sets LC_ALL from the env at startup; the Windows
-  CRT keeps LC_NUMERIC=C, which is why Windows never hit it. app.py forces
-  `setlocale(LC_NUMERIC, "C")` early; launch.sh exports it too. If a
+  SEGFAULTS in mpv_set_option. app.py forces `setlocale(LC_NUMERIC, "C")`
+  early; launch.sh exports it too. If a
   libmpv embed segfaults at 0x48 (NULL handle), check the locale first.
-- ru_maxrss units differ: bytes on macOS, KiB on Linux (soak sampler).
+- macOS `ru_maxrss` is bytes; pair its high-water value with current RSS
+  samples before calling a retained cache a leak.
 - PyQt6 `QOpenGLContext.getProcAddress` wants bytes/QByteArray, not str —
   and ANY exception inside a ctypes callback is swallowed by the FFI, so
   libmpv gets a garbage GL function pointer and bus-errors when it calls
@@ -93,18 +89,6 @@ check the rule. Before claiming one of these is fixed, run the probe.
   `correct-downscaling` are guarded by a repo test. Don't reintroduce
   `profile=fast`.
 
-## ctypes / Win32
-
-- **Declare `restype`/`argtypes` on every Win32 call.** The default `c_int`
-  restype truncates 64-bit handles: `GetCurrentProcess()`'s pseudo-handle
-  becomes invalid and the next call **fails silently** (returns 0, no
-  exception). This shipped twice: the soak resource sampler logged zeros for
-  an hour; `SetPriorityClass` was a no-op from v9 to v10.9 while the log
-  claimed HIGH priority.
-- Check Win32 return values; log a WARNING on failure. Never log success
-  you didn't verify (read the state back where cheap).
-- HWNDs from `winId()` need the `& 0xFFFFFFFF` mask before handing to mpv.
-
 ## Qt
 
 - `WallController` is a **plain object**, not a QObject — never pass it as a
@@ -130,10 +114,8 @@ check the rule. Before claiming one of these is fixed, run the probe.
   while the server rejected the write.
 - **Paginate Emby item queries** (StartIndex loop until TotalRecordCount) —
   a fixed Limit silently truncated large libraries behind a success log.
-- Emby writes/executions must be **verified before logging success**: NPI
-  profile import now waits for the process and checks exit code before
-  writing the sentinel (a launched-but-failed import used to be cached as
-  success until the next driver update).
+- Emby writes/executions must be **verified before logging success**. Read the
+  response status back before reporting a server-side change as complete.
 - Cached UI state must have ONE owner: `controller.controls_visible` is the
   global toggle only (a cell's autohide once cleared it wall-wide);
   `controls_visible` inits False to match hidden bars; seek release restores
@@ -159,16 +141,14 @@ check the rule. Before claiming one of these is fixed, run the probe.
 
 ## Process / repo
 
-- The exe at repo root is the **shortcut artifact** and G-Sync isolation
-  keys on the `hyperwall*.exe` basename — always rebuild (`build.ps1`, pwsh 7)
-  after merging source changes, and check the log's `Runtime:` banner
-  version against `hyperwall/__init__.py.__version__` before diagnosing
-  anything. Stale-exe runs have caused three separate false bug hunts.
+- The macOS launch path is `launch.sh`; it must establish the Homebrew
+  `libmpv` search path before Python starts. Do not bypass it for playback
+  tests.
 - This working copy is **shared** between the owner's terminal and agent
   sessions — verify `git branch --show-current` immediately before every
   commit; owner pulls can switch HEAD mid-task.
 - The version literal is pinned in `tests/run_repo_guards.py::test_02` —
   bump both together.
-- Verification style: probe against the shipped `mpv-2.dll` headlessly
-  (offscreen Qt / `vo=null`) before shipping playback changes; the owner's
-  rule is **never auto-launch the wall**.
+- Verification style: use the pure-logic suite and compile check locally, then
+  run a short target-Mac pilot before a long playback soak. Never auto-launch
+  the wall from a headless verification command.

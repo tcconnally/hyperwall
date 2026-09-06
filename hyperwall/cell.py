@@ -1,17 +1,16 @@
 """
 Hyperwall — VideoCell widget.
 
-Embeds a libmpv player in a QFrame with overlaid controls.
+Embeds a libmpv player in a QOpenGLWidget with overlaid controls.
 One VideoCell = one video in the wall grid.
 
 Lifecycle: create() → play() → destroy()
-  - create(): allocates native window, creates mpv instance
+  - create(): allocates the render surface and creates the mpv instance
   - play(): loads a URL into the existing mpv (gapless reuse)
   - destroy(): terminates mpv, cleans up
 
 Key fixes from v8:
   - Single create path (_ensure_mpv) with visibility + realized guard
-  - HWND sign-extension mask (& 0xFFFFFFFF)
   - C stdio redirect during mpv creation (suppress FFmpeg noise)
   - Bounded mpv terminate via ThreadPoolExecutor (1.5s timeout)
   - Generation counter to ignore stale observer callbacks
@@ -73,7 +72,6 @@ from .constants import (
     WATCHDOG_INTERVAL_MS,
     _s,
     apply_env_overrides,
-    native_wid,
 )
 from .reliability import (
     apply_jitter,
@@ -254,7 +252,7 @@ class VideoCell(QWidget):
 
         # Internal state
         self._mpv: Any = None          # mpv.MPV instance
-        self._render_context_released = sys.platform != "darwin"
+        self._render_context_released = False
         self._shutdown_render_release_requested = False
         self._shutdown_render_release_deadline = 0.0
         self._render_finalizer_pending = False
@@ -402,19 +400,9 @@ class VideoCell(QWidget):
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
 
-        # Video surface. macOS: --wid embedding is unsupported by mpv's
-        # Swift backend, so cells render through the libmpv render API into
-        # a QOpenGLWidget (macembed.py). Windows: native HWND embed below.
-        if sys.platform == "darwin":
-            from .macembed import MpvGLWidget
-            self.video_frame = MpvGLWidget(self)
-        else:
-            self.video_frame = QFrame(self)
-            self.video_frame.setStyleSheet("background: black;")
-            self.video_frame.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self.video_frame.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
-            self.video_frame.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
-            self.video_frame.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        # Every cell uses the libmpv render API through a QOpenGLWidget.
+        from .macembed import MpvGLWidget
+        self.video_frame = MpvGLWidget(self)
         vbox.addWidget(self.video_frame, 1)
 
         self._build_controls()
@@ -535,43 +523,23 @@ class VideoCell(QWidget):
             # whichever track happens to be active when a delayed log arrives.
             self._mpv_log(level, component, message, next_gen, None, None)
 
-        if sys.platform != "darwin":
-            # HWND sign-extension fix: mask to 32-bit (Windows only — the
-            # mask would corrupt a 64-bit pointer elsewhere).
-            wid = native_wid(int(self.video_frame.winId()))
-            if wid == 0:
-                logger.warning("video_frame.winId() == 0 — widget not realized yet.")
-                return
-
         # Suppress FFmpeg C-level stdout/stderr during creation
         _std_saved = (sys.stdout, sys.stderr)
         _devnull = open(os.devnull, "w")
         try:
             sys.stdout = sys.stderr = _devnull
-            if sys.platform == "darwin":
-                # No --wid on macOS (unsupported by mpv's Swift backend):
-                # vo=libmpv (from the platform opts) renders through the
-                # MpvGLWidget's GL framebuffer.
-                m = _mpv.MPV(
-                    log_handler=_log_handler,
-                    **_opts,
-                )
-            else:
-                m = _mpv.MPV(
-                    wid=str(wid),
-                    log_handler=_log_handler,
-                    **_opts,
-                )
+            m = _mpv.MPV(
+                log_handler=_log_handler,
+                **_opts,
+            )
         finally:
             sys.stdout, sys.stderr = _std_saved
             _devnull.close()
 
-        if sys.platform == "darwin":
-            # Render context must exist before the first loadfile hits the
-            # VO (render.h); attach_mpv creates it now if GL is up, else at
-            # initializeGL — which precedes the staggered first play().
-            self.video_frame.attach_mpv(m)
-            self._render_context_released = False
+        # Render context must exist before the first loadfile hits the VO.
+        # attach_mpv creates it now if GL is up, else at initializeGL.
+        self.video_frame.attach_mpv(m)
+        self._render_context_released = False
 
         # Apply initial state
         try:
@@ -887,10 +855,7 @@ class VideoCell(QWidget):
         """Stop the VO before freeing a macOS libmpv render context."""
         if self._mpv is None:
             return
-        if (
-            sys.platform == "darwin"
-            and getattr(self.video_frame, "_ctx", None) is None
-        ):
+        if getattr(self.video_frame, "_ctx", None) is None:
             # The wall may already have performed the GUI-thread pre-release;
             # do not send a second stop after the render context is gone.
             return
@@ -898,19 +863,17 @@ class VideoCell(QWidget):
             self._mpv["mute"] = True
         except Exception:
             pass
-        if sys.platform == "darwin":
-            try:
-                # render_context_free() disables an active VO. Stop first so
-                # the core does not continue submitting frames after the
-                # context has been freed (the soak logged "No render context
-                # set" during the old shutdown ordering).
-                self._mpv.command("stop")
-            except Exception as e:
-                logger.debug("mpv stop before render release failed: %s", e)
+        try:
+            # render_context_free() disables an active VO. Stop first so the
+            # core does not continue submitting frames after the context has
+            # been freed.
+            self._mpv.command("stop")
+        except Exception as e:
+            logger.debug("mpv stop before render release failed: %s", e)
 
     def _release_render_context_on_gui(self) -> bool:
         """Release the macOS render context only from the widget's thread."""
-        if sys.platform != "darwin" or self._render_context_released:
+        if self._render_context_released:
             return True
         if self._mpv is None:
             self._render_context_released = True
@@ -928,7 +891,7 @@ class VideoCell(QWidget):
         self, shutdown_deadline: float | None = None,
     ) -> None:
         """Retry GUI render release after an in-flight native call drains."""
-        if sys.platform != "darwin" or self._render_context_released:
+        if self._render_context_released:
             return
         self._shutdown_render_release_requested = True
         candidate = (
@@ -1047,18 +1010,16 @@ class VideoCell(QWidget):
             return
         if STATS_ENABLED:
             self._flush_stats(audio_lock_held=True)
-        if sys.platform == "darwin":
-            # The render context belongs to the GUI thread. A worker may only
-            # destroy the core after the GUI has released it; otherwise leave
-            # the core abandoned rather than touching Qt/GL off-thread.
-            if not self._render_context_released:
-                if QThread.currentThread() is not self.thread():
-                    logger.warning(
-                        "Skipping off-thread mpv destroy before GUI render release."
-                    )
-                    return
-                if not self._release_render_context_on_gui():
-                    return
+        # The render context belongs to the GUI thread. A worker may only
+        # destroy the core after the GUI has released it.
+        if not self._render_context_released:
+            if QThread.currentThread() is not self.thread():
+                logger.warning(
+                    "Skipping off-thread mpv destroy before GUI render release."
+                )
+                return
+            if not self._release_render_context_on_gui():
+                return
         # Silence the handle BEFORE terminate: a wedged teardown gets
         # abandoned on a daemon thread below, and an abandoned-but-alive
         # instance that was audible would keep playing sound that no
@@ -1297,11 +1258,6 @@ class VideoCell(QWidget):
 
     def showEvent(self, event: Any) -> None:
         super().showEvent(event)
-        if sys.platform != "darwin":
-            # Windows: force native window creation for the wid embed.
-            # QOpenGLWidget needs no winId (and native-windowing it would
-            # change compositing), so skip on macOS.
-            self.video_frame.winId()
         if not self._played_anything and self.current_item is None:
             # Visual feedback while staggered startup loads content.
             self._show_loading()
@@ -1588,8 +1544,7 @@ class VideoCell(QWidget):
                 on_started(False)
             return False
         if not self._audio_arm_call_lock.acquire(blocking=False):
-            if sys.platform == "darwin":
-                self._invalidate_async_play()
+            self._invalidate_async_play()
             self._defer_play_until_audio_idle(
                 item, url, preserve_failure_state, on_started, session_id,
                 playback_plan,
@@ -1717,40 +1672,11 @@ class VideoCell(QWidget):
             PlaybackEvent.LOAD_REQUESTED,
             self._playback_state_identity(self._pending_native_context),
         )
-        if sys.platform == "darwin":
-            token = self._current_playback_token()
-            if token is None or not self._queue_async_play(token, url, on_started):
-                self._switching = False
-                return False
-            return None
-        try:
-            self._mpv["mute"] = self.muted
-            self._mpv.command("loadfile", url)
-            self._forget_prefetch_after_native_clear(requeue=True)
-            # mpv emits the outgoing end-file callbacks while this command is
-            # still executing. Keep the old native context until command
-            # completion, then bind subsequent callbacks to this new resource.
-            # Keep the old context until the matching start-file event.
-            # keep-open pauses the player at EOF and the pause property
-            # PERSISTS across loadfile (probed live 2026-07-12) — without an
-            # explicit unpause every post-EOF load sits frozen on frame 0.
-            self._mpv["pause"] = False
-            self._paused = False
-            self.btn_play.setText(_G_PAUSE)
-            if not self.muted and not self._audio_started:
-                self._enable_audio_track()
-        except Exception as e:
+        token = self._current_playback_token()
+        if token is None or not self._queue_async_play(token, url, on_started):
             self._switching = False
-            failed_context = (
-                self._pending_native_context
-                or self._native_active_context
-                or (self._mpv_gen, self._track_generation,
-                    item.get("Id"), url, session_id or self._emby_session_id)
-            )
-            logger.error("mpv loadfile failed: %s", e)
-            self._sig_eof.emit(failed_context, "error")
             return False
-        return True
+        return None
 
     # ── gapless prefetch ──────────────────────────────────────────────────
 
@@ -2076,15 +2002,7 @@ class VideoCell(QWidget):
     def advance_to_prefetched(self) -> bool:
         if self._closing or self._prefetched is None or self._mpv is None:
             return False
-        if sys.platform == "darwin":
-            return self._queue_prefetched_advance()
-        if not self._audio_arm_call_lock.acquire(blocking=False):
-            return False
-        try:
-            self._cancel_audio_arm(timeout_s=0.0)
-            return self._advance_to_prefetched_impl()
-        finally:
-            self._audio_arm_call_lock.release()
+        return self._queue_prefetched_advance()
 
     def _advance_to_prefetched_impl(self) -> bool:
         """Jump to the prefetched playlist entry.
@@ -2628,14 +2546,6 @@ class VideoCell(QWidget):
         """
         if self._closing or self._mpv is None:
             return
-        if sys.platform != "darwin":
-            token = self._current_playback_token()
-            if enabled:
-                self._enable_audio_track_sync(token)
-            else:
-                self._disable_audio_track_sync(token)
-            return
-
         mpv_ref = self._mpv
         with self._audio_arm_lock:
             self._audio_arm_token += 1
@@ -2822,95 +2732,8 @@ class VideoCell(QWidget):
         except Exception as e:
             logger.debug("Native %s write failed: %s", name, e)
 
-    def _enable_audio_track_sync(
-        self, token: PlaybackToken | None = None,
-    ) -> None:
-        if self._closing or self.muted:
-            return
-        if token is None:
-            token = self._current_playback_token()
-            if token is None:
-                return
-        if not self._playback_token_is_current(token):
-            return
-        if not self._audio_arm_call_lock.acquire(blocking=False):
-            QTimer.singleShot(
-                50, lambda token=token: self._enable_audio_track_sync(token),
-            )
-            return
-        try:
-            self._enable_audio_track_sync_locked(token)
-        finally:
-            self._audio_arm_call_lock.release()
-
-    def _disable_audio_track_sync(
-        self, token: PlaybackToken | None = None,
-    ) -> None:
-        """Stop the audio demuxer synchronously on non-macOS platforms."""
-        if self._closing or self._mpv is None or not self.muted:
-            return
-        if token is None:
-            token = self._current_playback_token()
-            if token is None:
-                return
-        if not self._playback_token_is_current(token):
-            return
-        if not self._audio_arm_call_lock.acquire(blocking=False):
-            QTimer.singleShot(
-                50, lambda token=token: self._disable_audio_track_sync(token),
-            )
-            return
-        try:
-            if self.muted and self._playback_token_is_current(token):
-                self._mpv["aid"] = audio_track_for_mute(True)
-                self._audio_started = False
-                logger.info("AUDIO disarm: aid=0ms")
-        except Exception as e:
-            logger.warning("Audio track disarm failed on mute: %s", e)
-        finally:
-            self._audio_arm_call_lock.release()
-
-    def _enable_audio_track_sync_locked(
-        self, token: PlaybackToken | None = None,
-    ) -> None:
-        """Arm audio synchronously on platforms without the macOS GUI stall."""
-        if (
-            self._closing
-            or self.muted
-            or self._audio_started
-            or self._mpv is None
-            or (token is not None and not self._playback_token_is_current(token))
-        ):
-            return
-        try:
-            t0 = _time.perf_counter()
-            self._mpv["aid"] = "auto"
-            aid_ms = (_time.perf_counter() - t0) * 1000
-            self._audio_started = True
-            # time-pos is maintained by the observer on the mpv event thread.
-            pos = self._play_pos if self._play_pos > 0 else None
-            seek_ms = 0.0
-            if pos is not None:
-                t0 = _time.perf_counter()
-                self._mpv.seek(pos, "absolute+keyframes")
-                seek_ms = (_time.perf_counter() - t0) * 1000
-            logger.info(
-                "AUDIO arm: aid=%.0fms seek=%.0fms cached-pos=%s",
-                aid_ms, seek_ms, "yes" if pos is not None else "no",
-            )
-        except Exception as e:
-            logger.warning("Audio track arm failed on unmute: %s", e)
-
     def _enable_audio_track(self) -> None:
-        """Start lazy audio arm without blocking the macOS Qt GUI thread.
-
-        Muted cells load with aid=no (see _ensure_mpv). macOS uses the worker
-        because its render-path soak showed long libmpv IPC stalls; Windows
-        and Linux retain the established synchronous behavior.
-        """
-        if sys.platform != "darwin":
-            self._enable_audio_track_sync(self._current_playback_token())
-            return
+        """Start lazy audio arm without blocking the macOS Qt GUI thread."""
         if self._audio_started or self._mpv is None:
             return
         try:
@@ -2959,9 +2782,6 @@ class VideoCell(QWidget):
 
         _attempt()
 
-    def _write_mute_native(self, muted: bool) -> None:
-        self._write_native_property_latest("mute", muted)
-
     def _apply_mute(self, muted: bool) -> None:
         """Single writer for the mute state itself (cache + mpv + UI).
 
@@ -2975,10 +2795,7 @@ class VideoCell(QWidget):
         else:
             self._enable_audio_track()
         if self._mpv is not None:
-            if sys.platform == "darwin":
-                self._queue_mute_native(muted)
-            else:
-                self._write_mute_native(muted)
+            self._queue_mute_native(muted)
         self._sync_mute_ui(muted)
 
     @traced("cell._toggle_mute")
@@ -2996,9 +2813,6 @@ class VideoCell(QWidget):
         if self.vol_slider.value() >= 10:
             self._last_vol = self.vol_slider.value()
 
-    def _write_volume_native(self, value: float) -> None:
-        self._write_native_property_latest("volume", value)
-
     def _vol_changed(self, val: int) -> None:
         # Remember deliberate resting volumes only. Mid-drag samples must
         # not count: dragging DOWN from 70 sweeps every value ≥10 past this
@@ -3010,10 +2824,7 @@ class VideoCell(QWidget):
         if val >= 10 and not self.vol_slider.isSliderDown():
             self._last_vol = val
         if self._mpv is not None:
-            if sys.platform == "darwin":
-                self._queue_native_property("volume", float(val))
-            else:
-                self._write_volume_native(float(val))
+            self._queue_native_property("volume", float(val))
         if val > 0 and self.muted:
             self._apply_mute(False)   # drag up from silence = unmute
         elif val == 0 and not self.muted:

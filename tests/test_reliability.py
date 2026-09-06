@@ -484,8 +484,8 @@ def test_constants_defaults_load():
     assert c.STALL_TIMEOUT_S == 20
     assert c.WATCHDOG_INTERVAL_MS == 5_000
     assert c.CRASH_LOOP_THRESHOLD == 5
-    expected_per_cell, expected_budget = c.cache_defaults_for_platform(
-        sys.platform, c._physical_memory_mb(),
+    expected_per_cell, expected_budget = c.macos_cache_defaults(
+        c._physical_memory_mb(),
     )
     assert c.DEMUXER_PER_CELL_MB == expected_per_cell
     assert c.CACHE_BUDGET_MB == expected_budget
@@ -642,17 +642,16 @@ def test_transcode_prefetch_retry_constant_defaults():
 
 
 def test_macos_16gb_uses_conservative_cache_defaults():
-    from hyperwall.constants import cache_defaults_for_platform
-    assert cache_defaults_for_platform("darwin", 16 * 1024) == (256, 2_048)
-    assert cache_defaults_for_platform("darwin", 32 * 1024) == (1_024, 8_192)
-    assert cache_defaults_for_platform("linux", 16 * 1024) == (1_024, 8_192)
+    from hyperwall.constants import macos_cache_defaults
+    assert macos_cache_defaults(16 * 1024) == (256, 2_048)
+    assert macos_cache_defaults(32 * 1024) == (512, 4_096)
 
 
 def test_macos_8_cell_cache_is_256_mib_with_bounded_readahead():
-    from hyperwall.constants import apply_cache_budget, mpv_opts_for_platform
+    from hyperwall.constants import apply_cache_budget, macos_mpv_opts
     opts = apply_cache_budget(
-        mpv_opts_for_platform("darwin"), 8,
-        platform="darwin", physical_memory_mb=16 * 1024,
+        macos_mpv_opts(profile="safe"), 8,
+        physical_memory_mb=16 * 1024,
     )
     assert opts["demuxer_max_bytes"] == "256MiB"
     assert opts["demuxer_readahead_secs"] == 30
@@ -660,30 +659,20 @@ def test_macos_8_cell_cache_is_256_mib_with_bounded_readahead():
 
 
 def test_fixed_16gb_macos_8_cell_does_not_enable_direct_only_by_default():
-    import hyperwall.constants as constants
-    from hyperwall.constants import stable_direct_profile_for_platform
+    from hyperwall.constants import stable_direct_profile
 
     # The measured direct-only profile was a safety escape, not a library
     # admission policy. The normal path must retain the complete library and
     # let the playback planner select server H.264/AAC transcoding.
-    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "auto") is False
-    original_probe = constants._physical_memory_mb
-    constants._physical_memory_mb = lambda: None
-    try:
-        assert stable_direct_profile_for_platform("darwin", None, 8, "auto") is False
-    finally:
-        constants._physical_memory_mb = original_probe
-    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 6, "auto") is False
-    assert stable_direct_profile_for_platform("darwin", 32 * 1024, 8, "auto") is False
-    assert stable_direct_profile_for_platform("linux", 16 * 1024, 8, "auto") is False
-    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "off") is False
+    assert stable_direct_profile(n_cells=8, override="auto") is False
+    assert stable_direct_profile(n_cells=6, override="auto") is False
+    assert stable_direct_profile(n_cells=8, override="off") is False
 
 
 def test_direct_only_profile_remains_an_explicit_escape_hatch():
-    from hyperwall.constants import stable_direct_profile_for_platform
+    from hyperwall.constants import stable_direct_profile
 
-    assert stable_direct_profile_for_platform("darwin", 16 * 1024, 8, "on") is True
-    assert stable_direct_profile_for_platform("linux", 64 * 1024, 2, "on") is True
+    assert stable_direct_profile(n_cells=8, override="on") is True
 
 
 def test_apply_cache_budget_shape():

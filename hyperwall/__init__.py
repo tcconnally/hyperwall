@@ -18,12 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Embed architecture label for the runtime banner — d3d11 wid-embed on
-# Windows, libmpv render API (QOpenGLWidget) on macOS.
-PACKAGE_LABEL = (
-    "videotoolbox-libmpv-render" if sys.platform == "darwin"
-    else "d3d11-native-embed"
-)
+# Embed architecture label for the runtime banner.
+PACKAGE_LABEL = "macos-libmpv-render"
 
 
 def _repo_root() -> Path:

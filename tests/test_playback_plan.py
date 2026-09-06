@@ -235,7 +235,7 @@ def test_wall_controller_uses_explicit_plan_boundary():
 
 def test_wall_controller_wires_full_library_pool_and_explicit_direct_only_escape():
     wall_source = Path(__file__).resolve().parents[1].joinpath("hyperwall", "wall.py").read_text()
-    assert "stable_direct_profile_for_platform" in wall_source
+    assert "stable_direct_profile" in wall_source
     assert "select_playback_candidates" in wall_source
     assert "Full-library playback profile" in wall_source
 

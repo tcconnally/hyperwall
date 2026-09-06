@@ -20,8 +20,8 @@ def _source(relative: str) -> str:
 
 def test_audio_relock_uses_observed_position_cache():
     source = _source("hyperwall/cell.py")
-    start = source.index("    def _start_audio_arm")
-    end = source.index("\n    def _sync_mute_ui", start)
+    start = source.index("    def _request_audio_track_state")
+    end = source.index("\n    def _start_audio_arm", start)
     body = source[start:end]
     assert "self._play_pos" in body
     assert "self._mpv.time_pos" not in body
@@ -43,10 +43,10 @@ def test_mute_disarms_audio_instead_of_only_silencing_output():
     body = source[start:end]
     assert "_disable_audio_track" in body
     assert "audio_track_for_mute" in source
-    disarm = source[source.index("    def _disable_audio_track_sync"):source.index("\n    def _enable_audio_track_sync_locked", source.index("    def _disable_audio_track_sync"))]
+    disarm = source[source.index("    def _disable_audio_track"):source.index("\n    def _enable_audio_track", source.index("    def _disable_audio_track"))]
     assert "_request_audio_track_state(False)" in source
-    assert "audio_track_for_mute(True)" in disarm
-    assert "_audio_arm_call_lock" in disarm
+    assert "_request_audio_track_state(False)" in disarm
+    assert "audio_track_for_mute(not enabled)" in source
 
 
 def test_recreated_mpv_defers_audio_until_after_load():
@@ -92,7 +92,7 @@ def test_audio_arm_transition_serializes_replacement():
     assert "_defer_play_until_audio_idle" in body
 
     start = source.index("    def _audio_arm_worker")
-    end = source.index("\n    def _enable_audio_track_sync", start)
+    end = source.index("\n    def _enable_audio_track", start)
     body = source[start:end]
     assert "with self._audio_arm_call_lock" in body
     assert "_audio_arm_is_current" in body
@@ -100,8 +100,8 @@ def test_audio_arm_transition_serializes_replacement():
     start = source.index("    def advance_to_prefetched")
     end = source.index("\n    def _advance_to_prefetched_impl", start)
     body = source[start:end]
-    assert "_audio_arm_call_lock.acquire(blocking=False)" in body
-    assert "return False" in body
+    assert "_queue_prefetched_advance" in body
+    assert "sys.platform" not in body
 
 
 def test_macos_normal_load_is_deferred_off_gui_thread():
@@ -110,11 +110,8 @@ def test_macos_normal_load_is_deferred_off_gui_thread():
     end = cell.index("\n    # ── gapless prefetch", start)
     body = cell[start:end]
     assert "_queue_async_play" in body
-    assert "sys.platform == \"darwin\"" in body
-    async_start = body.index("        if sys.platform == \"darwin\"")
-    async_end = body.index("        try:", async_start)
-    assert "and not need_create" not in body[async_start:async_end]
-    assert "self._mpv.command(\"loadfile\", url)" not in body[async_start:async_end]
+    assert "sys.platform" not in body
+    assert "self._mpv.command(\"loadfile\", url)" not in body
     worker_start = cell.index("    def _async_play_worker")
     worker_end = cell.index("\n    def _finish_async_play", worker_start)
     worker = cell[worker_start:worker_end]
@@ -126,22 +123,21 @@ def test_macos_normal_load_is_deferred_off_gui_thread():
     assert "not self._closing" in cell[helper_start:helper_end]
     assert "_finish_async_play" in cell
 
-def test_non_macos_audio_disarm_retry_rechecks_latest_mute_state():
+def test_audio_disarm_retry_rechecks_latest_mute_state():
     source = _source("hyperwall/cell.py")
-    start = source.index("    def _disable_audio_track_sync")
-    end = source.index("\n    def _enable_audio_track_sync_locked", start)
+    start = source.index("    def _disable_audio_track")
+    end = source.index("\n    def _enable_audio_track", start)
     body = source[start:end]
-    assert "self.muted" in body
-    assert "lambda token=token" in body
+    assert "_request_audio_track_state(False)" in body
 
 
-def test_non_macos_audio_arm_preserves_sync_path():
+def test_audio_arm_has_no_platform_fallback():
     source = _source("hyperwall/cell.py")
     start = source.index("    def _enable_audio_track(self)")
     end = source.index("\n    def _sync_mute_ui", start)
     body = source[start:end]
-    assert 'sys.platform != "darwin"' in body
-    assert "_enable_audio_track_sync" in body
+    assert "sys.platform" not in body
+    assert "_start_audio_arm" in body
 
 
 def test_stats_dump_reports_budgeted_mpv_options():
@@ -202,7 +198,7 @@ def test_macos_prefetched_advance_is_queued_off_gui_thread():
     body = source[start:end]
     assert "_queue_prefetched_advance" in body
     assert "playlist-next" not in body
-    assert "sys.platform == \"darwin\"" in body
+    assert "sys.platform" not in body
 
 
 def test_wall_does_not_rearm_prefetch_before_async_advance_finishes():
@@ -413,7 +409,10 @@ def test_native_callbacks_bind_active_event_track_context():
     assert "context: NativeContext" in observers
     assert "property_observer" in observers
     assert "_native_context_is_current(context)" in observers
-    log = cell[cell.index("        def _log_handler"):cell.index("        if sys.platform", cell.index("        def _log_handler"))]
+    log_start = cell.index("        def _log_handler")
+    log_end = cell.index("        self._mpv_log(", log_start)
+    log = cell[log_start:log_end + 120]
+    assert "next_gen, None, None" in log
     assert "_native_active_context" not in log
 
 
@@ -488,7 +487,7 @@ def test_deferred_session_cleanup_retries_after_outage():
     assert "self._session_cleanup_timer.stop()" in wall
 
 
-def test_windows_callback_contracts_are_generation_aware():
+def test_callback_contracts_are_generation_aware():
     freeze = _source("tests/test_freeze_visibility.py")
     audit = _source("tests/test_audit_regressions.py")
     assert "_handle_buffering(" in freeze
@@ -502,8 +501,7 @@ def test_macos_mute_native_write_is_deferred_from_gui_handler():
     end = cell.index("\n    @traced(\"cell._toggle_mute\")", start)
     body = cell[start:end]
     assert "_queue_mute_native" in body
-    darwin = body[body.index('if sys.platform == "darwin":'):]
-    assert "_queue_mute_native(muted)" in darwin
+    assert "_queue_mute_native(muted)" in body
 
 
 def test_shutdown_stops_qt_timers_on_gui_thread_before_pool_release():
@@ -592,7 +590,7 @@ def test_audio_workers_reject_shutdown_before_touching_native_state():
 def test_native_control_retries_preserve_latest_control_token():
     cell = _source("hyperwall/cell.py")
     start = cell.index("    def _queue_native_property")
-    end = cell.index("\n    def _write_mute_native", start)
+    end = cell.index("\n    def _apply_mute", start)
     body = cell[start:end]
     assert "_native_control_is_current" in body
     assert "token" in body
@@ -685,9 +683,9 @@ def test_delayed_native_retries_are_playback_token_bound():
     assert "valid is not None and not valid()" in body
     seek = cell[cell.index('    @traced("cell._seek_release")'):cell.index("    def set_paused_ui")]
     assert "lambda token=token: self._seek_release(token)" in seek
-    audio = cell[cell.index("    def _enable_audio_track_sync("):cell.index("    def _enable_audio_track(self)")]
+    audio = cell[cell.index("    def _audio_arm_worker"):cell.index("    def _enable_audio_track(self)")]
     assert "self._closing" in audio
-    assert "lambda token=token: self._enable_audio_track_sync(token)" in audio
+    assert "_audio_arm_is_current" in audio
 
 
 def test_native_context_session_identity_is_validated():

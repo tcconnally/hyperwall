@@ -78,5 +78,5 @@ the redacted artifact tree is created.
    separately tested native adapter is ready.
 6. Pass `--expected-cells` for every controlled soak; a directory name is not
    evidence of the actual grid size.
-7. Treat the Windows/macOS GUI suites and the full repository runner as the
+7. Treat the macOS GUI suites and the full repository runner as the
    acceptance gate for each migration slice.
