@@ -275,7 +275,6 @@ def test_active_unknown_transcode_is_not_demoted_when_capacity_is_full():
     start = wall.index("    def _admit_playback_plan")
     end = wall.index("\n    def _build_playback_request", start)
     admission = wall[start:end]
-    assert 'plan.reason == "missing_metadata_transcode"' in admission
     assert "return None" in admission
 
     start = wall.index("    def _hand_off")
@@ -290,6 +289,21 @@ def test_active_unknown_transcode_is_not_demoted_when_capacity_is_full():
     assert "claim_front" in retry
     assert "cell_identity" in retry
     assert "force_transcode" in handoff
+
+
+def test_over_budget_transcode_is_queued_not_demoted_when_capacity_is_full():
+    wall = _source("hyperwall/wall.py")
+    start = wall.index("    def _admit_playback_plan")
+    end = wall.index("\n    def _build_playback_request", start)
+    admission = wall[start:end]
+    assert 'reason="transcode_capacity_unavailable"' not in admission
+    assert "return None" in admission
+
+    start = wall.index("    def _hand_off")
+    end = wall.index("\n    def _arm_prefetch", start)
+    handoff = wall[start:end]
+    assert "requested_plan.requires_transcode_lease" in handoff
+    assert "_schedule_transcode_handoff_retry" in handoff
 
 
 def test_decoder_faults_have_per_cell_software_fallback_path():

@@ -184,10 +184,10 @@ MAX_DIRECT_BITRATE_MBPS = _int_env("HYPERWALL_MAX_DIRECT_BITRATE_MBPS", 60, 0, 1
 LINK_MBPS = _int_env("HYPERWALL_LINK_MBPS", 800, 50, 100_000)
 
 # Max cells that may transcode simultaneously. Greg's Arc A310 media engine
-# handles a few concurrent 1080p transcodes; the governor prevents a cold-start
-# stampede. When the cap is full, a normal auto-transcode admission is bounded
-# by the controller rather than turning the library into a filtered list.
-MAX_CONCURRENT_TRANSCODES = _int_env("HYPERWALL_MAX_CONCURRENT_TRANSCODES", 4, 0, 64)
+# handles a few concurrent 1080p transcodes; leave one slot below the four-cell
+# wall so an HLS cold-start burst does not saturate the server. When the cap is
+# full, heavy items remain queued instead of being demoted to direct play.
+MAX_CONCURRENT_TRANSCODES = _int_env("HYPERWALL_MAX_CONCURRENT_TRANSCODES", 3, 0, 64)
 
 
 def effective_bitrate_budget_mbps(n_cells: int) -> int:

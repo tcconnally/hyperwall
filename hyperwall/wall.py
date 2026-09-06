@@ -839,21 +839,11 @@ class WallController:
         )
         if admitted:
             return plan
-        if (
-            prefetch
-            or force_transcode
-            or plan.reason == "missing_metadata_transcode"
-        ):
-            # Unknown sources must not bypass the safety policy by falling
-            # back to raw client-side demux/decode when Emby's transcode
-            # governor is full. The caller requeues them for bounded retry.
-            return None
-        return replace(
-            plan,
-            server_mode="direct",
-            requires_transcode_lease=False,
-            reason="transcode_capacity_unavailable",
-        )
+        # A source that exceeded the direct-play budget must not bypass the
+        # safety policy merely because the transcode governor is full. The
+        # caller requeues it for bounded retry; demoting it to direct play
+        # recreates the M5 overload that this governor is meant to prevent.
+        return None
 
     def _build_playback_request(
         self,
@@ -1052,10 +1042,7 @@ class WallController:
         )
         if plan is None:
             self.playlists.push_front(self._cell_group(cell), item)
-            if (
-                requested_plan.reason == "missing_metadata_transcode"
-                or force_transcode
-            ):
+            if requested_plan.requires_transcode_lease:
                 self._schedule_transcode_handoff_retry(
                     cell,
                     item,

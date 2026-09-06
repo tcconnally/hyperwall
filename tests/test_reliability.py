@@ -631,7 +631,7 @@ def test_transcode_load_count_includes_pending_hls_streams():
 
 def test_max_concurrent_transcodes_constant():
     from hyperwall import constants as c
-    assert c.MAX_CONCURRENT_TRANSCODES == 4
+    assert c.MAX_CONCURRENT_TRANSCODES == 3
 
 
 def test_transcode_prefetch_retry_constant_defaults():
