@@ -308,6 +308,12 @@ _TRANSPORT_FAULT_MARKERS = (
     "seek failed",
     "http error 5",
     "http 5",
+    # FFmpeg's HLS demuxer reports a repeatedly unavailable segment as a
+    # transport fault without including the underlying HTTP status.  Without
+    # these narrow signatures, the cell keeps retrying the same dead playlist
+    # and never reaches the existing retry/quarantine policy.
+    "hls: failed to open segment",
+    "hls: failed too many times",
 )
 
 
