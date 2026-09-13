@@ -15,6 +15,17 @@ fallback and a known-good media corpus pass the gates below.
 The next experiment is a bounded native profile and frame-pump test, not
 another 30- or 60-minute soak.
 
+## Closed-environment Pop!_OS production path
+
+The repository now includes `launch-linux.sh` and
+`docs/linux-8cell-production.md` for the RTX 5070 Ti wall candidate. This
+path uses Qt/libmpv rendering, converts the library offline to verified
+MP4/H.264/AAC media (≤1080p30, ≤10 Mbps), disables runtime HLS transcoding,
+and excludes any item that does not satisfy the normalized metadata contract.
+It is an implementation boundary, not a measured 8-cell pass: the Pop!_OS
+host still requires fresh short, 30-minute, and 60-minute GPU/display gates.
+Emby resource increases are secondary until that direct-play path is measured.
+
 ## What is usable now
 
 - The macOS frame-update path coalesces callbacks before they enter the Qt
@@ -122,6 +133,11 @@ the highest measured passing mode from those reports. If 8 cells fail, make 6
 fail or any required evidence is missing, it returns `BLOCK` with no default
 selection.
 
+The final stats artifact must include `frame-drop-count` for every cell. The
+capacity profile records both `max_frame_drops_per_cell` and
+`total_frame_drops`; either a missing value or any nonzero value blocks
+promotion. Frame drops are not treated as cosmetic telemetry.
+
 Do not use the rejected runtime `30/25` shaping (`30 fps / 25 Mbps`) with live
 transcoding. Use fewer cells or a pre-normalized wall-safe corpus instead.
 
@@ -131,8 +147,8 @@ Only after the short and 30-minute gates pass, run one physically-awake,
 uninterrupted 60-minute validation with exact-head, redacted artifacts.
 
 **Final gate:** >=95% active-duration coverage; zero blocking freezes, decoder
-backend faults, audio underruns, A/V desyncs, and transport errors; no loop
-stall >=100 ms; no unexplained CPU escalation.
+backend faults, frame drops, audio underruns, A/V desyncs, and transport
+errors; no loop stall >=100 ms; no unexplained CPU escalation.
 
 ## Work items
 

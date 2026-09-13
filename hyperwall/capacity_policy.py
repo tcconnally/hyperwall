@@ -9,10 +9,14 @@ M5_CELL_MODES = (4, 6, 8)
 M5_MIN_DURATION_COVERAGE = 0.95
 M5_MAX_P95_LOOP_LAG_MS = 25.0
 M5_MAX_RENDER_GAP_MS = 100.0
+M5_MAX_FRAME_DROPS_PER_CELL = 0.0
+M5_MAX_TOTAL_FRAME_DROPS = 0.0
 _REQUIRED_METRICS = (
     "duration_coverage",
     "p95_loop_lag_ms",
     "max_render_gap_ms",
+    "max_frame_drops_per_cell",
+    "total_frame_drops",
     "cpu_cores_mean",
     "loop_stalls_ge_100ms",
     "freeze_count",
@@ -114,6 +118,8 @@ def capacity_profile_from_analysis(
         "duration_coverage": _number(duration_coverage),
         "p95_loop_lag_ms": _number(log.get("p95_loop_lag_ms")),
         "max_render_gap_ms": max(render_gaps) if render_gaps else None,
+        "max_frame_drops_per_cell": _number(stats.get("max_frame_drops_per_cell")),
+        "total_frame_drops": _number(stats.get("total_frame_drops")),
         "cpu_cores_mean": _number(cpu_cores_mean),
         "loop_stalls_ge_100ms": _number(log.get("loop_stalls_ge_100ms")),
         "freeze_count": _number(log.get("freeze_count")),
@@ -154,6 +160,12 @@ def _candidate(profile: Mapping[str, Any]) -> dict[str, Any]:
                 failures.append(metric)
         elif metric == "max_render_gap_ms":
             if value > M5_MAX_RENDER_GAP_MS:
+                failures.append(metric)
+        elif metric == "max_frame_drops_per_cell":
+            if value > M5_MAX_FRAME_DROPS_PER_CELL:
+                failures.append(metric)
+        elif metric == "total_frame_drops":
+            if value > M5_MAX_TOTAL_FRAME_DROPS:
                 failures.append(metric)
         elif metric == "power_sleep_evidence":
             if value != 1:
@@ -222,6 +234,8 @@ __all__ = [
     "M5_CELL_MODES",
     "M5_MAX_P95_LOOP_LAG_MS",
     "M5_MAX_RENDER_GAP_MS",
+    "M5_MAX_FRAME_DROPS_PER_CELL",
+    "M5_MAX_TOTAL_FRAME_DROPS",
     "M5_MIN_DURATION_COVERAGE",
     "select_capacity",
 ]

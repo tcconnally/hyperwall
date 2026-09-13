@@ -50,6 +50,10 @@ SUITES = [
     "test_capacity_policy",
     "test_macos_playback_performance",
     "test_endpoint_override",
+    "test_normalization",
+    "test_ollama_control",
+    "test_linux_preflight",
+    "test_linux_disconnect_benchmark",
 ]
 
 

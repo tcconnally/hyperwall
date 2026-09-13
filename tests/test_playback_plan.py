@@ -10,8 +10,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hyperwall.playback_plan import (
     PlaybackPlan,
     PlaybackPolicy,
+    filter_normalized_candidates,
     filter_stable_direct_candidates,
     is_stable_direct_candidate,
+    is_normalized_candidate,
     plan_playback,
     select_playback_candidates,
 )
@@ -26,6 +28,22 @@ def _item(*, fps=None, bitrate=None, item_id="item-1"):
     if bitrate is not None:
         video["BitRate"] = bitrate
     return {"Id": item_id, "MediaSources": [{"Bitrate": bitrate, "MediaStreams": [video]}]}
+
+
+def _normalized_item(*, item_id="normalized", codec="h264", audio_codec="aac"):
+    item = _item(fps=30, bitrate=8_000_000, item_id=item_id)
+    item["MediaSources"][0]["Container"] = "mp4"
+    item["MediaSources"][0]["MediaStreams"][0].update({
+        "Codec": codec,
+        "Width": 1920,
+        "Height": 1080,
+    })
+    item["MediaSources"][0]["MediaStreams"].append({
+        "Type": "Audio",
+        "Codec": audio_codec,
+        "Channels": 2,
+    })
+    return item
 
 
 def test_direct_plan_keeps_server_and_client_modes_separate():
@@ -98,6 +116,28 @@ def test_stable_direct_pool_excludes_heavy_and_unmeasured_items():
         [safe, high_fps, high_bitrate, unknown],
         max_fps=30,
         max_bitrate_mbps=20,
+    ) == [safe]
+
+
+def test_normalized_candidate_requires_wall_safe_codecs_and_dimensions():
+    assert is_normalized_candidate(_normalized_item()) is True
+    assert is_normalized_candidate(_normalized_item(codec="hevc")) is False
+    assert is_normalized_candidate(_normalized_item(audio_codec="ac3")) is False
+    oversized = _normalized_item()
+    oversized["MediaSources"][0]["MediaStreams"][0]["Width"] = 3840
+    assert is_normalized_candidate(oversized) is False
+
+
+def test_normalized_pool_excludes_items_that_would_need_live_transcode():
+    safe = _normalized_item(item_id="safe")
+    bad = _normalized_item(item_id="bad", codec="hevc")
+    assert filter_normalized_candidates([safe, bad]) == [safe]
+    assert select_playback_candidates(
+        [safe, bad],
+        direct_only=True,
+        normalized_only=True,
+        max_fps=30,
+        max_bitrate_mbps=10,
     ) == [safe]
 
 
@@ -238,6 +278,13 @@ def test_wall_controller_wires_full_library_pool_and_explicit_direct_only_escape
     assert "stable_direct_profile_for_platform" in wall_source
     assert "select_playback_candidates" in wall_source
     assert "Full-library playback profile" in wall_source
+
+
+def test_wall_controller_wires_offline_normalized_library_mode():
+    wall_source = Path(__file__).resolve().parents[1].joinpath("hyperwall", "wall.py").read_text()
+    assert "normalized_library_profile_for_platform" in wall_source
+    assert "normalized_only=" in wall_source
+    assert "Offline normalized-library profile" in wall_source
 
 
 def test_resource_governor_limits_server_transcode_leases():

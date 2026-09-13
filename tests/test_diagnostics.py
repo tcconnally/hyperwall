@@ -525,6 +525,55 @@ def test_analyze_run_accepts_matching_expected_cell_count():
     assert result["gates"]["cell_count"]["status"] == "PASS"
 
 
+def test_analyze_run_blocks_when_stats_report_frame_drops():
+    cells = [
+        {
+            "cell": 0,
+            "totals": {"frame-drop-count": 7},
+            "info": {"hwdec-current": "no"},
+            "freezes": 0,
+            "freeze_seconds": 0,
+        },
+        {
+            "cell": 1,
+            "totals": {"frame-drop-count": 0},
+            "info": {"hwdec-current": "no"},
+            "freezes": 0,
+            "freeze_seconds": 0,
+        },
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+        Path(directory, "hyperwall.log").write_text("ready\n", encoding="utf-8")
+        Path(directory, "hyperwall_stats_a.json").write_text(
+            json.dumps({"cells": cells}), encoding="utf-8"
+        )
+        result = analyze_run(directory)
+
+    assert result["stats"]["max_frame_drops_per_cell"] == 7
+    assert result["stats"]["total_frame_drops"] == 7
+    assert result["gates"]["frame_drops"]["status"] == "BLOCK"
+    assert result["verdict"] == "BLOCK"
+
+
+def test_analyze_run_blocks_when_frame_drop_metric_is_missing():
+    cell = {
+        "cell": 0,
+        "totals": {"mistimed-frame-count": 0},
+        "info": {"hwdec-current": "no"},
+        "freezes": 0,
+        "freeze_seconds": 0,
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        Path(directory, "hyperwall.log").write_text("ready\n", encoding="utf-8")
+        Path(directory, "hyperwall_stats_a.json").write_text(
+            json.dumps({"cells": [cell]}), encoding="utf-8"
+        )
+        result = analyze_run(directory)
+
+    assert result["gates"]["frame_drops"]["status"] == "BLOCK"
+    assert result["gates"]["frame_drops"]["value"]["complete"] is False
+
+
 def test_analyze_run_blocks_when_active_duration_is_short():
     cells = [
         {"cell": 0, "totals": {}, "info": {}, "freezes": 0, "freeze_seconds": 0}

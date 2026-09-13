@@ -7,7 +7,9 @@ wid masking rule that keeps 64-bit NSView pointers intact off Windows.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import tempfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
@@ -46,12 +48,160 @@ def test_02_windows_opts_unchanged():
 
 
 def test_03_linux_opts_are_sane():
-    """Linux: no d3d11 gpu_api, auto-safe hwdec (CI/headless sanity)."""
+    """Linux: Qt/libmpv render API, no d3d11, safe NVIDIA hwdec."""
     from hyperwall.constants import mpv_opts_for_platform
     opts = mpv_opts_for_platform("linux")
+    # Pop!_OS may be Wayland. Native --wid embedding is not a production
+    # boundary there; the Qt/libmpv render API keeps the cell inside Qt.
+    assert opts["vo"] == "libmpv"
     assert "gpu_api" not in opts
     assert opts["hwdec"] == "auto-safe"
     assert "ao" not in opts
+    assert opts["video_sync"] == "display-resample"
+
+
+def test_03b_render_api_platform_matrix():
+    from hyperwall.constants import uses_render_api
+
+    assert uses_render_api("darwin") is True
+    assert uses_render_api("linux") is True
+    assert uses_render_api("linux-gnu") is True
+    assert uses_render_api("win32") is False
+
+
+def test_linux_production_launcher_is_direct_play_only():
+    from pathlib import Path
+
+    launcher = Path(__file__).resolve().parents[1] / "launch-linux.sh"
+    text = launcher.read_text()
+    assert "HYPERWALL_NORMALIZED_LIBRARY" in text
+    assert "HYPERWALL_AUTO_TRANSCODE" in text
+    assert "HYPERWALL_UNLOAD_OLLAMA" in text
+    assert "HYPERWALL_HARDWARE_PREFLIGHT" in text
+    assert "scripts/unload-ollama.py" in text
+    assert "scripts/preflight-linux-production.py" in text
+    assert "--required" in text
+    assert "exec" in text
+
+
+def test_linux_launcher_rejects_invalid_ollama_unload_override():
+    from pathlib import Path
+
+    launcher = Path(__file__).resolve().parents[1] / "launch-linux.sh"
+    with tempfile.TemporaryDirectory(prefix="hyperwall-launch-test-") as directory:
+        stub = Path(directory) / "python3"
+        stub.write_text("#!/bin/sh\nexit 99\n")
+        stub.chmod(0o700)
+        env = os.environ.copy()
+        env["HYPERWALL_UNLOAD_OLLAMA"] = "enabled"
+        env["PATH"] = f"{directory}{os.pathsep}{env.get('PATH', '')}"
+        result = subprocess.run(
+            ["bash", str(launcher)],
+            cwd=launcher.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    assert result.returncode == 2, result.stderr
+    assert "0 or 1" in result.stderr
+
+
+def test_linux_launcher_rejects_invalid_hardware_preflight_override():
+    from pathlib import Path
+
+    launcher = Path(__file__).resolve().parents[1] / "launch-linux.sh"
+    with tempfile.TemporaryDirectory(prefix="hyperwall-launch-test-") as directory:
+        stub = Path(directory) / "python3"
+        stub.write_text("#!/bin/sh\nexit 99\n")
+        stub.chmod(0o700)
+        env = os.environ.copy()
+        env["HYPERWALL_UNLOAD_OLLAMA"] = "0"
+        env["HYPERWALL_HARDWARE_PREFLIGHT"] = "maybe"
+        env["PATH"] = f"{directory}{os.pathsep}{env.get('PATH', '')}"
+        result = subprocess.run(
+            ["bash", str(launcher)],
+            cwd=launcher.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    assert result.returncode == 2, result.stderr
+    assert "HYPERWALL_HARDWARE_PREFLIGHT must be 0 or 1" in result.stderr
+
+
+def test_linux_launcher_rejects_invalid_normalized_library_override():
+    from pathlib import Path
+
+    launcher = Path(__file__).resolve().parents[1] / "launch-linux.sh"
+    with tempfile.TemporaryDirectory(prefix="hyperwall-launch-test-") as directory:
+        stub = Path(directory) / "python3"
+        stub.write_text("#!/bin/sh\nexit 99\n")
+        stub.chmod(0o700)
+        env = os.environ.copy()
+        env["HYPERWALL_UNLOAD_OLLAMA"] = "0"
+        env["HYPERWALL_HARDWARE_PREFLIGHT"] = "0"
+        env["HYPERWALL_NORMALIZED_LIBRARY"] = "enabled"
+        env["HYPERWALL_AUTO_TRANSCODE"] = "0"
+        env["PATH"] = f"{directory}{os.pathsep}{env.get('PATH', '')}"
+        result = subprocess.run(
+            ["bash", str(launcher)],
+            cwd=launcher.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    assert result.returncode == 2, result.stderr
+    assert "HYPERWALL_NORMALIZED_LIBRARY must be 0 or 1" in result.stderr
+
+
+def test_linux_launcher_rejects_direct_play_without_normalized_library():
+    from pathlib import Path
+
+    launcher = Path(__file__).resolve().parents[1] / "launch-linux.sh"
+    with tempfile.TemporaryDirectory(prefix="hyperwall-launch-test-") as directory:
+        stub = Path(directory) / "python3"
+        stub.write_text("#!/bin/sh\nexit 99\n")
+        stub.chmod(0o700)
+        env = os.environ.copy()
+        env["HYPERWALL_UNLOAD_OLLAMA"] = "0"
+        env["HYPERWALL_HARDWARE_PREFLIGHT"] = "0"
+        env["HYPERWALL_NORMALIZED_LIBRARY"] = "0"
+        env["HYPERWALL_AUTO_TRANSCODE"] = "0"
+        env["PATH"] = f"{directory}{os.pathsep}{env.get('PATH', '')}"
+        result = subprocess.run(
+            ["bash", str(launcher)],
+            cwd=launcher.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    assert result.returncode == 2, result.stderr
+    assert "cannot disable normalized library while auto-transcode is disabled" in result.stderr
+
+
+def test_linux_launcher_rejects_invalid_auto_transcode_override():
+    from pathlib import Path
+
+    launcher = Path(__file__).resolve().parents[1] / "launch-linux.sh"
+    with tempfile.TemporaryDirectory(prefix="hyperwall-launch-test-") as directory:
+        stub = Path(directory) / "python3"
+        stub.write_text("#!/bin/sh\nexit 99\n")
+        stub.chmod(0o700)
+        env = os.environ.copy()
+        env["HYPERWALL_UNLOAD_OLLAMA"] = "0"
+        env["HYPERWALL_HARDWARE_PREFLIGHT"] = "0"
+        env["HYPERWALL_NORMALIZED_LIBRARY"] = "1"
+        env["HYPERWALL_AUTO_TRANSCODE"] = "enabled"
+        env["PATH"] = f"{directory}{os.pathsep}{env.get('PATH', '')}"
+        result = subprocess.run(
+            ["bash", str(launcher)],
+            cwd=launcher.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    assert result.returncode == 2, result.stderr
+    assert "HYPERWALL_AUTO_TRANSCODE must be 0 or 1" in result.stderr
 
 
 def test_04_native_wid_masking():
@@ -124,6 +274,13 @@ def run_all() -> int:
         test_01_macos_opts_use_render_api,
         test_02_windows_opts_unchanged,
         test_03_linux_opts_are_sane,
+        test_03b_render_api_platform_matrix,
+        test_linux_production_launcher_is_direct_play_only,
+        test_linux_launcher_rejects_invalid_ollama_unload_override,
+        test_linux_launcher_rejects_invalid_hardware_preflight_override,
+        test_linux_launcher_rejects_invalid_normalized_library_override,
+        test_linux_launcher_rejects_direct_play_without_normalized_library,
+        test_linux_launcher_rejects_invalid_auto_transcode_override,
         test_04_native_wid_masking,
         test_05_env_overrides_still_win_on_macos,
         test_06_macos_render_api_prefers_display_resample_sync,

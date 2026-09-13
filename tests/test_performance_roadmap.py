@@ -21,6 +21,8 @@ def test_performance_roadmap_contains_corrected_evidence_and_gates():
         "videotoolbox-copy",
         "coalesce",
         "power_sleep_evidence",
+        "frame-drop-count",
+        "max_frame_drops_per_cell",
     )
     for marker in required:
         assert marker in text, marker

@@ -15,6 +15,8 @@ def _profile(cells: int, **overrides):
         "duration_coverage": 1.0,
         "p95_loop_lag_ms": 10.0,
         "max_render_gap_ms": 40.0,
+        "max_frame_drops_per_cell": 0,
+        "total_frame_drops": 0,
         "cpu_cores_mean": 2.0,
         "loop_stalls_ge_100ms": 0,
         "freeze_count": 0,
@@ -35,6 +37,8 @@ def test_analysis_report_is_normalized_for_capacity_selection():
         "stats": {
             "n_cells": 6,
             "render_telemetry": [{"paint_gap_max_ms": 80.0}],
+            "max_frame_drops_per_cell": 0,
+            "total_frame_drops": 0,
         },
         "log": {
             "p95_loop_lag_ms": 20.0,
@@ -143,6 +147,19 @@ def test_responsiveness_thresholds_block_a_candidate():
     assert decision["status"] == "BLOCK"
     assert decision["selected_cells"] is None
     assert "p95_loop_lag_ms" in decision["candidates"][0]["failures"]
+
+
+def test_frame_drops_block_a_candidate_even_when_other_gates_pass():
+    from hyperwall.capacity_policy import select_capacity
+
+    decision = select_capacity([
+        _profile(8, max_frame_drops_per_cell=1, total_frame_drops=1),
+    ])
+
+    assert decision["status"] == "BLOCK"
+    assert decision["selected_cells"] is None
+    assert "max_frame_drops_per_cell" in decision["candidates"][0]["failures"]
+    assert "total_frame_drops" in decision["candidates"][0]["failures"]
 
 
 def test_missing_metrics_fail_closed_for_a_candidate():

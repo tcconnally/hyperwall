@@ -37,6 +37,7 @@ from .constants import (
     SCRIPT_DIR,
     STATS_ENABLED,
     apply_env_overrides,
+    uses_render_api,
 )
 from .emby import EmbyClient, CleanupWorker
 from .backends import resolve_backend
@@ -268,10 +269,9 @@ def main() -> None:
         except Exception as e:
             logger.warning("Kernel: priority change failed: %s", e)
 
-    if sys.platform == "darwin":
-        # macOS cells render through QOpenGLWidget (macembed.py): default a
-        # 3.2 core-profile context (resolves to 4.1 on Apple Silicon) before
-        # any GL context can be created.
+    if uses_render_api():
+        # Render-API cells use QOpenGLWidget (macembed.py). A 3.2 core
+        # context is supported by both Apple Silicon and NVIDIA Linux.
         from PyQt6.QtGui import QSurfaceFormat
         _fmt = QSurfaceFormat()
         _fmt.setVersion(3, 2)

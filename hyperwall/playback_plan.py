@@ -142,10 +142,88 @@ def filter_stable_direct_candidates(
     ]
 
 
+def is_normalized_candidate(
+    item: dict[str, Any],
+    *,
+    max_fps: float = 30.0,
+    max_bitrate_mbps: float = 10.0,
+    max_width: int = 1920,
+    max_height: int = 1080,
+) -> bool:
+    """Return whether an Emby item satisfies the offline wall contract.
+
+    The normalizer emits MP4/H.264/AAC. Missing or malformed metadata fails
+    closed so an unnormalized item cannot silently reach a direct-only wall.
+    """
+    if not is_stable_direct_candidate(
+        item,
+        max_fps=max_fps,
+        max_bitrate_mbps=max_bitrate_mbps,
+    ):
+        return False
+    sources = item.get("MediaSources") or []
+    source = sources[0] if sources and isinstance(sources[0], dict) else {}
+    if str(source.get("Container") or "").strip().lower() != "mp4":
+        return False
+    video = _video_stream(item)
+    if str(video.get("Codec") or "").strip().lower() != "h264":
+        return False
+    raw_width = video.get("Width")
+    raw_height = video.get("Height")
+    if raw_width is None or raw_height is None:
+        return False
+    try:
+        width = int(raw_width)
+        height = int(raw_height)
+    except (TypeError, ValueError):
+        return False
+    if width <= 0 or height <= 0 or width > max_width or height > max_height:
+        return False
+    streams = source.get("MediaStreams") or item.get("MediaStreams") or []
+    audio = next(
+        (
+            stream for stream in streams
+            if isinstance(stream, dict) and stream.get("Type") == "Audio"
+        ),
+        None,
+    )
+    if audio is not None:
+        if str(audio.get("Codec") or "").strip().lower() != "aac":
+            return False
+        channels = audio.get("Channels")
+        if isinstance(channels, bool) or not isinstance(channels, (int, float)):
+            return False
+        if channels <= 0 or channels > 2:
+            return False
+    return True
+
+
+def filter_normalized_candidates(
+    items: list[dict[str, Any]],
+    *,
+    max_fps: float = 30.0,
+    max_bitrate_mbps: float = 10.0,
+    max_width: int = 1920,
+    max_height: int = 1080,
+) -> list[dict[str, Any]]:
+    """Keep only files produced by the verified wall-safe media contract."""
+    return [
+        item for item in items
+        if is_normalized_candidate(
+            item,
+            max_fps=max_fps,
+            max_bitrate_mbps=max_bitrate_mbps,
+            max_width=max_width,
+            max_height=max_height,
+        )
+    ]
+
+
 def select_playback_candidates(
     items: list[dict[str, Any]],
     *,
     direct_only: bool,
+    normalized_only: bool = False,
     max_fps: float,
     max_bitrate_mbps: float,
 ) -> list[dict[str, Any]]:
@@ -155,6 +233,12 @@ def select_playback_candidates(
     can route them to the server H.264/AAC transcode path. The measured
     direct-only pool is still useful as an explicit emergency escape hatch.
     """
+    if normalized_only:
+        return filter_normalized_candidates(
+            items,
+            max_fps=max_fps,
+            max_bitrate_mbps=max_bitrate_mbps,
+        )
     if not direct_only:
         return list(items)
     return filter_stable_direct_candidates(

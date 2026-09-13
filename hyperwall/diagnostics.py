@@ -659,6 +659,9 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "n_cells": len(cells) if isinstance(cells, list) else None,
         "final_server_modes": {},
+        "max_frame_drops_per_cell": None,
+        "total_frame_drops": None,
+        "frame_drop_metric_complete": False,
     }
     reported_cells = value.get("n_cells")
     if isinstance(reported_cells, int) and not isinstance(reported_cells, bool):
@@ -689,6 +692,8 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
     frame_pump_rows: list[dict[str, Any]] = []
     decoder_rows: list[dict[str, Any]] = []
     audio_rows: list[dict[str, Any]] = []
+    frame_drop_rows: list[dict[str, Any]] = []
+    frame_drop_metric_missing = False
     frame_pump_numeric_fields = (
         "callbacks",
         "queued_updates",
@@ -713,6 +718,19 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
             cell_id = cell.get("cell")
             if isinstance(cell_id, bool) or not isinstance(cell_id, int):
                 continue
+            totals = cell.get("totals")
+            frame_drop_count = (
+                totals.get("frame-drop-count")
+                if isinstance(totals, dict)
+                else None
+            )
+            if _finite_number(frame_drop_count, nonnegative=True):
+                frame_drop_rows.append({
+                    "cell": cell_id,
+                    "count": frame_drop_count,
+                })
+            else:
+                frame_drop_metric_missing = True
             render_value = cell.get("render_telemetry")
             if isinstance(render_value, dict):
                 safe_render: dict[str, Any] = {"cell": cell_id}
@@ -785,6 +803,19 @@ def _stats_summary(stats_path: Path | None) -> dict[str, Any]:
         summary["decoder"] = decoder_rows
     if audio_rows:
         summary["audio_state"] = audio_rows
+    if frame_drop_rows:
+        summary["frame_drops"] = frame_drop_rows
+    if (
+        isinstance(cells, list)
+        and not frame_drop_metric_missing
+        and len(frame_drop_rows) == len(cells)
+        and frame_drop_rows
+    ):
+        counts = [float(row["count"]) for row in frame_drop_rows]
+        summary["max_frame_drops_per_cell"] = max(counts)
+        total = sum(counts)
+        summary["total_frame_drops"] = int(total) if total.is_integer() else total
+        summary["frame_drop_metric_complete"] = True
     policy = value.get("playback_policy")
     if isinstance(policy, dict):
         safe_policy: dict[str, object] = {}
@@ -907,6 +938,27 @@ def analyze_run(
         "WARNING" if not log_path and not jsonl_path else "PASS" if stats_valid else "BLOCK",
         str(stats_path) if stats_path else None,
         "A completed phase requires one valid final stats artifact.",
+    )
+    frame_drop_complete = stats_summary.get("frame_drop_metric_complete") is True
+    max_frame_drops = stats_summary.get("max_frame_drops_per_cell")
+    total_frame_drops = stats_summary.get("total_frame_drops")
+    frame_drop_status = (
+        "PASS"
+        if frame_drop_complete
+        and max_frame_drops == 0
+        and total_frame_drops == 0
+        else "BLOCK"
+        if stats_valid
+        else "WARNING"
+    )
+    gates["frame_drops"] = _gate(
+        frame_drop_status,
+        {
+            "max_frame_drops_per_cell": max_frame_drops,
+            "total_frame_drops": total_frame_drops,
+            "complete": frame_drop_complete,
+        },
+        "Frame-drop telemetry must be present for every cell and remain zero.",
     )
     if expected_cells is not None:
         observed_cells = stats_summary.get("n_cells")

@@ -74,6 +74,7 @@ from .constants import (
     _s,
     apply_env_overrides,
     native_wid,
+    uses_render_api,
 )
 from .reliability import (
     apply_jitter,
@@ -254,7 +255,7 @@ class VideoCell(QWidget):
 
         # Internal state
         self._mpv: Any = None          # mpv.MPV instance
-        self._render_context_released = sys.platform != "darwin"
+        self._render_context_released = not uses_render_api()
         self._shutdown_render_release_requested = False
         self._shutdown_render_release_deadline = 0.0
         self._render_finalizer_pending = False
@@ -402,10 +403,10 @@ class VideoCell(QWidget):
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
 
-        # Video surface. macOS: --wid embedding is unsupported by mpv's
-        # Swift backend, so cells render through the libmpv render API into
-        # a QOpenGLWidget (macembed.py). Windows: native HWND embed below.
-        if sys.platform == "darwin":
+        # Video surface. macOS and Linux render through the libmpv render API
+        # into a QOpenGLWidget (macembed.py). Windows retains native HWND
+        # embedding.
+        if uses_render_api():
             from .macembed import MpvGLWidget
             self.video_frame = MpvGLWidget(self)
         else:
@@ -535,7 +536,7 @@ class VideoCell(QWidget):
             # whichever track happens to be active when a delayed log arrives.
             self._mpv_log(level, component, message, next_gen, None, None)
 
-        if sys.platform != "darwin":
+        if sys.platform != "darwin" and not sys.platform.startswith("linux"):
             # HWND sign-extension fix: mask to 32-bit (Windows only — the
             # mask would corrupt a 64-bit pointer elsewhere).
             wid = native_wid(int(self.video_frame.winId()))
@@ -548,10 +549,9 @@ class VideoCell(QWidget):
         _devnull = open(os.devnull, "w")
         try:
             sys.stdout = sys.stderr = _devnull
-            if sys.platform == "darwin":
-                # No --wid on macOS (unsupported by mpv's Swift backend):
-                # vo=libmpv (from the platform opts) renders through the
-                # MpvGLWidget's GL framebuffer.
+            if uses_render_api():
+                # No --wid on render-API platforms: vo=libmpv renders through
+                # the MpvGLWidget's GL framebuffer.
                 m = _mpv.MPV(
                     log_handler=_log_handler,
                     **_opts,
@@ -566,7 +566,7 @@ class VideoCell(QWidget):
             sys.stdout, sys.stderr = _std_saved
             _devnull.close()
 
-        if sys.platform == "darwin":
+        if uses_render_api():
             # Render context must exist before the first loadfile hits the
             # VO (render.h); attach_mpv creates it now if GL is up, else at
             # initializeGL — which precedes the staggered first play().
@@ -898,7 +898,7 @@ class VideoCell(QWidget):
             self._mpv["mute"] = True
         except Exception:
             pass
-        if sys.platform == "darwin":
+        if uses_render_api():
             try:
                 # render_context_free() disables an active VO. Stop first so
                 # the core does not continue submitting frames after the
@@ -909,8 +909,8 @@ class VideoCell(QWidget):
                 logger.debug("mpv stop before render release failed: %s", e)
 
     def _release_render_context_on_gui(self) -> bool:
-        """Release the macOS render context only from the widget's thread."""
-        if sys.platform != "darwin" or self._render_context_released:
+        """Release the render context only from the widget's thread."""
+        if not uses_render_api() or self._render_context_released:
             return True
         if self._mpv is None:
             self._render_context_released = True
@@ -928,7 +928,7 @@ class VideoCell(QWidget):
         self, shutdown_deadline: float | None = None,
     ) -> None:
         """Retry GUI render release after an in-flight native call drains."""
-        if sys.platform != "darwin" or self._render_context_released:
+        if not uses_render_api() or self._render_context_released:
             return
         self._shutdown_render_release_requested = True
         candidate = (
@@ -1047,7 +1047,7 @@ class VideoCell(QWidget):
             return
         if STATS_ENABLED:
             self._flush_stats(audio_lock_held=True)
-        if sys.platform == "darwin":
+        if uses_render_api():
             # The render context belongs to the GUI thread. A worker may only
             # destroy the core after the GUI has released it; otherwise leave
             # the core abandoned rather than touching Qt/GL off-thread.
@@ -1297,7 +1297,7 @@ class VideoCell(QWidget):
 
     def showEvent(self, event: Any) -> None:
         super().showEvent(event)
-        if sys.platform != "darwin":
+        if not uses_render_api():
             # Windows: force native window creation for the wid embed.
             # QOpenGLWidget needs no winId (and native-windowing it would
             # change compositing), so skip on macOS.

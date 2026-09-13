@@ -56,6 +56,67 @@ macOS notes:
 - If cells show software decode or black frames, try
   `HYPERWALL_HWDEC=videotoolbox-copy ./launch.sh`.
 
+## Quick Start (Pop!_OS + NVIDIA, closed-environment production)
+
+The Pop!_OS path uses the Qt/libmpv render API and is designed for the RTX
+5070 Ti wall. It does **not** use native `--wid` embedding and does **not**
+perform runtime HLS transcoding in production.
+
+```bash
+# 1. Normalize the complete source library into a separate tree.
+python3 scripts/normalize-library.py \\
+  --source /srv/media-original \\
+  --destination /srv/media-wall-safe \\
+  --execute --strict
+
+# 2. Point Emby at /srv/media-wall-safe only.
+# 3. Configure the saved Hyperwall layout as 2×2 on each display (8 total).
+# 4. Launch the bounded direct-play profile. The launcher first requires
+#    exactly one visible RTX 5070 Ti with at least 12 GiB reported VRAM, then
+#    unloads resident Ollama models and verifies that /api/ps is empty.
+./launch-linux.sh
+```
+
+The normalizer publishes MP4/H.264/AAC at ≤1080p30 and ≤10 Mbps, verifies
+with ffprobe, and never deletes source files. `launch-linux.sh` enables
+`HYPERWALL_NORMALIZED_LIBRARY=1`; items without that contract are excluded
+rather than sent to live HLS transcoding. The launcher accepts only `0` or `1`
+for the normalized-library and auto-transcode switches, and rejects the unsafe
+combination where both are disabled. See
+[`docs/linux-8cell-production.md`](docs/linux-8cell-production.md) for the
+qualification and rollback gates. The Pop!_OS/8-cell path is implementation
+ready but not declared measured-pass until fresh GPU/display soak evidence
+exists on the exact host.
+
+For an explicitly controlled diagnostic run only, `HYPERWALL_HARDWARE_PREFLIGHT=0`
+skips the GPU check and `HYPERWALL_UNLOAD_OLLAMA=0` keeps Ollama resident. Do
+not use either override for production or overnight playback.
+
+### KVM / HDMI-disconnect benchmark
+
+For a display-independent decode/transport check, use the benchmark runner
+below. It launches one null-video/null-audio mpv process per cell, polls DRM
+connector state, ignores `SIGHUP`, and records suspend-aware coverage. It can
+therefore continue when a KVM switches away from every HDMI/DP output. Use only
+wall-safe inputs; source arguments are replaced with opaque labels in reports.
+Start with at least one connected output when using `--require-disconnect`; the
+flag requires an observed connected→all-disconnected transition rather than a
+pre-existing disconnected state.
+
+```bash
+python3 scripts/run-linux-disconnect-benchmark.py \\
+  --input /srv/media-wall-safe/sample.mp4 \\
+  --output /srv/hyperwall-reports/kvm-disconnect-$(date -u +%Y%m%dT%H%M%SZ) \\
+  --cells 8 --duration-s 120 --poll-s 2 --require-disconnect --keep-awake
+```
+
+`decode_transport_verdict=PASS` proves only that the eight decode/transport
+workers survived the observed display disconnect. `presentation_gate` remains
+`BLOCK` until the separate physical two-display run passes its frame, A/V,
+freeze, and coverage gates. To test a real KVM handoff, omit
+`--require-disconnect`, start with displays connected, switch the KVM during the
+run, and inspect `display_events` in `summary.json`.
+
 ## Quick Start (Windows)
 
 ```powershell
@@ -211,6 +272,9 @@ python3 scripts/profile-macos-render.py --matrix \\
 ```
 
 The command returns `BLOCK` when required evidence is missing or no mode passes.
+Required capacity evidence includes a `frame-drop-count` for every cell;
+missing telemetry or any nonzero per-cell/aggregate drop count blocks mode
+promotion.
 
 ### macOS playback soak
 

@@ -686,6 +686,20 @@ def test_direct_only_profile_remains_an_explicit_escape_hatch():
     assert stable_direct_profile_for_platform("linux", 64 * 1024, 2, "on") is True
 
 
+def test_normalized_library_profile_is_explicit_and_bounded():
+    from hyperwall.constants import (
+        NORMALIZED_LIBRARY_MAX_BITRATE_MBPS,
+        NORMALIZED_LIBRARY_MAX_FPS,
+        normalized_library_profile_for_platform,
+    )
+
+    assert (NORMALIZED_LIBRARY_MAX_FPS, NORMALIZED_LIBRARY_MAX_BITRATE_MBPS) == (30, 10)
+    assert normalized_library_profile_for_platform("linux", "on") is True
+    assert normalized_library_profile_for_platform("darwin", "on") is True
+    assert normalized_library_profile_for_platform("linux", "off") is False
+    assert normalized_library_profile_for_platform("linux", "auto") is False
+
+
 def test_apply_cache_budget_shape():
     from hyperwall.constants import apply_cache_budget
     out = apply_cache_budget({"demuxer_max_bytes": "512MiB", "vo": "gpu-next"}, 36)

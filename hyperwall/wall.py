@@ -42,6 +42,8 @@ from .perftrace import traced
 from .constants import (
     MAX_DIRECT_FPS,
     MAX_CONCURRENT_TRANSCODES,
+    NORMALIZED_LIBRARY_MAX_BITRATE_MBPS,
+    NORMALIZED_LIBRARY_MAX_FPS,
     STABLE_DIRECT_MAX_BITRATE_MBPS,
     STABLE_DIRECT_MAX_FPS,
     DisplayRole,
@@ -61,7 +63,9 @@ from .constants import (
     effective_bitrate_budget_mbps,
     MPV_OPTS,
     normalize_display_layout,
+    normalized_library_profile_for_platform,
     stable_direct_profile_for_platform,
+    uses_render_api,
     SCRIPT_DIR,
 )
 from .emby import EmbyClient, ContentLoader
@@ -283,8 +287,18 @@ class WallController:
         # Memory-aware demuxer budget: now that every cell exists, scale the
         # per-cell demuxer cache so the grid total stays under CACHE_BUDGET_MB.
         n_cells = len(self.cells)
+        self._normalized_library = normalized_library_profile_for_platform()
         self._stable_direct_only = stable_direct_profile_for_platform(
             n_cells=n_cells,
+        )
+        self._direct_only_pool = self._stable_direct_only or self._normalized_library
+        pool_max_fps = (
+            NORMALIZED_LIBRARY_MAX_FPS
+            if self._normalized_library else STABLE_DIRECT_MAX_FPS
+        )
+        pool_max_bitrate = (
+            NORMALIZED_LIBRARY_MAX_BITRATE_MBPS
+            if self._normalized_library else STABLE_DIRECT_MAX_BITRATE_MBPS
         )
         budgeted = apply_cache_budget(apply_env_overrides(MPV_OPTS), n_cells)
         self._mpv_opts_effective = dict(budgeted)
@@ -295,18 +309,18 @@ class WallController:
         # its own fill-bursts at 8 cells. Readahead depth is scaled inside
         # apply_cache_budget; the direct-play bitrate cap scales here.
         self._bitrate_budget_mbps = (
-            STABLE_DIRECT_MAX_BITRATE_MBPS
-            if self._stable_direct_only
+            pool_max_bitrate
+            if self._direct_only_pool
             else effective_bitrate_budget_mbps(n_cells)
         )
         self._playback_policy = PlaybackPolicy(
             auto_transcode=(
-                False if self._stable_direct_only
+                False if self._direct_only_pool
                 else os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1"
             ),
             max_fps=(
-                STABLE_DIRECT_MAX_FPS
-                if self._stable_direct_only else MAX_DIRECT_FPS
+                pool_max_fps
+                if self._direct_only_pool else MAX_DIRECT_FPS
             ),
             max_bitrate_mbps=self._bitrate_budget_mbps,
             cache_budget_mb=budgeted_mib(budgeted.get("demuxer_max_bytes")),
@@ -334,6 +348,13 @@ class WallController:
                 "to <=%dfps and <=%d Mbps; live transcoding disabled.",
                 STABLE_DIRECT_MAX_FPS,
                 STABLE_DIRECT_MAX_BITRATE_MBPS,
+            )
+        elif self._normalized_library:
+            logger.warning(
+                "Offline normalized-library profile: only verified MP4/H.264/AAC "
+                "items <=%dfps and <=%d Mbps are admitted; live transcoding disabled.",
+                NORMALIZED_LIBRARY_MAX_FPS,
+                NORMALIZED_LIBRARY_MAX_BITRATE_MBPS,
             )
         else:
             logger.info(
@@ -699,11 +720,27 @@ class WallController:
         )
         source_items = select_playback_candidates(
             list(items),
-            direct_only=getattr(self, "_stable_direct_only", False),
-            max_fps=STABLE_DIRECT_MAX_FPS,
-            max_bitrate_mbps=STABLE_DIRECT_MAX_BITRATE_MBPS,
+            direct_only=getattr(self, "_direct_only_pool", False),
+            normalized_only=getattr(self, "_normalized_library", False),
+            max_fps=(
+                NORMALIZED_LIBRARY_MAX_FPS
+                if getattr(self, "_normalized_library", False)
+                else STABLE_DIRECT_MAX_FPS
+            ),
+            max_bitrate_mbps=(
+                NORMALIZED_LIBRARY_MAX_BITRATE_MBPS
+                if getattr(self, "_normalized_library", False)
+                else STABLE_DIRECT_MAX_BITRATE_MBPS
+            ),
         )
-        if getattr(self, "_stable_direct_only", False):
+        if getattr(self, "_normalized_library", False):
+            logger.warning(
+                "Offline normalized-library pool: admitted %d/%d items; "
+                "excluded %d resources that lack the verified MP4/H.264/AAC "
+                "contract.",
+                len(source_items), len(items), len(items) - len(source_items),
+            )
+        elif getattr(self, "_stable_direct_only", False):
             logger.warning(
                 "Explicit direct-only pool: admitted %d/%d items; excluded %d "
                 "heavy or unmeasured resources. Set "
@@ -717,7 +754,10 @@ class WallController:
                 len(source_items),
             )
         selection_items = (
-            list(items) if initial_item_id not in (None, "") else source_items
+            list(items)
+            if initial_item_id not in (None, "")
+            and not getattr(self, "_normalized_library", False)
+            else source_items
         )
         self.all_items = selection_items
         self.filtered, self.filter_mode = apply_initial_filter(
@@ -1745,15 +1785,14 @@ class WallController:
             except Exception as e:
                 logger.debug("Cell GUI shutdown preparation failed: %s", e)
 
-        # darwin: free each cell's mpv render context HERE — synchronously,
+        # Render-API platforms: free each cell's mpv render context HERE — synchronously,
         # on the GUI thread, while the native windows still exist — BEFORE
         # the pool below terminates the mpv cores. render.h: freeing after
         # core destruction is UB. The old design queued the free onto the
         # GUI thread from the pool, but the GUI thread was blocked waiting
         # ON the pool → terminate ran with a live render context → SIGABRT
         # at exit (M5 Air 2026-07-21, third exit crash).
-        import sys as _sys
-        if _sys.platform == "darwin":
+        if uses_render_api():
             for c in self.cells:
                 try:
                     # Invalidate the worker before waiting for ownership. This

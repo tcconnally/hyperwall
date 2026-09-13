@@ -1,11 +1,11 @@
-"""Hyperwall — macOS video surface (libmpv render API).
+"""Hyperwall — Qt video surface (libmpv render API).
 
 mpv's Swift macOS backend does NOT support --wid window embedding (mpv
 maintainer in mpv-examples#29: "isn't supported by the new swift backend";
 independently confirmed by IPTVnator — audio with a black video surface).
-The only supported embed path on macOS is the render API: the cell's mpv
-runs vo=libmpv and renders into this QOpenGLWidget's framebuffer. This is
-the same architecture IINA and IPTVnator use.
+The supported embed path on macOS and Pop!_OS/Linux is the render API: the
+cell's mpv runs vo=libmpv and renders into this QOpenGLWidget's framebuffer.
+This keeps Linux independent of native child-window embedding under Wayland.
 
 Threading rules honored here (libmpv render.h + CLAUDE.md observer rules):
 - The update callback fires on an mpv thread. It must not call mpv or touch

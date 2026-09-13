@@ -188,6 +188,39 @@ def stable_direct_profile_for_platform(
     return False
 
 
+def normalized_library_profile_for_platform(
+    platform: str | None = None,
+    override: str | None = None,
+) -> bool:
+    """Return whether the offline-normalized direct-play contract is active.
+
+    This mode is deliberately explicit. It admits only the output contract
+    produced by ``scripts/normalize-library.py`` and disables live HLS
+    transcoding; missing or malformed metadata is excluded instead of being
+    sent to a server fallback.
+    """
+    del platform  # retained for deterministic platform-matrix callers
+    raw = (
+        os.environ.get("HYPERWALL_NORMALIZED_LIBRARY")
+        if override is None else override
+    )
+    if raw is not None:
+        value = str(raw).strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+    return False
+
+
+NORMALIZED_LIBRARY_MAX_FPS = _int_env(
+    "HYPERWALL_NORMALIZED_MAX_FPS", 30, 1, 240
+)
+NORMALIZED_LIBRARY_MAX_BITRATE_MBPS = _int_env(
+    "HYPERWALL_NORMALIZED_MAX_BITRATE_MBPS", 10, 1, 1_000
+)
+
+
 STABLE_DIRECT_MAX_FPS = _int_env("HYPERWALL_STABLE_MAX_FPS", 30, 1, 240)
 STABLE_DIRECT_MAX_BITRATE_MBPS = _int_env(
     "HYPERWALL_STABLE_MAX_BITRATE_MBPS", 20, 1, 1_000
@@ -312,6 +345,18 @@ IS_WINDOWS = os.name == "nt"
 IS_MACOS = sys.platform == "darwin"
 
 
+def uses_render_api(platform: str | None = None) -> bool:
+    """Whether cells render through Qt/libmpv instead of native ``--wid``.
+
+    The render API is required on macOS because mpv's Swift backend does not
+    support embedding. It is also the production Linux path: Pop!_OS may be
+    running Wayland, where native child-window embedding is not a stable
+    boundary. Windows retains the tested native HWND path.
+    """
+    plat = sys.platform if platform is None else platform
+    return plat == "darwin" or plat.startswith("linux")
+
+
 # ── Display roles ────────────────────────────────────────────────────────────
 class DisplayRole:
     """Role assigned to each selected monitor at launch.
@@ -426,9 +471,12 @@ def mpv_opts_for_platform(
         # wall-wide jank. A/V drift on the one audible cell is acceptable.
         out["video_timing_offset"] = 0
     elif plat.startswith("linux"):
-        out.pop("gpu_api", None)       # let mpv auto-select (vulkan/opengl)
+        out["vo"] = "libmpv"          # Qt render API; Wayland-safe
+        out.pop("gpu_api", None)       # render context selects OpenGL
         out["hwdec"] = "auto-safe"
         out.pop("ao", None)            # mpv default (pipewire/pulse/alsa)
+        out["video_sync"] = "display-resample"
+        out["video_timing_offset"] = 0
     return out
 
 
