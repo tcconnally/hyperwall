@@ -204,6 +204,16 @@ def test_linux_launcher_rejects_invalid_auto_transcode_override():
     assert "HYPERWALL_AUTO_TRANSCODE must be 0 or 1" in result.stderr
 
 
+def test_missing_mpv_error_path_retains_qapplication():
+    """The startup dependency error must not abort inside Qt."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "hyperwall" / "app.py").read_text()
+    startup = source[source.index("    # 2. Verify libmpv is importable"):source.index("    # 3. Logging")]
+    assert '_show_error_dialog("HyperWall — libmpv missing", msg)' in startup
+    assert "QApplication(sys.argv)\n            QMessageBox.critical" not in startup
+
+
 def test_04_native_wid_masking():
     """The 32-bit HWND mask must never touch a 64-bit pointer."""
     from hyperwall.constants import native_wid
@@ -283,6 +293,7 @@ def run_all() -> int:
                 test_linux_launcher_rejects_invalid_normalized_library_override,
                 test_linux_launcher_rejects_direct_play_without_normalized_library,
                 test_linux_launcher_rejects_invalid_auto_transcode_override,
+                test_missing_mpv_error_path_retains_qapplication,
             ]
             if sys.platform.startswith("linux")
             else []

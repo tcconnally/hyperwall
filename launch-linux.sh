@@ -70,6 +70,16 @@ fi
 PY="./.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
+# Fail before GPU/Ollama side effects when the GUI runtime is incomplete.
+# The system Python on Pop!_OS often has no pip or python-mpv; use the
+# repository-local bootstrap instead of allowing the Qt error path to run.
+if ! "$PY" -c 'import mpv, PyQt6, requests, flask' >/dev/null 2>&1; then
+  printf '%s\n' '[FAIL] HyperWall Python runtime is incomplete.' >&2
+  printf '%s\n' "       Interpreter: $PY" >&2
+  printf '%s\n' '       Run ./bootstrap-linux.sh, then rerun ./launch-linux.sh.' >&2
+  exit 2
+fi
+
 if [ "$HYPERWALL_HARDWARE_PREFLIGHT" = "1" ]; then
   "$PY" scripts/preflight-linux-production.py --required
 fi

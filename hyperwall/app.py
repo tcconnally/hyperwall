@@ -217,14 +217,22 @@ def main() -> None:
                 f"  (shinchiro build — extract libmpv-2.dll, place in script dir)"
             )
         else:
-            hint = "Install libmpv via your distro (mpv-libs / libmpv-dev)."
+            hint = (
+                "Run the Linux bootstrap from the repository:\n"
+                "  ./bootstrap-linux.sh\n\n"
+                "It creates .venv, installs python-mpv/PyQt6, and verifies libmpv."
+            )
+        install_command = (
+            "./bootstrap-linux.sh"
+            if sys.platform.startswith("linux")
+            else "pip install python-mpv"
+        )
         msg = (
             f"python-mpv failed to load: {e}\n\n"
-            f"Install:\n  pip install python-mpv\n\n{hint}"
+            f"Install:\n  {install_command}\n\n{hint}"
         )
         try:
-            QApplication(sys.argv)
-            QMessageBox.critical(None, "HyperWall — libmpv missing", msg)
+            _show_error_dialog("HyperWall — libmpv missing", msg)
         except Exception:
             print(msg, file=sys.stderr)
         sys.exit(1)

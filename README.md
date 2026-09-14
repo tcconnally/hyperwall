@@ -63,15 +63,18 @@ The Pop!_OS path uses the Qt/libmpv render API and is designed for the RTX
 perform runtime HLS transcoding in production.
 
 ```bash
-# 1. Normalize the complete source library into a separate tree.
+# 1. Bootstrap the Linux runtime in a user-local .venv.
+./bootstrap-linux.sh
+
+# 2. Normalize the complete source library into a separate tree.
 python3 scripts/normalize-library.py \\
   --source /srv/media-original \\
   --destination /srv/media-wall-safe \\
   --execute --strict
 
-# 2. Point Emby at /srv/media-wall-safe only.
-# 3. Configure the saved Hyperwall layout as 2×2 on each display (8 total).
-# 4. Launch the bounded direct-play profile. The launcher first requires
+# 3. Point Emby at /srv/media-wall-safe only.
+# 4. Configure the saved Hyperwall layout as 2×2 on each display (8 total).
+# 5. Launch the bounded direct-play profile. The launcher first requires
 #    exactly one visible RTX 5070 Ti with at least 12 GiB reported VRAM, then
 #    unloads resident Ollama models and verifies that /api/ps is empty.
 ./launch-linux.sh
@@ -104,9 +107,16 @@ flag requires an observed connected→all-disconnected transition rather than a
 pre-existing disconnected state.
 
 ```bash
+MEDIA=/srv/media-wall-safe/sample.mp4
+REPORT_ROOT="${HOME}/hyperwall-reports"
+REPORT="$REPORT_ROOT/kvm-disconnect-$(date -u +%Y%m%dT%H%M%SZ)"
+
+mkdir -p "$REPORT_ROOT"
+test -r "$MEDIA"
+
 python3 scripts/run-linux-disconnect-benchmark.py \\
-  --input /srv/media-wall-safe/sample.mp4 \\
-  --output /srv/hyperwall-reports/kvm-disconnect-$(date -u +%Y%m%dT%H%M%SZ) \\
+  --input "$MEDIA" \\
+  --output "$REPORT" \\
   --cells 8 --duration-s 120 --poll-s 2 --require-disconnect --keep-awake
 ```
 
