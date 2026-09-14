@@ -60,36 +60,34 @@ macOS notes:
 
 The Pop!_OS path uses the Qt/libmpv render API and is designed for the RTX
 5070 Ti wall. It does **not** use native `--wid` embedding and does **not**
-perform runtime HLS transcoding in production.
+require an offline normalized library. Sources outside the direct-play budget use
+bounded runtime HLS transcoding and remain in the playback pool.
 
 ```bash
 # 1. Bootstrap the Linux runtime in a user-local .venv.
 ./bootstrap-linux.sh
 
-# 2. Normalize the complete source library into a separate tree.
-python3 scripts/normalize-library.py \\
-  --source /srv/media-original \\
-  --destination /srv/media-wall-safe \\
-  --execute --strict
-
-# 3. Point Emby at /srv/media-wall-safe only.
+# 2. Configure config.ini with the real Emby server and curated library.
+# 3. Optional: build a separate normalized copy for an explicit qualification
+#    run; this is not required for whole-library validation.
 # 4. Configure the saved Hyperwall layout as 2×2 on each display (8 total).
-# 5. Launch the bounded direct-play profile. The launcher first requires
-#    exactly one visible RTX 5070 Ti with at least 12 GiB reported VRAM, then
-#    unloads resident Ollama models and verifies that /api/ps is empty.
+# 5. Launch the full-library profile. The launcher first requires exactly one
+#    visible RTX 5070 Ti with at least 12 GiB reported VRAM, then unloads
+#    resident Ollama models and verifies that /api/ps is empty.
 ./launch-linux.sh
 ```
 
-The normalizer publishes MP4/H.264/AAC at ≤1080p30 and ≤10 Mbps, verifies
-with ffprobe, and never deletes source files. `launch-linux.sh` enables
-`HYPERWALL_NORMALIZED_LIBRARY=1`; items without that contract are excluded
-rather than sent to live HLS transcoding. The launcher accepts only `0` or `1`
-for the normalized-library and auto-transcode switches, and rejects the unsafe
-combination where both are disabled. See
-[`docs/linux-8cell-production.md`](docs/linux-8cell-production.md) for the
-qualification and rollback gates. The Pop!_OS/8-cell path is implementation
-ready but not declared measured-pass until fresh GPU/display soak evidence
-exists on the exact host.
+The Pop!_OS default retains the complete Emby library. It direct-plays sources
+within the current budget and sends heavy or incomplete sources through the
+bounded server H.264/AAC transcode path, so media failures remain visible.
+`HYPERWALL_NORMALIZED_LIBRARY=1` is an explicit offline-corpus mode for a
+separate qualification run; it is not the whole-library validation profile.
+The launcher accepts only `0` or `1` for the normalized-library and
+auto-transcode switches, and rejects the unsafe combination where both are
+disabled. See [`docs/linux-8cell-production.md`](docs/linux-8cell-production.md)
+for the qualification and rollback gates. The Pop!_OS/8-cell path is
+implementation ready but not declared measured-pass until fresh GPU/display
+soak evidence exists on the exact host.
 
 For an explicitly controlled diagnostic run only, `HYPERWALL_HARDWARE_PREFLIGHT=0`
 skips the GPU check and `HYPERWALL_UNLOAD_OLLAMA=0` keeps Ollama resident. Do
@@ -100,8 +98,9 @@ not use either override for production or overnight playback.
 For a display-independent decode/transport check, use the benchmark runner
 below. It launches one null-video/null-audio mpv process per cell, polls DRM
 connector state, ignores `SIGHUP`, and records suspend-aware coverage. It can
-therefore continue when a KVM switches away from every HDMI/DP output. Use only
-wall-safe inputs; source arguments are replaced with opaque labels in reports.
+therefore continue when a KVM switches away from every HDMI/DP output. The
+Emby wrapper can exercise any curated library item; it reports wall-safe
+metadata diagnostics but does not silently reject non-normalized sources.
 Start with at least one connected output when using `--require-disconnect`; the
 flag requires an observed connected→all-disconnected transition rather than a
 pre-existing disconnected state.
@@ -109,10 +108,10 @@ pre-existing disconnected state.
 ```bash
 # The wrapper reads the existing config.ini and uses the configured Emby
 # server/library. It does not require a local media mount or MEDIA= path.
-python3 scripts/run-linux-disconnect-benchmark-emby.py --list-wall-safe
+python3 scripts/run-linux-disconnect-benchmark-emby.py --list-items
 
-# Pick an ID from the JSON output, then run from a writable home directory.
-ITEM_ID='<real wall-safe Emby item ID>'
+# Pick any real item ID from the JSON output, including items with diagnostics.
+ITEM_ID='<real Emby item ID>'
 REPORT_ROOT="${HOME}/hyperwall-reports"
 REPORT="$REPORT_ROOT/kvm-disconnect-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$REPORT_ROOT"
@@ -123,12 +122,12 @@ python3 scripts/run-linux-disconnect-benchmark-emby.py \\
   --cells 8 --duration-s 120 --poll-s 2 --keep-awake
 ```
 
-The Emby wrapper authenticates with `config.ini`, checks the selected item is
-H.264/AAC at ≤1080p30 and ≤10 Mbps, and creates the authenticated direct stream
-URL internally. It blocks HEVC, oversized, high-frame-rate, or otherwise
-unverified items instead of silently benchmarking the wrong source. Add
-`--require-disconnect` only when the run starts with a connected display and
-will observe a connected→all-disconnected KVM transition.
+The wrapper authenticates with `config.ini`, records codec/resolution/frame-rate/
+bitrate diagnostics, and creates the authenticated direct stream URL internally.
+It does not use the wall-safe contract as an admission gate. `--list-wall-safe`
+remains available only as an explicit filter for the separate normalized-corpus
+qualification run. Add `--require-disconnect` only when the run starts with a
+connected display and will observe a connected→all-disconnected KVM transition.
 
 `decode_transport_verdict=PASS` proves only that the eight decode/transport
 workers survived the observed display disconnect. `presentation_gate` remains

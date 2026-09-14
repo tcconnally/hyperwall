@@ -123,12 +123,12 @@ def _parser() -> argparse.ArgumentParser:
     listing.add_argument(
         "--list-items",
         action="store_true",
-        help="List configured-library items and wall-safe violations; do not benchmark.",
+        help="List every configured-library item with metadata and wall-safe diagnostics; do not benchmark.",
     )
     listing.add_argument(
         "--list-wall-safe",
         action="store_true",
-        help="List only items satisfying the normalized wall-safe contract.",
+        help="Explicitly list only items satisfying the normalized wall-safe contract.",
     )
     parser.add_argument(
         "--item-id",
@@ -348,19 +348,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"item {args.item_id!r} was not found in library {library!r}"
             )
         violations = wall_safe_violations(item)
+        item_summary = _item_summary(item, violations)
         if violations:
             print(
                 json.dumps(
                     {
-                        "status": "BLOCK",
-                        "reason": "item_not_wall_safe",
-                        "item": _item_summary(item, violations),
+                        "status": "NOTICE",
+                        "reason": "item_not_wall_safe_benchmark_continues",
+                        "item": item_summary,
                     },
                     indent=2,
                     sort_keys=True,
                 )
             )
-            return 2
 
         stream_url = build_stream_url(
             base=server_url,
@@ -376,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
                     "status": "STARTING",
                     "source": "authenticated_emby_direct_stream",
                     "library": library,
-                    "item": _item_summary(item, []),
+                    "item": item_summary,
                 },
                 sort_keys=True,
             )

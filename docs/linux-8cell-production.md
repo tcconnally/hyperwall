@@ -10,21 +10,20 @@ Wayland.
 
 ## Runtime contract
 
-1. Convert every current library item and every new item into the wall-safe
-   library before Emby indexes it.
-2. The normalized output is MP4, H.264 video, AAC audio when audio is present,
-   at most 1920×1080, 30 fps, two audio channels, and a conservative 10 Mbps
-   video ceiling.
-3. Point Emby at the normalized output root. Do not mix original and output
-   roots in the production wall library.
-4. Launch with `launch-linux.sh`. It enables
-   `HYPERWALL_NORMALIZED_LIBRARY=1`, disables runtime HLS transcoding, and
-   requires exactly one visible RTX 5070 Ti with at least 12 GiB reported VRAM.
-   It then unloads resident Ollama models and verifies `/api/ps` is empty before
-   starting the wall.
-5. If an item is missing the normalized metadata contract, Hyperwall excludes
-   it and logs the count; it does not silently send that item into a live HLS
-   transcode path.
+1. Keep the curated Emby library intact for qualification; do not replace it
+   with a filtered wall-safe subset when measuring real-world playback.
+2. The default launcher retains every item. Sources within the direct-play budget
+   play directly; heavy or incomplete metadata is routed to bounded server
+   H.264/AAC transcoding and remains observable in the logs.
+3. A normalized output tree remains available as an explicit comparison corpus:
+   MP4, H.264 video, AAC audio when audio is present, at most 1920×1080, 30 fps,
+   two audio channels, and a conservative 10 Mbps video ceiling.
+4. Launch with `launch-linux.sh`. It requires exactly one visible RTX 5070 Ti
+   with at least 12 GiB reported VRAM, unloads resident Ollama models, and
+   verifies `/api/ps` is empty before starting the wall.
+5. Set `HYPERWALL_NORMALIZED_LIBRARY=1` only when intentionally measuring the
+   normalized comparison corpus. That mode is not valid evidence for the
+   complete curated-library workload because it excludes the remaining items.
 
 The source library is never deleted by the normalizer. The destination is a
 separate tree and each output is written to a suffix-preserving temporary MP4
@@ -49,15 +48,16 @@ python3 scripts/normalize-library.py \
   --execute --strict
 ```
 
-Only after the command reports `status: "ok"` should `/srv/media-wall-safe`
-be added to an Emby library. Existing outputs are re-probed and skipped when
-already valid; failed or incomplete outputs are rebuilt without touching the
-source.
+Only after the command reports `status: "ok"` should the normalized tree be
+used for the explicit comparison-corpus run. Existing outputs are re-probed
+and skipped when already valid; failed or incomplete outputs are rebuilt without
+touching the source. The normalizer is not a prerequisite for whole-library
+qualification.
 
-For new media, add it to the original ingest root, rerun the normalizer, and
-wait for the verified output before exposing it to Emby. The wall is not an
-arbitrary-library player in this mode; the normalized library is the product
-boundary that makes eight-cell playback bounded.
+For new media, add it to the original ingest root and keep it in the curated
+Emby library. The default wall will exercise it directly or through the bounded
+server transcode path; the normalized tree can be used later for an isolated
+comparison.
 
 ## Why this avoids the known failure
 
@@ -65,9 +65,10 @@ The prior 8-cell M5 runs showed clean Greg transport but media failures in the
 client: malformed/software decode errors, freezes, A/V desynchronization,
 audio underruns, loop stalls, and very high frame drops. The rejected runtime
 30-fps/25-Mbps live-transcode experiment instead produced HLS 404/500 failures
-and forced heavy items back to direct play. Raising Emby resources may help
-other workloads, but it does not solve either failure mode reliably. Offline
-conversion removes that per-cell runtime transcode dependency.
+and forced heavy items back to direct play. The default full-library profile is
+now deliberately allowed to expose both classes of failure. The normalized tree
+is retained as a separate comparison corpus, not as a substitute for that
+coverage.
 
 ## Qualification gate
 
@@ -97,16 +98,18 @@ cell with `--vo=null --ao=null`, polls `/sys/class/drm/*/status`, ignores
 `CLOCK_BOOTTIME`. A KVM can remove every HDMI/DP connector without terminating
 this measurement.
 
-Run it only with normalized wall-safe media. The repository wrapper reads the
-existing `config.ini`, selects from its configured Emby library, and does not
-assume a local `/srv` media mount. Start with the KVM showing at least one
-connected output; `--require-disconnect` requires an observed
-connected→all-disconnected transition, not merely beginning disconnected:
+The repository wrapper reads the existing `config.ini`, selects from its
+configured Emby library, and does not assume a local `/srv` media mount. It can
+benchmark any curated item, including sources that fail the normalized contract;
+those diagnostics are reported and do not block the run. Start with the KVM
+showing at least one connected output; `--require-disconnect` requires an
+observed connected→all-disconnected transition, not merely beginning
+disconnected:
 
 ```bash
-python3 scripts/run-linux-disconnect-benchmark-emby.py --list-wall-safe
+python3 scripts/run-linux-disconnect-benchmark-emby.py --list-items
 
-ITEM_ID='<real wall-safe Emby item ID>'
+ITEM_ID='<real Emby item ID>'
 REPORT="$HOME/hyperwall-reports/kvm-disconnect-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$(dirname "$REPORT")"
 python3 scripts/run-linux-disconnect-benchmark-emby.py \\
@@ -114,6 +117,9 @@ python3 scripts/run-linux-disconnect-benchmark-emby.py \\
   --output "$REPORT" \\
   --cells 8 --duration-s 120 --poll-s 2 --keep-awake
 ```
+
+Use `--list-wall-safe` only for an explicit normalized-corpus comparison; it is
+not evidence for the complete curated-library workload.
 
 For a live handoff test, omit `--require-disconnect`, begin with the displays
 connected, switch the KVM, and confirm an `all_disconnected` event followed by
@@ -135,17 +141,22 @@ HYPERWALL_UNLOAD_OLLAMA=0 \
 ```
 
 The launcher accepts only `0` or `1` for `HYPERWALL_NORMALIZED_LIBRARY` and
-`HYPERWALL_AUTO_TRANSCODE`. It rejects the unsafe state where both are `0`;
-that state would send unnormalized media to direct playback. Never use these
-overrides for production or an overnight run.
+`HYPERWALL_AUTO_TRANSCODE`. Full-library mode requires auto-transcode to remain
+enabled; the explicit normalized-library mode is the direct-only comparison
+profile. Never use the normalized mode as evidence that the complete curated
+library is healthy.
 
-For the separate media-policy rollback comparison:
+For the explicit normalized comparison:
 
 ```bash
-HYPERWALL_NORMALIZED_LIBRARY=0 \
-HYPERWALL_AUTO_TRANSCODE=1 \
+HYPERWALL_NORMALIZED_LIBRARY=1 \
+HYPERWALL_AUTO_TRANSCODE=0 \
 ./launch-linux.sh
 ```
 
-That is not the production profile and should not be used for an overnight
-wall until a separate gate proves the live-transcode path on this exact host.
+For normal whole-library qualification, leave both variables unset (the
+launcher defaults them to `0` and `1`):
+
+```bash
+./launch-linux.sh
+```

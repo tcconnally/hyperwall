@@ -1,6 +1,7 @@
 """Tests for the KVM/HDMI-disconnect-safe Linux benchmark contract."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -210,6 +211,51 @@ def test_emby_wall_safe_selector_rejects_heavy_source():
     assert "video_bitrate" in wall_safe_violations(item)
 
 
+def test_emby_wrapper_runs_non_wall_safe_item_instead_of_blocking():
+    script = Path(__file__).resolve().parents[1] / "scripts" / "run-linux-disconnect-benchmark-emby.py"
+    spec = importlib.util.spec_from_file_location("benchmark_emby_wrapper", script)
+    wrapper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wrapper)
+
+    item = _wall_safe_emby_item(video_codec="hevc")
+    launched: list[list[str]] = []
+
+    class _Session:
+        def close(self):
+            return None
+
+    original_load_login = wrapper._load_login
+    original_authenticate = wrapper._authenticate
+    original_library_items = wrapper._library_items
+    original_run = wrapper.subprocess.run
+    try:
+        wrapper._load_login = lambda _path: (
+            "http://emby.invalid:8096", "user", "password", "mv"
+        )
+        wrapper._authenticate = lambda *_args: (_Session(), "user-id", "secret-token")
+        wrapper._library_items = lambda *_args: [item]
+        wrapper.subprocess.run = lambda command, check: (
+            launched.append(command) or type("Result", (), {"returncode": 0})()
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            result = wrapper.main([
+                "--library", "mv",
+                "--item-id", "safe-item",
+                "--output", str(Path(directory) / "report"),
+                "--duration-s", "8",
+            ])
+    finally:
+        wrapper._load_login = original_load_login
+        wrapper._authenticate = original_authenticate
+        wrapper._library_items = original_library_items
+        wrapper.subprocess.run = original_run
+
+    assert result == 0
+    assert len(launched) == 1
+    input_index = launched[0].index("--input")
+    assert "/Videos/safe-item/stream" in launched[0][input_index + 1]
+
+
 def test_cli_blocks_inaccessible_keep_awake_before_launch(tmp_path=None):
     if tmp_path is None:
         with tempfile.TemporaryDirectory() as directory:
@@ -355,6 +401,7 @@ def run_all() -> int:
         test_emby_wall_safe_selector_accepts_normalized_contract,
         test_emby_wall_safe_selector_rejects_hevc_source,
         test_emby_wall_safe_selector_rejects_heavy_source,
+        test_emby_wrapper_runs_non_wall_safe_item_instead_of_blocking,
     ]
     if sys.platform.startswith("linux"):
         tests.extend([

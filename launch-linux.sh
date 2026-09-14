@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # HyperWall — Pop!_OS/NVIDIA production launcher.
 #
-# The production library is pre-normalized to MP4/H.264/AAC before Emby sees
-# it. Runtime HLS transcoding is intentionally disabled: an unnormalized item
-# is excluded and reported instead of entering the eight-cell wall.
+# The production profile preserves the complete configured Emby library.
+# Direct play is used within the playback budget; items outside it remain in
+# the playlist and use bounded server transcoding. The normalized-only profile
+# is an explicit comparison mode, not the default qualification path.
 set -euo pipefail
 
 # Soak-only variables must not leak into an everyday production launch.
@@ -22,9 +23,12 @@ fi
 
 cd "$(dirname "$0")"
 
-# Production defaults can be overridden explicitly for a diagnostic run.
-export HYPERWALL_NORMALIZED_LIBRARY="${HYPERWALL_NORMALIZED_LIBRARY:-1}"
-export HYPERWALL_AUTO_TRANSCODE="${HYPERWALL_AUTO_TRANSCODE:-0}"
+# The normal production profile retains the complete Emby library. Sources that
+# exceed the direct-play budget are sent through the bounded H.264/AAC Emby
+# transcode path so problematic media remains observable instead of being
+# silently excluded. Normalized-only mode remains an explicit opt-in.
+export HYPERWALL_NORMALIZED_LIBRARY="${HYPERWALL_NORMALIZED_LIBRARY:-0}"
+export HYPERWALL_AUTO_TRANSCODE="${HYPERWALL_AUTO_TRANSCODE:-1}"
 export HYPERWALL_UNLOAD_OLLAMA="${HYPERWALL_UNLOAD_OLLAMA:-1}"
 export HYPERWALL_HARDWARE_PREFLIGHT="${HYPERWALL_HARDWARE_PREFLIGHT:-1}"
 export HYPERWALL_OLLAMA_URL="${HYPERWALL_OLLAMA_URL:-http://127.0.0.1:11434}"
@@ -63,7 +67,7 @@ case "$HYPERWALL_AUTO_TRANSCODE" in
 esac
 
 if [ "$HYPERWALL_NORMALIZED_LIBRARY" = "0" ] && [ "$HYPERWALL_AUTO_TRANSCODE" = "0" ]; then
-  printf '%s\n' 'cannot disable normalized library while auto-transcode is disabled' >&2
+  printf '%s\n' 'full-library mode requires auto-transcode=1; use the explicit normalized-library mode for direct-only qualification' >&2
   exit 2
 fi
 

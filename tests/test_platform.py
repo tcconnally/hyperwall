@@ -69,7 +69,7 @@ def test_03b_render_api_platform_matrix():
     assert uses_render_api("win32") is False
 
 
-def test_linux_production_launcher_is_direct_play_only():
+def test_linux_production_launcher_declares_playback_controls():
     from pathlib import Path
 
     launcher = Path(__file__).resolve().parents[1] / "launch-linux.sh"
@@ -82,6 +82,15 @@ def test_linux_production_launcher_is_direct_play_only():
     assert "scripts/preflight-linux-production.py" in text
     assert "--required" in text
     assert "exec" in text
+
+
+def test_linux_launcher_defaults_to_full_library_with_auto_transcode():
+    from pathlib import Path
+
+    launcher = Path(__file__).resolve().parents[1] / "launch-linux.sh"
+    text = launcher.read_text()
+    assert 'HYPERWALL_NORMALIZED_LIBRARY="${HYPERWALL_NORMALIZED_LIBRARY:-0}"' in text
+    assert 'HYPERWALL_AUTO_TRANSCODE="${HYPERWALL_AUTO_TRANSCODE:-1}"' in text
 
 
 def test_linux_launcher_rejects_invalid_ollama_unload_override():
@@ -176,7 +185,7 @@ def test_linux_launcher_rejects_direct_play_without_normalized_library():
             text=True,
         )
     assert result.returncode == 2, result.stderr
-    assert "cannot disable normalized library while auto-transcode is disabled" in result.stderr
+    assert "full-library mode requires auto-transcode=1" in result.stderr
 
 
 def test_linux_launcher_rejects_invalid_auto_transcode_override():
@@ -285,7 +294,8 @@ def run_all() -> int:
         test_02_windows_opts_unchanged,
         test_03_linux_opts_are_sane,
         test_03b_render_api_platform_matrix,
-        test_linux_production_launcher_is_direct_play_only,
+        test_linux_production_launcher_declares_playback_controls,
+        test_linux_launcher_defaults_to_full_library_with_auto_transcode,
         *(
             [
                 test_linux_launcher_rejects_invalid_ollama_unload_override,
