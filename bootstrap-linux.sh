@@ -17,15 +17,29 @@ if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,
   exit 2
 fi
 
+if [ -e .venv ] && [ ! -x .venv/bin/python ]; then
+  rm -rf .venv
+fi
 if [ ! -x .venv/bin/python ]; then
   printf '%s\n' '[*] Creating .venv...'
-  "$PYTHON_BIN" -m venv .venv
+  # Some Ubuntu/Pop!_OS installs omit python3-venv/ensurepip. The venv
+  # itself still works without pip; the fallback below seeds pip in-user.
+  "$PYTHON_BIN" -m venv --without-pip .venv
 fi
 
 PY="./.venv/bin/python"
 if ! "$PY" -m pip --version >/dev/null 2>&1; then
-  printf '%s\n' '[FAIL] This Python lacks venv/pip support.' >&2
-  printf '%s\n' '       Install the distro package that provides python3-venv, then rerun.' >&2
+  PIP_BOOTSTRAP="$(mktemp)"
+  trap 'rm -f "$PIP_BOOTSTRAP"' EXIT
+  printf '%s\n' '[*] Seeding pip in .venv...'
+  "$PYTHON_BIN" -c 'import sys, urllib.request; urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", sys.argv[1])' "$PIP_BOOTSTRAP"
+  "$PY" "$PIP_BOOTSTRAP" --disable-pip-version-check
+  rm -f "$PIP_BOOTSTRAP"
+  trap - EXIT
+fi
+
+if ! "$PY" -m pip --version >/dev/null 2>&1; then
+  printf '%s\n' '[FAIL] Could not provision pip inside .venv.' >&2
   exit 2
 fi
 
