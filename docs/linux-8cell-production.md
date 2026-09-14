@@ -97,15 +97,22 @@ cell with `--vo=null --ao=null`, polls `/sys/class/drm/*/status`, ignores
 `CLOCK_BOOTTIME`. A KVM can remove every HDMI/DP connector without terminating
 this measurement.
 
-Run it only with normalized wall-safe media. Start with the KVM showing at least
-one connected output; `--require-disconnect` now requires the benchmark to observe
-an actual connected→all-disconnected transition, not merely begin disconnected:
+Run it only with normalized wall-safe media. The repository wrapper reads the
+existing `config.ini`, selects from its configured Emby library, and does not
+assume a local `/srv` media mount. Start with the KVM showing at least one
+connected output; `--require-disconnect` requires an observed
+connected→all-disconnected transition, not merely beginning disconnected:
 
 ```bash
-python3 scripts/run-linux-disconnect-benchmark.py \\
-  --input /srv/media-wall-safe/sample.mp4 \\
-  --output /srv/hyperwall-reports/kvm-disconnect-$(date -u +%Y%m%dT%H%M%SZ) \\
-  --cells 8 --duration-s 120 --poll-s 2 --require-disconnect --keep-awake
+python3 scripts/run-linux-disconnect-benchmark-emby.py --list-wall-safe
+
+ITEM_ID='<real wall-safe Emby item ID>'
+REPORT="$HOME/hyperwall-reports/kvm-disconnect-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$(dirname "$REPORT")"
+python3 scripts/run-linux-disconnect-benchmark-emby.py \\
+  --item-id "$ITEM_ID" \\
+  --output "$REPORT" \\
+  --cells 8 --duration-s 120 --poll-s 2 --keep-awake
 ```
 
 For a live handoff test, omit `--require-disconnect`, begin with the displays

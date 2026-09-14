@@ -107,18 +107,28 @@ flag requires an observed connected→all-disconnected transition rather than a
 pre-existing disconnected state.
 
 ```bash
-MEDIA=/tmp/hyperwall-linux-disconnect-benchmark/media/wall-safe.mp4
+# The wrapper reads the existing config.ini and uses the configured Emby
+# server/library. It does not require a local media mount or MEDIA= path.
+python3 scripts/run-linux-disconnect-benchmark-emby.py --list-wall-safe
+
+# Pick an ID from the JSON output, then run from a writable home directory.
+ITEM_ID='<real wall-safe Emby item ID>'
 REPORT_ROOT="${HOME}/hyperwall-reports"
 REPORT="$REPORT_ROOT/kvm-disconnect-$(date -u +%Y%m%dT%H%M%SZ)"
-
 mkdir -p "$REPORT_ROOT"
-test -r "$MEDIA"
 
-python3 scripts/run-linux-disconnect-benchmark.py \\
-  --input "$MEDIA" \\
+python3 scripts/run-linux-disconnect-benchmark-emby.py \\
+  --item-id "$ITEM_ID" \\
   --output "$REPORT" \\
-  --cells 8 --duration-s 120 --poll-s 2 --require-disconnect --keep-awake
+  --cells 8 --duration-s 120 --poll-s 2 --keep-awake
 ```
+
+The Emby wrapper authenticates with `config.ini`, checks the selected item is
+H.264/AAC at ≤1080p30 and ≤10 Mbps, and creates the authenticated direct stream
+URL internally. It blocks HEVC, oversized, high-frame-rate, or otherwise
+unverified items instead of silently benchmarking the wrong source. Add
+`--require-disconnect` only when the run starts with a connected display and
+will observe a connected→all-disconnected KVM transition.
 
 `decode_transport_verdict=PASS` proves only that the eight decode/transport
 workers survived the observed display disconnect. `presentation_gate` remains

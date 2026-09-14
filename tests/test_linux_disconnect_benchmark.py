@@ -10,6 +10,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from hyperwall.emby_benchmark import (  # noqa: E402
+    wall_safe_violations,
+)
 from hyperwall.linux_disconnect_benchmark import (  # noqa: E402
     build_mpv_command,
     connector_summary,
@@ -168,6 +171,45 @@ def test_summary_records_kvm_loss_and_recovery_interval():
     assert summary["headless_disconnect_resilience"] == "PASS"
 
 
+def _wall_safe_emby_item(*, video_codec: str = "h264") -> dict:
+    return {
+        "Id": "safe-item",
+        "Name": "safe-item",
+        "MediaSources": [
+            {
+                "Container": "mp4",
+                "Bitrate": 8_160_000,
+                "MediaStreams": [
+                    {
+                        "Type": "Video",
+                        "Codec": video_codec,
+                        "Width": 1920,
+                        "Height": 1080,
+                        "BitRate": 8_000_000,
+                        "AverageFrameRate": 30,
+                    },
+                    {"Type": "Audio", "Codec": "aac", "Channels": 2},
+                ],
+            },
+        ],
+    }
+
+
+def test_emby_wall_safe_selector_accepts_normalized_contract():
+    assert wall_safe_violations(_wall_safe_emby_item()) == []
+
+
+def test_emby_wall_safe_selector_rejects_hevc_source():
+    violations = wall_safe_violations(_wall_safe_emby_item(video_codec="hevc"))
+    assert "video_codec" in violations
+
+
+def test_emby_wall_safe_selector_rejects_heavy_source():
+    item = _wall_safe_emby_item()
+    item["MediaSources"][0]["MediaStreams"][0]["BitRate"] = 12_000_000
+    assert "video_bitrate" in wall_safe_violations(item)
+
+
 def test_cli_blocks_inaccessible_keep_awake_before_launch(tmp_path=None):
     if tmp_path is None:
         with tempfile.TemporaryDirectory() as directory:
@@ -198,7 +240,7 @@ def test_cli_blocks_inaccessible_keep_awake_before_launch(tmp_path=None):
             sys.executable,
             str(Path(__file__).resolve().parents[1] / "scripts/run-linux-disconnect-benchmark.py"),
             "--input",
-            "/tmp/wall-safe.mp4",
+            "/tmp/synthetic-input.mp4",
             "--output",
             str(tmp_path / "report"),
             "--cells",
@@ -310,6 +352,9 @@ def run_all() -> int:
         test_summary_blocks_early_cell_exit_even_without_display_evidence,
         test_preexisting_display_loss_is_not_counted_as_a_kvm_transition,
         test_summary_records_kvm_loss_and_recovery_interval,
+        test_emby_wall_safe_selector_accepts_normalized_contract,
+        test_emby_wall_safe_selector_rejects_hevc_source,
+        test_emby_wall_safe_selector_rejects_heavy_source,
     ]
     if sys.platform.startswith("linux"):
         tests.extend([
