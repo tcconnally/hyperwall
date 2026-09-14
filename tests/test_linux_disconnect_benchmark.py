@@ -310,9 +310,14 @@ def run_all() -> int:
         test_summary_blocks_early_cell_exit_even_without_display_evidence,
         test_preexisting_display_loss_is_not_counted_as_a_kvm_transition,
         test_summary_records_kvm_loss_and_recovery_interval,
-        test_cli_blocks_inaccessible_keep_awake_before_launch,
-        test_cli_runs_headless_disconnect_gate_and_redacts_source,
     ]
+    if sys.platform.startswith("linux"):
+        tests.extend([
+            test_cli_blocks_inaccessible_keep_awake_before_launch,
+            test_cli_runs_headless_disconnect_gate_and_redacts_source,
+        ])
+    else:
+        print("  SKIP  Linux CLI integration tests — Linux-only process/DRM contracts")
     failures = 0
     for test in tests:
         try:
