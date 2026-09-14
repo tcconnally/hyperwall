@@ -107,7 +107,7 @@ flag requires an observed connected→all-disconnected transition rather than a
 pre-existing disconnected state.
 
 ```bash
-MEDIA=/srv/media-wall-safe/sample.mp4
+MEDIA=/tmp/hyperwall-linux-disconnect-benchmark/media/wall-safe.mp4
 REPORT_ROOT="${HOME}/hyperwall-reports"
 REPORT="$REPORT_ROOT/kvm-disconnect-$(date -u +%Y%m%dT%H%M%SZ)"
 
