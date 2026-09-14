@@ -276,11 +276,17 @@ def run_all() -> int:
         test_03_linux_opts_are_sane,
         test_03b_render_api_platform_matrix,
         test_linux_production_launcher_is_direct_play_only,
-        test_linux_launcher_rejects_invalid_ollama_unload_override,
-        test_linux_launcher_rejects_invalid_hardware_preflight_override,
-        test_linux_launcher_rejects_invalid_normalized_library_override,
-        test_linux_launcher_rejects_direct_play_without_normalized_library,
-        test_linux_launcher_rejects_invalid_auto_transcode_override,
+        *(
+            [
+                test_linux_launcher_rejects_invalid_ollama_unload_override,
+                test_linux_launcher_rejects_invalid_hardware_preflight_override,
+                test_linux_launcher_rejects_invalid_normalized_library_override,
+                test_linux_launcher_rejects_direct_play_without_normalized_library,
+                test_linux_launcher_rejects_invalid_auto_transcode_override,
+            ]
+            if sys.platform.startswith("linux")
+            else []
+        ),
         test_04_native_wid_masking,
         test_05_env_overrides_still_win_on_macos,
         test_06_macos_render_api_prefers_display_resample_sync,
