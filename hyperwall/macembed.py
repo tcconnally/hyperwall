@@ -178,11 +178,19 @@ class MpvGLWidget(QOpenGLWidget):
             "opengl",
             opengl_init_params={"get_proc_address": self._get_proc_address},
         )
+        # An abandoned old context can outlive a replacement. Its resolver
+        # must live with that wrapper, not only in this widget's latest slot.
+        self._ctx._hyperwall_get_proc_address = self._get_proc_address
+        # release() closes a gate permanently. Give each new context its own
+        # gate, whose identity also rejects callbacks from previous contexts.
+        self._frame_pump.close()
+        frame_pump = FramePumpGate()
+        self._frame_pump = frame_pump
         self._accepting_frames = True
-        self._ctx.update_cb = self._on_mpv_frame
+        self._ctx.update_cb = lambda: self._on_mpv_frame(frame_pump)
         logger.debug("mpv render context created (opengl).")
 
-    def _on_mpv_frame(self) -> None:
+    def _on_mpv_frame(self, frame_pump: FramePumpGate | None = None) -> None:
         """mpv vo thread → frame available. NEVER raise (ctypes callback).
 
         Do NOT store `self.sig_frame_ready.emit` here directly: during
@@ -192,9 +200,17 @@ class MpvGLWidget(QOpenGLWidget):
         False synchronously at release() — before anything that can fail.
         """
         try:
-            if self._accepting_frames:
-                self._render_telemetry.record_frame_ready()
-                if self._frame_pump.request():
+            if not self._accepting_frames:
+                return
+            frame_pump = self._frame_pump if frame_pump is None else frame_pump
+            if frame_pump is not self._frame_pump:
+                return
+            self._render_telemetry.record_frame_ready()
+            # Capture the originating gate: release/recreation may happen
+            # while this callback waits for a telemetry/gate lock. An old
+            # callback must never mark the replacement gate pending.
+            if frame_pump.request():
+                if self._accepting_frames and frame_pump is self._frame_pump:
                     self.sig_frame_ready.emit()
         except Exception:
             pass

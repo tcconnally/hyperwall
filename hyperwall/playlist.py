@@ -44,6 +44,18 @@ class PlaylistManager:
     def groups(self) -> list[str]:
         return list(self._pools.keys())
 
+    def update_source(self, items: list[Item], group: str = DEFAULT_GROUP) -> None:
+        """Refresh future items without resetting the active shuffle cycle."""
+        old_ids = {item.get("Id") for item in self._pools.get(group, [])}
+        by_id = {item.get("Id"): item for item in items}
+        self._pools[group] = list(items)
+        if group in self._queues:
+            retained = [by_id[item.get("Id")] for item in self._queues[group]
+                        if item.get("Id") in by_id]
+            added = [item for item in items if item.get("Id") not in old_ids]
+            self._shuffle(added)
+            self._queues[group] = deque([*retained, *added])
+
     def pool_size(self, group: str = DEFAULT_GROUP) -> int:
         return len(self._pools.get(group, []))
 
@@ -108,10 +120,17 @@ class PlaylistManager:
 
     def push_front(self, group: str, item: Item) -> None:
         """Return a reserved item to the front of a group's live queue."""
-        if item not in self._pools.get(group, []):
+        # A metadata refresh replaces future dictionaries while active and
+        # prefetched cells retain their originals. Requeue the current pool
+        # version, rather than dropping the reservation or reviving old URLs.
+        item_id = item.get("Id")
+        current = next((candidate for candidate in self._pools.get(group, [])
+                        if (candidate.get("Id") == item_id if item_id is not None
+                            else candidate == item)), None)
+        if current is None:
             return
         q = self._queues.setdefault(group, deque())
-        q.appendleft(item)
+        q.appendleft(current)
 
     def peek(self, group: str = DEFAULT_GROUP) -> Item | None:
         """Return the group's next item without consuming it (or None)."""

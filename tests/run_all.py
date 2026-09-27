@@ -26,6 +26,7 @@ SUITES = [
     "test_session_broker",
     "test_urls",
     "test_renditions",
+    "test_progressive_loading",
     "test_rendition_finalizer",
     "test_local_telemetry",
     "test_emergency_exit",

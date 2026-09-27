@@ -164,6 +164,7 @@ class EmbyClient:
         self,
         library_names: list[str],
         progress_callback: callable | None = None,
+        *, resolve_renditions: bool = True,
     ) -> list[dict[str, Any]]:
         """Fetch all items from the given libraries."""
         all_items: list[dict[str, Any]] = []
@@ -214,6 +215,8 @@ class EmbyClient:
         except Exception as e:
             logger.error("Content loader error: %s", e)
 
+        if not resolve_renditions:
+            return all_items
         rendition_root = os.environ.get("HYPERWALL_RENDITION_ROOT", "").strip()
         prepared_only = os.environ.get("HYPERWALL_PREPARED_ONLY", "0") == "1"
         if rendition_root:
@@ -245,6 +248,8 @@ class EmbyClient:
         items: list[dict[str, Any]],
         root: str,
         progress_callback: callable | None = None,
+        items_callback: callable | None = None,
+        cancelled: callable | None = None,
     ) -> list[dict[str, Any]]:
         """Resolve Folder Sync sources on the content-loading worker.
 
@@ -259,6 +264,8 @@ class EmbyClient:
             or os.environ.get("HYPERWALL_PREPARED_ONLY", "0") == "1"
         )
         for index, item in enumerate(items):
+            if cancelled and cancelled():
+                break
             enriched = prefer_rendition(item, root)
             if enriched is item and item.get("Id") and consecutive_failures < 3:
                 try:
@@ -285,6 +292,8 @@ class EmbyClient:
             if verify_audio and enriched.get("_hyperwall_media_source_id"):
                 enriched["_hyperwall_prepared"] = self._has_normalization_receipt(enriched)
             selected.append(enriched)
+            if items_callback:
+                items_callback(selected)
             if progress_callback and (index % 25 == 0 or index + 1 == len(items)):
                 progress_callback(f"Checking prepared sources: {index + 1}/{len(items)}")
         return selected
@@ -342,19 +351,71 @@ class ContentLoader(QThread):
     """Loads library items in a background thread."""
 
     finished = pyqtSignal(list)
+    updated = pyqtSignal(list)
     progress = pyqtSignal(str)
 
-    def __init__(self, client: EmbyClient, library_names: list[str]):
+    def __init__(self, client: EmbyClient, library_names: list[str], startup_cells: int = 1,
+                 *, progressive_start: bool = True):
         super().__init__()
         self.client = client
         self.library_names = library_names
+        self.startup_cells = max(1, startup_cells)
+        self.progressive_start = progressive_start
 
     def run(self) -> None:
+        if self.isInterruptionRequested():
+            return
         items = self.client.fetch_items(
             self.library_names,
             progress_callback=self.progress.emit,
+            resolve_renditions=False,
         )
-        self.finished.emit(items)
+        if self.isInterruptionRequested():
+            return
+        root = os.environ.get("HYPERWALL_RENDITION_ROOT", "").strip()
+        prepared_only = os.environ.get("HYPERWALL_PREPARED_ONLY", "0") == "1"
+        started = False
+        ready: list[dict[str, Any]] = []
+        if not prepared_only and self.progressive_start:
+            self.finished.emit(items)
+            started = True
+        elif prepared_only and not root:
+            self.progress.emit("No prepared source directory configured")
+            self.finished.emit([])
+            return
+
+        def discovered(selected):
+            nonlocal started
+            if self.isInterruptionRequested():
+                return
+            item = selected[-1]
+            if item.get("_hyperwall_prepared") is True:
+                ready.append(item)
+            # A full-library audit must never hold the first playable batch.
+            if (prepared_only and self.progressive_start and not started
+                    and len(ready) >= self.startup_cells):
+                self.finished.emit(list(ready))
+                started = True
+            if prepared_only and (len(selected) % 25 == 0 or len(selected) == len(items)):
+                self.progress.emit(f"Prepared playback: {len(ready)}/{len(items)} ready; {len(items)-len(ready)} pending")
+
+        if root:
+            items = self.client._prefer_renditions(
+                items, root, None if prepared_only else self.progress.emit,
+                items_callback=discovered,
+                cancelled=self.isInterruptionRequested,
+            )
+        if self.isInterruptionRequested():
+            return
+        playable = ready if prepared_only else items
+        if prepared_only:
+            summary = f"Prepared playback: {len(ready)}/{len(items)} ready; {len(items)-len(ready)} pending"
+            logger.info(summary)
+            self.progress.emit(summary)
+        if started:
+            self.updated.emit(list(playable))
+        else:
+            self.finished.emit(list(playable))
 
 
 class CleanupWorker(QObject):

@@ -29,12 +29,15 @@ After the platform bootstrap and `config.ini` setup, use:
 ./run-hyperwall.sh
 ```
 
-This profile keeps every library item, prefers finalized Emby playback copies,
-and uses hardware decoding (`videotoolbox-copy` on macOS, `auto-safe` on Linux).
-Unprepared files keep the existing recovery and bounded server transcode path.
-The saved layout remains configurable up to twelve cells; keeping a file in
-the library is not a claim that twelve arbitrary originals can decode smoothly.
-The static-library preparation job removes that unpredictable runtime cost.
+This profile plays finalized, normalized Emby copies and uses hardware decoding
+(`videotoolbox-copy` on macOS, `auto-safe` on Linux). Originals stay intact on
+the NAS. While preparation runs, the wall starts as soon as enough verified
+copies are discovered for its cells and prefetched clips; it does not wait for the full library
+audit. A background refresh every minute adds ready copies to future selections
+without interrupting current playback. Loading cards and local telemetry show
+the ready/pending count. An unfinished or missing copy never silently falls
+back to a heavy original. Set `HYPERWALL_PREPARED_ONLY=0` only for an explicit
+mixed-original comparison; that mode retains bounded runtime transcoding.
 
 Performance samples are written every five seconds to
 `logs/telemetry/hyperwall_<date>_<pid>.jsonl`, beside `hyperwall.log`.
@@ -159,7 +162,8 @@ items to a dedicated directory such as `/hyperwall/mv`. Configure
 `HYPERWALL_RENDITION_ROOT=/hyperwall/mv` to prefer those versions. Hyperwall
 keeps each original item's identity, title, favorites and tags, then requests
 its selected `MediaSourceId` through the existing static Emby endpoint.
-Unconverted items remain in the library and use their original playback path.
+Unconverted items remain in the library. With prepared-only mode disabled,
+they use their original playback path; otherwise they remain pending.
 
 Folder Sync can copy an already compatible original unchanged. Source selection
 therefore does not by itself enable prepared audio. The NAS finalizer remuxes
@@ -177,13 +181,14 @@ No extra file server is required.
 with verified receipts, allowing a ready subset to run while normalization is
 still progressing. It logs the ready/total count and admits no items when the
 rendition root is unset or no receipts pass. This option leaves the Emby library
-intact; it is off by default, so ordinary launches retain all original items.
+intact. The normal `run-hyperwall.sh` profile enables it; the lower-level
+`launch.sh` leaves it disabled unless explicitly configured.
 
 Folder Sync sources are discovered through PlaybackInfo during background
 library loading. Progress and the selected/total count are logged; unavailable
 or ambiguous sources retain their originals. Newly completed versions become
-eligible on the next library load or relaunch. Inspect one item without opening
-media or printing titles, paths or credentials:
+eligible during the background refresh without restarting active cells.
+Inspect one item without opening media or printing titles, paths or credentials:
 
 ```bash
 python3 scripts/inspect-renditions.py --config /path/to/config.ini --item-id ITEM_ID

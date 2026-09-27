@@ -697,11 +697,73 @@ class WallController:
     # ── content loading ─────────────────────────────────────────────────────────────
 
     def _start_async_load(self) -> None:
-        self.loader = ContentLoader(self.client, self.libraries)
+        # Every initial play reserves its next clip immediately. Admit enough
+        # copies for both slots so prefetch cannot exhaust the first shuffle
+        # cycle before all visible cells have received distinct items.
+        self.loader = ContentLoader(self.client, self.libraries, startup_cells=2 * len(self.cells))
         self.loader.finished.connect(self._on_items_loaded)
+        self.loader.updated.connect(self._on_items_updated)
+        self.loader.progress.connect(self._on_loading_progress)
+        self.loader.start()
+        if os.environ.get("HYPERWALL_RENDITION_ROOT", "").strip():
+            self._rendition_refresh_timer = QTimer()
+            self._rendition_refresh_timer.setInterval(60_000)
+            self._rendition_refresh_timer.timeout.connect(self._refresh_prepared_sources)
+            self._rendition_refresh_timer.start()
+
+    def _refresh_prepared_sources(self) -> None:
+        if self._shutdown_requested or self._cleaned_up or self.loader.isRunning():
+            return
+        # Publish one complete refresh; a partial startup batch would shrink
+        # the established pool and discard its remaining shuffle queue.
+        self.loader = ContentLoader(self.client, self.libraries, progressive_start=False)
+        # Refresh future selections without restarting any current stream.
+        self.loader.finished.connect(self._on_items_updated)
+        self.loader.updated.connect(self._on_items_updated)
+        self.loader.progress.connect(self._on_loading_progress)
         self.loader.start()
 
+    def _on_loading_progress(self, message: str) -> None:
+        if self._shutdown_requested or self._cleaned_up:
+            return
+        self._library_status = message
+        for cell in self.cells:
+            if cell.current_item is None:
+                cell._show_loading(message)
+
+    def _on_items_updated(self, items: list[dict[str, Any]]) -> None:
+        if self._shutdown_requested or self._cleaned_up or not items:
+            return
+        self.all_items = select_playback_candidates(
+            list(items), direct_only=getattr(self, "_direct_only_pool", False),
+            normalized_only=getattr(self, "_normalized_library", False),
+            max_fps=(NORMALIZED_LIBRARY_MAX_FPS if getattr(self, "_normalized_library", False)
+                     else STABLE_DIRECT_MAX_FPS),
+            max_bitrate_mbps=(NORMALIZED_LIBRARY_MAX_BITRATE_MBPS
+                             if getattr(self, "_normalized_library", False)
+                             else STABLE_DIRECT_MAX_BITRATE_MBPS),
+        )
+        # Preserve an explicit diagnostic item selection as well as favorites.
+        selected_id = (os.environ.get("HYPERWALL_SOAK_ITEM_ID")
+                       if os.environ.get("HYPERWALL_SOAK_ACTIVE") == "1" else None)
+        if selected_id not in (None, "") and not getattr(self, "_normalized_library", False):
+            self.all_items = list(items)
+        self.filtered, self.filter_mode = apply_initial_filter(
+            self.all_items, self.filter_mode, item_id=selected_id,
+        )
+        self.playlists.update_source(self.filtered, DEFAULT_GROUP)
+        for i, cell in enumerate(self.cells):
+            if cell.current_item is None and self.filtered:
+                QTimer.singleShot(i * STREAM_START_STAGGER_MS,
+                                  lambda c=cell: self._start_empty_cell(c))
+
+    def _start_empty_cell(self, cell: VideoCell) -> None:
+        if not self._shutdown_requested and not self._cleaned_up and cell.current_item is None:
+            self.next_video(cell, False)
+
     def _on_items_loaded(self, items: list[dict[str, Any]]) -> None:
+        if self._shutdown_requested or self._cleaned_up:
+            return
         soak_active = os.environ.get("HYPERWALL_SOAK_ACTIVE") == "1"
         initial_filter = (
             os.environ.get("HYPERWALL_SOAK_FILTER", "") if soak_active else ""
@@ -768,6 +830,9 @@ class WallController:
                 "the Emby library response."
             )
             for cell in self.cells:
+                if os.environ.get("HYPERWALL_PREPARED_ONLY", "0") == "1":
+                    cell._show_loading("NO READY COPIES — PREPARING LIBRARY")
+                    continue
                 # play() never runs for these cells: stop the endless
                 # LOADING pulse explicitly, and raise the label — an
                 # unraised Qt sibling can render BEHIND the native video
@@ -786,7 +851,7 @@ class WallController:
         for i, cell in enumerate(self.cells):
             QTimer.singleShot(
                 i * STREAM_START_STAGGER_MS,
-                lambda c=cell: self.next_video(c, False),
+                lambda c=cell: self._start_empty_cell(c),
             )
 
     # ── URL construction ──────────────────────────────────────────────────
@@ -1048,11 +1113,20 @@ class WallController:
                 return
             if token is not None and not cell._playback_token_is_current(token):
                 return
-            if self.playlists.claim_front(self._cell_group(cell), item) is None:
+            group = self._cell_group(cell)
+            candidate = self.playlists.peek(group)
+            if candidate is None or (
+                candidate is not item
+                and (item.get("Id") is None or candidate.get("Id") != item.get("Id"))
+            ):
+                return
+            # Refresh replaces queue dictionaries, not the reservation's
+            # logical item. Claim its latest source only while still front.
+            if self.playlists.claim_front(group, candidate) is None:
                 return
             self._hand_off(
                 cell,
-                item,
+                candidate,
                 force_transcode=force_transcode,
                 preserve_failure_state=preserve_failure_state,
                 _transcode_retry_attempt=attempt,
@@ -1304,13 +1378,17 @@ class WallController:
                 and cell._prefetch_request_token != token
             ):
                 return  # a newer prefetch request owns the cell
-            if self.playlists.peek(self._cell_group(cell)) is not item:
+            candidate = self.playlists.peek(self._cell_group(cell))
+            if candidate is None or (
+                candidate is not item
+                and (item.get("Id") is None or candidate.get("Id") != item.get("Id"))
+            ):
                 return  # superseded or consumed by another draw
             occupied = self._transcode_load_count(
                 cell=cell,
                 include_cell=True,
             )
-            if self._auto_transcode_requested(item) and not allow_transcode_prefetch(
+            if self._auto_transcode_requested(candidate) and not allow_transcode_prefetch(
                 occupied, MAX_CONCURRENT_TRANSCODES,
             ):
                 if attempt < TRANSCODE_PREFETCH_RETRY_ATTEMPTS:
@@ -1321,7 +1399,7 @@ class WallController:
                         attempt, TRANSCODE_PREFETCH_RETRY_ATTEMPTS,
                     )
                     self._schedule_transcode_prefetch_retry(
-                        cell, token, item, attempt + 1,
+                        cell, token, candidate, attempt + 1,
                     )
                 return
             # A slot is free — prefetch now. defer_on_saturation=False so a
@@ -1841,6 +1919,12 @@ class WallController:
         if self._cleaned_up:
             return []
         self._cleaned_up = True
+        try:
+            self.loader.requestInterruption()
+            if hasattr(self, "_rendition_refresh_timer"):
+                self._rendition_refresh_timer.stop()
+        except Exception:
+            pass
         try:
             self._session_cleanup_timer.stop()
         except Exception as e:

@@ -109,7 +109,7 @@ def test_full_library_launcher_platforms_without_starting_wall():
             env = {"PATH": f"{base}:/usr/bin:/bin", "HOME": directory}
             result = subprocess.run(["/bin/bash", str(launcher)], env=env,
                                     capture_output=True, text=True, check=True)
-            assert result.stdout.splitlines() == [decoder, "0", "0", "1", "1"]
+            assert result.stdout.splitlines() == [decoder, "1", "0", "1", "1"]
 
 
 def run_all():

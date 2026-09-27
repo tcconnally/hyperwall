@@ -14,7 +14,7 @@ def test_mpv_snapshot_exports_frame_pump_counters():
     source = (_ROOT / "hyperwall" / "macembed.py").read_text(encoding="utf-8")
     assert "frame_pump" in source
     assert "self._frame_pump.snapshot()" in source
-    assert "self._frame_pump.request()" in source
+    assert "frame_pump.request()" in source
     assert "self._frame_pump.finish_paint()" in source
 
 

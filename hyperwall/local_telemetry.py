@@ -180,7 +180,8 @@ class LocalTelemetry(QObject):
         # Do not serialize, query libmpv, run commands or touch disk in Qt.
         lags = sorted(self.lags)
         self.lags.clear()
-        self.record_event("sample", cells=[cached_cell_snapshot(c, i)
+        self.record_event("sample", library_status=getattr(self.wall, "_library_status", None),
+                          cells=[cached_cell_snapshot(c, i)
                                           for i, c in enumerate(self.wall.cells)],
                           loop_lag_ms={"max": round(max(lags, default=0), 3),
                                        "p95": round(lags[min(len(lags)-1, int(len(lags)*.95))], 3)

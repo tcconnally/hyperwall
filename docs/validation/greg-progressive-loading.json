@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-27",
+  "active_cells": 8,
+  "prefetch_slots": 8,
+  "first_batch_seconds": 2.28,
+  "first_batch_items": 16,
+  "first_batch_all_prepared": true,
+  "complete_seconds": 22.283,
+  "final_ready_items": 129,
+  "native_preparation_jobs": [
+    {
+      "id": 2,
+      "item_count": 850,
+      "status": "Converting"
+    },
+    {
+      "id": 3,
+      "item_count": 55,
+      "status": "Queued"
+    },
+    {
+      "id": 1,
+      "item_count": 1,
+      "status": "Completed"
+    }
+  ]
+}

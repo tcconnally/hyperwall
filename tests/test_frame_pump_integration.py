@@ -7,6 +7,7 @@ from importlib.util import find_spec
 import os
 from pathlib import Path
 import sys
+import threading
 from types import SimpleNamespace
 from unittest import SkipTest
 from unittest.mock import patch
@@ -34,8 +35,8 @@ def test_mpv_callback_admits_only_coalesced_frame_notifications():
     source = _source()
     assert "from .frame_pump import FramePumpGate" in source
     assert "self._frame_pump = FramePumpGate()" in source
-    assert "if self._frame_pump.request():" in source
-    assert "self._frame_pump.request()" in source
+    assert "if frame_pump.request():" in source
+    assert "frame_pump is not self._frame_pump" in source
 
 
 def test_paint_lifecycle_requeues_a_frame_arriving_during_render():
@@ -83,6 +84,10 @@ def _surface():
 
     class RenderContext:
         fail_report = False
+        fail_free = False
+
+        def __init__(self, *_args, **_kwargs):
+            pass
 
         def render(self, **kwargs):
             assert current["context"] is owner
@@ -97,6 +102,8 @@ def _surface():
 
         def free(self):
             frees.append(self)
+            if self.fail_free:
+                raise RuntimeError("simulated native free failure")
 
     with patch.object(
         macembed, "QOpenGLContext",
@@ -223,6 +230,94 @@ def test_swap_rejects_off_thread_delivery_and_quiesced_widget():
         s.widget._accepting_frames = False
         s.widget.frameSwapped.emit()
         assert s.reports == []
+
+
+@contextmanager
+def _recreated_surface():
+    with _surface() as s:
+        # Real attach/create/release logic; native wrappers and GL are fakes.
+        fake_mpv = SimpleNamespace(MpvRenderContext=s.new_context,
+                                   MpvGlGetProcAddressFn=lambda callback: callback)
+        with patch.dict(sys.modules, {"mpv": fake_mpv}):
+            s.widget._ctx = None
+            s.widget._gl_ready = True
+            s.widget.attach_mpv(object())
+            yield s
+
+
+@_requires_qt
+def test_recreated_context_uses_fresh_gate_and_rejects_late_old_callback():
+    with _recreated_surface() as s:
+        first_ctx, first_gate = s.widget._ctx, s.widget._frame_pump
+        first_callback = first_ctx.update_cb
+        notifications = []
+        s.widget.sig_frame_ready.connect(lambda: notifications.append(True))
+        first_callback()
+        first_callback()
+        assert len(notifications) == 1
+        s.paint()
+        s.widget.release()
+        assert first_gate.snapshot()["closed"] is True
+        assert first_ctx.update_cb is first_callback  # Never clear a live FFI trampoline.
+        s.widget.attach_mpv(object())
+        second_ctx, second_gate = s.widget._ctx, s.widget._frame_pump
+        assert second_ctx is not first_ctx and second_gate is not first_gate
+        assert second_gate.snapshot()["closed"] is False
+        first_callback()
+        assert second_gate.snapshot()["callbacks"] == 0
+        assert len(notifications) == 1
+        second_ctx.update_cb()
+        second_ctx.update_cb()
+        assert len(notifications) == 2
+        assert second_gate.snapshot()["coalesced_callbacks"] == 1
+        s.paint()
+        assert s.renders == [first_ctx, second_ctx]
+        second_ctx.update_cb()
+        assert len(notifications) == 3  # Subsequent frames remain live.
+
+
+@_requires_qt
+def test_callback_paused_during_recreation_never_marks_fresh_gate_pending():
+    with _recreated_surface() as s:
+        old_ctx = s.widget._ctx
+        entered, resume = threading.Event(), threading.Event()
+
+        def paused_record():
+            entered.set()
+            assert resume.wait(2)
+
+        with patch.object(s.widget._render_telemetry, "record_frame_ready", paused_record):
+            callback = threading.Thread(target=old_ctx.update_cb, daemon=True)
+            callback.start()
+            try:
+                assert entered.wait(1)
+                s.widget.release()
+                s.widget.attach_mpv(object())
+                fresh = s.widget._frame_pump
+            finally:
+                resume.set()
+                callback.join(timeout=1)
+            assert not callback.is_alive()
+            assert fresh.snapshot()["callbacks"] == 0
+            assert fresh.snapshot()["pending"] is False
+        s.widget._ctx.update_cb()
+        assert fresh.snapshot()["pending"] is True
+
+
+@_requires_qt
+def test_abandoned_context_keeps_its_resolver_and_callback_after_recreation():
+    with _recreated_surface() as s:
+        old_ctx = s.widget._ctx
+        resolver, callback = old_ctx._hyperwall_get_proc_address, old_ctx.update_cb
+        old_ctx.fail_free = True
+        s.widget.release()
+        assert old_ctx in s.widget._abandoned_contexts
+        s.widget.attach_mpv(object())
+        assert old_ctx._hyperwall_get_proc_address is resolver
+        assert old_ctx.update_cb is callback
+        assert s.widget._get_proc_address is not resolver
+        callback()
+        assert s.widget._frame_pump.snapshot()["callbacks"] == 0
 
 
 def run_all() -> int:

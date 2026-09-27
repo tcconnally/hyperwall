@@ -1,0 +1,199 @@
+{
+  "status": "COMPLETE",
+  "failure": null,
+  "requested_decoder": "videotoolbox-copy",
+  "concurrent_players": 8,
+  "ready_players": 8,
+  "completed_players": 8,
+  "distinct_source_count": 8,
+  "normalization_receipts_verified": 8,
+  "audio_output": "null",
+  "video_output": "null",
+  "audio_tracks": "auto-muted",
+  "cache_mib_per_player": 32,
+  "aggregate_rss_limit_mib": 3072,
+  "aggregate_rss_peak_mib": 1213.2,
+  "measurement_rss_peak_mib": 1213.2,
+  "aggregate_cpu_percent_one_core_100": 36.6,
+  "startup_hwdec_current": [
+    "videotoolbox-copy",
+    "videotoolbox-copy",
+    "videotoolbox-copy",
+    "videotoolbox-copy",
+    "videotoolbox-copy",
+    "videotoolbox-copy",
+    "videotoolbox-copy",
+    "videotoolbox-copy"
+  ],
+  "streams": [
+    {
+      "event": "result",
+      "status": "COMPLETE",
+      "wall_seconds": 10.022,
+      "playback_advance_seconds": 10.017,
+      "hwdec_current": [
+        "videotoolbox-copy"
+      ],
+      "decoder_drops": 0,
+      "vo_drops": 0,
+      "buffering_events": 0,
+      "backward_time_jumps": 0,
+      "max_progress_gap_seconds": 0.036,
+      "cpu_seconds": 0.488,
+      "peak_rss_mib": 145.7,
+      "native_errors": 0,
+      "production_audio_control_operations": 24,
+      "seek_events": 0,
+      "playback_restart_events": 0,
+      "audio_track_remained_selected": true
+    },
+    {
+      "event": "result",
+      "status": "COMPLETE",
+      "wall_seconds": 10.026,
+      "playback_advance_seconds": 10.033,
+      "hwdec_current": [
+        "videotoolbox-copy"
+      ],
+      "decoder_drops": 0,
+      "vo_drops": 0,
+      "buffering_events": 0,
+      "backward_time_jumps": 0,
+      "max_progress_gap_seconds": 0.025,
+      "cpu_seconds": 0.467,
+      "peak_rss_mib": 153.8,
+      "native_errors": 0,
+      "production_audio_control_operations": 24,
+      "seek_events": 0,
+      "playback_restart_events": 0,
+      "audio_track_remained_selected": true
+    },
+    {
+      "event": "result",
+      "status": "COMPLETE",
+      "wall_seconds": 10.042,
+      "playback_advance_seconds": 10.033,
+      "hwdec_current": [
+        "videotoolbox-copy"
+      ],
+      "decoder_drops": 0,
+      "vo_drops": 0,
+      "buffering_events": 0,
+      "backward_time_jumps": 0,
+      "max_progress_gap_seconds": 0.04,
+      "cpu_seconds": 0.564,
+      "peak_rss_mib": 151.2,
+      "native_errors": 0,
+      "production_audio_control_operations": 24,
+      "seek_events": 0,
+      "playback_restart_events": 0,
+      "audio_track_remained_selected": true
+    },
+    {
+      "event": "result",
+      "status": "COMPLETE",
+      "wall_seconds": 10.031,
+      "playback_advance_seconds": 10.033,
+      "hwdec_current": [
+        "videotoolbox-copy"
+      ],
+      "decoder_drops": 0,
+      "vo_drops": 0,
+      "buffering_events": 0,
+      "backward_time_jumps": 0,
+      "max_progress_gap_seconds": 0.035,
+      "cpu_seconds": 0.48,
+      "peak_rss_mib": 146.8,
+      "native_errors": 0,
+      "production_audio_control_operations": 24,
+      "seek_events": 0,
+      "playback_restart_events": 0,
+      "audio_track_remained_selected": true
+    },
+    {
+      "event": "result",
+      "status": "COMPLETE",
+      "wall_seconds": 10.034,
+      "playback_advance_seconds": 10.033,
+      "hwdec_current": [
+        "videotoolbox-copy"
+      ],
+      "decoder_drops": 0,
+      "vo_drops": 0,
+      "buffering_events": 0,
+      "backward_time_jumps": 0,
+      "max_progress_gap_seconds": 0.038,
+      "cpu_seconds": 0.551,
+      "peak_rss_mib": 149.7,
+      "native_errors": 0,
+      "production_audio_control_operations": 24,
+      "seek_events": 0,
+      "playback_restart_events": 0,
+      "audio_track_remained_selected": true
+    },
+    {
+      "event": "result",
+      "status": "COMPLETE",
+      "wall_seconds": 10.025,
+      "playback_advance_seconds": 10.017,
+      "hwdec_current": [
+        "videotoolbox-copy"
+      ],
+      "decoder_drops": 0,
+      "vo_drops": 0,
+      "buffering_events": 0,
+      "backward_time_jumps": 0,
+      "max_progress_gap_seconds": 0.036,
+      "cpu_seconds": 0.477,
+      "peak_rss_mib": 154.7,
+      "native_errors": 0,
+      "production_audio_control_operations": 24,
+      "seek_events": 0,
+      "playback_restart_events": 0,
+      "audio_track_remained_selected": true
+    },
+    {
+      "event": "result",
+      "status": "COMPLETE",
+      "wall_seconds": 10.014,
+      "playback_advance_seconds": 10.01,
+      "hwdec_current": [
+        "videotoolbox-copy"
+      ],
+      "decoder_drops": 0,
+      "vo_drops": 0,
+      "buffering_events": 0,
+      "backward_time_jumps": 0,
+      "max_progress_gap_seconds": 0.054,
+      "cpu_seconds": 0.327,
+      "peak_rss_mib": 154.5,
+      "native_errors": 0,
+      "production_audio_control_operations": 24,
+      "seek_events": 0,
+      "playback_restart_events": 0,
+      "audio_track_remained_selected": true
+    },
+    {
+      "event": "result",
+      "status": "COMPLETE",
+      "wall_seconds": 10.01,
+      "playback_advance_seconds": 10.0,
+      "hwdec_current": [
+        "videotoolbox-copy"
+      ],
+      "decoder_drops": 0,
+      "vo_drops": 0,
+      "buffering_events": 0,
+      "backward_time_jumps": 0,
+      "max_progress_gap_seconds": 0.054,
+      "cpu_seconds": 0.32,
+      "peak_rss_mib": 139.2,
+      "native_errors": 0,
+      "production_audio_control_operations": 24,
+      "seek_events": 0,
+      "playback_restart_events": 0,
+      "audio_track_remained_selected": true
+    }
+  ],
+  "scope": "prepared renditions, varied offsets, ten seconds per player, no Qt/render/display qualification; no Emby progress writes"
+}

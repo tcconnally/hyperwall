@@ -47,8 +47,10 @@ check the rule. Before claiming one of these is fixed, run the probe.
   segfault in `pyqtBoundSignal_emit`. Rules: `release()` NEVER raises;
   the mpv update callback is a total function gated by an
   `_accepting_frames` flag set False FIRST at release; never store a raw
-  `signal.emit` as `MpvRenderContext.update_cb`; clear `update_cb = None`
-  before freeing the context.
+  `signal.emit` as `MpvRenderContext.update_cb`. Keep the callback trampoline
+  and GL resolver alive through native free, retaining the wrapper if free
+  fails. A recreated context needs a fresh frame gate; callbacks from the
+  previous context must never mark that new gate pending.
 - render.h ordering vs the bounded-terminate pool is a structural
   conflict: the pool terminates cores while the GUI thread blocks in
   `concurrent.futures.wait`, so a free QUEUED from a pool thread to the
