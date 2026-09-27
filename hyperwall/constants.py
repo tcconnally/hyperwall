@@ -10,6 +10,13 @@ from __future__ import annotations
 import os
 import sys
 
+
+def audio_mode_from_env() -> str:
+    """Keep unknown/original libraries on lazy audio unless explicitly opted in."""
+    value = os.environ.get("HYPERWALL_AUDIO_MODE", "lazy").strip().lower()
+    return value if value in {"continuous", "prepared"} else "lazy"
+
+
 # ── Paths ────────────────────────────────────────────────────────────────────
 if getattr(sys, "frozen", False):
     SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))

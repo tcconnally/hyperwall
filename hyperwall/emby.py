@@ -23,6 +23,7 @@ from .backends import (
     auth_request_headers,
     token_headers,
 )
+from .renditions import NORMALIZATION_RECEIPT, explicit_receipt_range, prefer_rendition, valid_receipt_response
 
 logger = logging.getLogger("HyperWall")
 
@@ -213,7 +214,125 @@ class EmbyClient:
         except Exception as e:
             logger.error("Content loader error: %s", e)
 
+        rendition_root = os.environ.get("HYPERWALL_RENDITION_ROOT", "").strip()
+        prepared_only = os.environ.get("HYPERWALL_PREPARED_ONLY", "0") == "1"
+        if rendition_root:
+            all_items = self._prefer_renditions(all_items, rendition_root, progress_callback)
+            logger.info(
+                "Renditions selected: %d/%d; normalization receipts verified: %d.",
+                sum(bool(item.get("_hyperwall_media_source_id")) for item in all_items),
+                len(all_items),
+                sum(item.get("_hyperwall_prepared") is True for item in all_items),
+            )
+        if prepared_only:
+            total = len(all_items)
+            all_items = (
+                [item for item in all_items if item.get("_hyperwall_prepared") is True]
+                if rendition_root else []
+            )
+            summary = f"Prepared-only playback: {len(all_items)}/{total} items ready"
+            logger.info(summary)
+            if progress_callback:
+                progress_callback(summary)
+            if not rendition_root:
+                logger.error("Prepared-only playback requires HYPERWALL_RENDITION_ROOT; no items admitted.")
+            elif not all_items:
+                logger.error("No normalization receipts verified; prepared-only playback has no ready items.")
         return all_items
+
+    def _prefer_renditions(
+        self,
+        items: list[dict[str, Any]],
+        root: str,
+        progress_callback: callable | None = None,
+    ) -> list[dict[str, Any]]:
+        """Resolve Folder Sync sources on the content-loading worker.
+
+        Emby 4.9 exposes synced sources through PlaybackInfo but omits them
+        from both the bulk library response and item details. Do not make
+        these network calls on the GUI thread or drop originals on failure.
+        """
+        selected: list[dict[str, Any]] = []
+        consecutive_failures = 0
+        verify_audio = (
+            os.environ.get("HYPERWALL_AUDIO_MODE", "lazy").strip().lower() == "prepared"
+            or os.environ.get("HYPERWALL_PREPARED_ONLY", "0") == "1"
+        )
+        for index, item in enumerate(items):
+            enriched = prefer_rendition(item, root)
+            if enriched is item and item.get("Id") and consecutive_failures < 3:
+                try:
+                    response = self.get(
+                        f"/Items/{item['Id']}/PlaybackInfo",
+                        params={"UserId": self.user_id},
+                        timeout=5,
+                    )
+                    response.raise_for_status()
+                    body = response.json()
+                    if not isinstance(body, dict) or not isinstance(body.get("MediaSources"), list):
+                        raise ValueError("invalid playback source response")
+                    candidate = dict(item)
+                    candidate["MediaSources"] = body["MediaSources"]
+                    prepared = prefer_rendition(candidate, root)
+                    if prepared.get("_hyperwall_media_source_id"):
+                        enriched = prepared
+                    consecutive_failures = 0
+                except (requests.RequestException, ValueError, TypeError) as exc:
+                    consecutive_failures += 1
+                    logger.warning("Prepared source lookup failed (%s); original retained.", type(exc).__name__)
+                    if consecutive_failures == 3:
+                        logger.warning("Prepared source lookup paused after three failures; remaining originals retained.")
+            if verify_audio and enriched.get("_hyperwall_media_source_id"):
+                enriched["_hyperwall_prepared"] = self._has_normalization_receipt(enriched)
+            selected.append(enriched)
+            if progress_callback and (index % 25 == 0 or index + 1 == len(items)):
+                progress_callback(f"Checking prepared sources: {index + 1}/{len(items)}")
+        return selected
+
+    def _has_normalization_receipt(self, item: dict[str, Any]) -> bool:
+        """Read a bounded authenticated suffix; never follow redirects/download video."""
+        response = None
+        try:
+            def read_range(value: str):
+                return self._session.get(
+                    f"{self.server_url}/Videos/{item['Id']}/stream",
+                    params={"Static": "true", "MediaSourceId": item["_hyperwall_media_source_id"]},
+                    headers={**self._headers(), "Range": value, "Accept-Encoding": "identity"},
+                    verify=self.verify_ssl,
+                    timeout=(3, 3),
+                    allow_redirects=False,
+                    stream=True,
+                )
+            response = read_range("bytes=-64")
+            content_range = response.headers.get("Content-Range", "")
+            explicit_range = explicit_receipt_range(response.status_code, content_range)
+            if explicit_range is not None and response.headers.get("Content-Length") in (None, "65"):
+                # Do not read the incorrect prefix response. Emby's returned
+                # total lets us ask for only the tail, without trusting stale
+                # library metadata or issuing a full-file request.
+                response.close()
+                response = read_range(explicit_range)
+                content_range = response.headers.get("Content-Range", "")
+            # Validate the range before reading any body, including a server
+            # that ignores Range and returns the whole video with status 200.
+            if not valid_receipt_response(response.status_code, content_range, NORMALIZATION_RECEIPT):
+                return False
+            length = response.headers.get("Content-Length")
+            if length is not None and length != "64":
+                return False
+            if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                return False
+            body = response.raw.read(65, decode_content=False)
+            return valid_receipt_response(response.status_code, content_range, body)
+        except (requests.RequestException, urllib3.exceptions.HTTPError, OSError, ValueError, TypeError, KeyError):
+            # Exception strings may contain authenticated URLs; do not log them.
+            return False
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except (requests.RequestException, urllib3.exceptions.HTTPError, OSError):
+                    pass
 
 
 # ── Background Workers ────────────────────────────────────────────────────────

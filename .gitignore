@@ -3,6 +3,7 @@ config.ini
 .venv/
 hyperwall.log
 hyperwall.log.*
+logs/telemetry/
 *.pyc
 __pycache__/
 

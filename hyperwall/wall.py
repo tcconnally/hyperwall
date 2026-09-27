@@ -91,6 +91,7 @@ from .playlist import PlaylistManager, DEFAULT_GROUP
 from .soak_filter import apply_initial_filter
 
 logger = logging.getLogger("HyperWall")
+EMERGENCY_EXIT_GRACE_S = 0.20
 
 
 class WallWindow(QMainWindow):
@@ -110,11 +111,7 @@ class WallWindow(QMainWindow):
 
 
 class EmergencyKeyFilter(QObject):
-    """App-level escape handler — works even when mpv children steal focus.
-
-    If a preview/wall cell is currently in solo full-screen mode, Escape
-    exits solo first; a second Escape shuts the wall down.
-    """
+    """One Escape exits every wall/solo window, including mpv child focus."""
 
     def __init__(
         self,
@@ -132,9 +129,6 @@ class EmergencyKeyFilter(QObject):
             event.type() == QEvent.Type.KeyPress
             and event.key() == Qt.Key.Key_Escape
         ):
-            if self._solo_active():
-                self._exit_solo()
-                return True
             self._shutdown_callback()
             return True
         return False
@@ -246,6 +240,7 @@ class WallController:
         self._api_pool_closed = False
         self._cleaned_up = False
         self._shutdown_requested = False
+        self._emergency_exit_started = False
         session_registry_limit = max(
             64, len(screens) * max(1, grid_rows * grid_cols) * 8,
         )
@@ -275,11 +270,7 @@ class WallController:
         self._resource_governor = ResourceGovernor(MAX_CONCURRENT_TRANSCODES)
 
         # Emergency escape
-        self._escape_filter = EmergencyKeyFilter(
-            self._shutdown,
-            solo_active_callback=lambda: self._solo_cell is not None,
-            exit_solo_callback=self._exit_solo,
-        )
+        self._escape_filter = EmergencyKeyFilter(self._emergency_shutdown)
         QApplication.instance().installEventFilter(self._escape_filter)
 
         self._build_displays()
@@ -430,7 +421,7 @@ class WallController:
                 ("F", lambda: self._set_filter("favorites")),
                 ("A", lambda: self._set_filter("all")),
                 ("S", self._toggle_stats_overlay),
-                ("Escape", self._shutdown),
+                ("Escape", self._emergency_shutdown),
             ):
                 shortcut = QShortcut(QKeySequence(key), win)
                 shortcut.activated.connect(fn)
@@ -920,6 +911,7 @@ class WallController:
             session_id=sid,
             plan=resolved_plan,
             static=self.client.backend.requires_static_true,
+            media_source_id=item.get("_hyperwall_media_source_id"),
         )
         tag = "TRANSCODE" if resolved_plan.requires_transcode_lease else "DIRECT"
         if prefetch:
@@ -1709,6 +1701,92 @@ class WallController:
             )
 
     # ── shutdown ──────────────────────────────────────────────────────────
+
+    def _emergency_shutdown(self) -> None:
+        """Hide immediately; never enter native teardown or wait on the GUI.
+
+        A hung libmpv call can also hang render-context free, which must run
+        on the GUI thread. Escape therefore keeps widgets, contexts and their
+        ctypes callbacks alive until process exit. Normal shutdown below still
+        frees render contexts before terminating cores. os._exit deliberately
+        bypasses Python's unbounded ThreadPoolExecutor/Qt finalizers here.
+        """
+        if self._emergency_exit_started:
+            return
+        self._emergency_exit_started = True
+        self._shutdown_requested = True
+        self._cleaned_up = True
+        started = _time.monotonic()
+        watchdog = threading.Timer(EMERGENCY_EXIT_GRACE_S, os._exit, args=(0,))
+        watchdog.daemon = True
+        self._emergency_watchdog = watchdog
+        try:
+            watchdog.start()
+        except Exception:
+            os._exit(0)
+            return
+
+        # Hide, never close/delete: native callbacks must retain their owners.
+        # Arm the watchdog first in case even a platform window call stalls.
+        QApplication.instance().setQuitOnLastWindowClosed(False)
+        for window in self.windows:
+            try:
+                window.hide()
+            except Exception:
+                pass
+        for cell in self.cells:
+            try:
+                cell.prepare_emergency_shutdown()
+            except Exception:
+                pass
+        try:
+            self._session_cleanup_timer.stop()
+        except Exception:
+            pass
+        telemetry = getattr(self, "_local_telemetry", None)
+        if telemetry is not None:
+            try:
+                telemetry.record_event(
+                    "escape", windows_hidden_ms=round(
+                        (_time.monotonic() - started) * 1000.0, 3,
+                    ),
+                )
+            except Exception:
+                pass
+
+        # All remaining operations may block, so use independent daemon
+        # workers. No joins, native property reads, logging or disk I/O here.
+        for index, cell in enumerate(self.cells):
+            self._start_emergency_worker(
+                cell.stop_for_emergency_exit, f"escape-stop-{index}",
+            )
+        self._start_emergency_worker(self._emergency_session_cleanup, "escape-sessions")
+        if STATS_ENABLED:
+            self._start_emergency_worker(self._dump_stats_json, "escape-stats")
+
+    @staticmethod
+    def _start_emergency_worker(callback: callable, name: str) -> None:
+        def run() -> None:
+            try:
+                callback()
+            except Exception:
+                pass
+        try:
+            threading.Thread(target=run, name=name, daemon=True).start()
+        except Exception:
+            pass
+
+    def _emergency_session_cleanup(self) -> None:
+        """Best-effort session stops; the independent exit deadline wins."""
+        for cell in self.cells:
+            self.stop_emby_session(cell._emby_item_id, cell._emby_session_id)
+            if cell._prefetched is not None:
+                item, _url, session_id = cell._prefetched
+                self.stop_emby_session(item.get("Id"), session_id)
+        for record in self._session_broker.shutdown_records():
+            self.stop_emby_session(record.item_id, record.session_id, plan=record.plan)
+        self._api_pool_closed = True
+        self._api_pool.shutdown(wait=False)
 
     def _shutdown(self) -> None:
         if self._shutdown_requested:

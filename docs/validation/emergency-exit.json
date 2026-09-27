@@ -1,0 +1,10 @@
+{
+  "date": "2026-09-27",
+  "scope": "Offscreen Qt event and production-method harness; os._exit mocked; native/network/stats cleanup deliberately blocked",
+  "single_escape_exits_solo_and_wall": true,
+  "observed_handler_ms": 0.29,
+  "configured_exit_grace_ms": 200,
+  "observed_mocked_exit_ms": 204.49,
+  "native_termination_on_gui": false,
+  "limitations": "Timing begins at Qt key dispatch; this does not measure physical display/audio disappearance or an already-wedged event loop."
+}

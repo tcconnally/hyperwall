@@ -1,0 +1,17 @@
+{
+  "status": "COMPLETE",
+  "scope": "one prepared pilot, software decode, null video/audio, production audio-control methods; no Emby progress writes",
+  "source_size_verified": true,
+  "control_operations": 24,
+  "wall_seconds": 7.979,
+  "playback_advance_seconds": 7.983,
+  "seek_events_during_controls": 0,
+  "playback_restart_events_during_controls": 0,
+  "backward_time_jumps": 0,
+  "buffering_events_during_controls": 0,
+  "max_time_observer_gap_seconds": 0.021,
+  "time_observations": 479,
+  "audio_track_remained_selected": true,
+  "video_output": "null",
+  "audio_output": "null"
+}

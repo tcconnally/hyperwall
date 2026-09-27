@@ -1,0 +1,649 @@
+{
+  "client": "Mac17,3 Apple M5, 10 CPU cores, 8 GPU cores, 16 GiB RAM",
+  "mpv_version": "0.41.0",
+  "ffmpeg_version": "8.1.2",
+  "source": "one prepared H.264/AAC 1920x1080 60fps pilot at varied offsets",
+  "measurement": "ten settled seconds per process; null video and audio; no Emby progress writes",
+  "runs": [
+    {
+      "status": "COMPLETE",
+      "failure": null,
+      "requested_decoder": "videotoolbox-copy",
+      "concurrent_players": 8,
+      "ready_players": 8,
+      "completed_players": 8,
+      "audio_output": "null",
+      "video_output": "null",
+      "audio_tracks": "auto-muted",
+      "cache_mib_per_player": 32,
+      "aggregate_rss_limit_mib": 3072,
+      "aggregate_rss_peak_mib": 1083.0,
+      "measurement_rss_peak_mib": 1082.9,
+      "aggregate_cpu_percent_one_core_100": 35.8,
+      "startup_hwdec_current": [
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy"
+      ],
+      "streams": [
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.004,
+          "playback_advance_seconds": 10.0,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.025,
+          "cpu_seconds": 0.437,
+          "peak_rss_mib": 130.7,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.006,
+          "playback_advance_seconds": 10.017,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.024,
+          "cpu_seconds": 0.423,
+          "peak_rss_mib": 129.5,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.001,
+          "playback_advance_seconds": 10.0,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.024,
+          "cpu_seconds": 0.458,
+          "peak_rss_mib": 129.7,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.009,
+          "playback_advance_seconds": 10.0,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.025,
+          "cpu_seconds": 0.477,
+          "peak_rss_mib": 132.3,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.005,
+          "playback_advance_seconds": 10.017,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.025,
+          "cpu_seconds": 0.424,
+          "peak_rss_mib": 127.5,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.1,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.025,
+          "cpu_seconds": 0.476,
+          "peak_rss_mib": 131.7,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.098,
+          "playback_advance_seconds": 10.1,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.026,
+          "cpu_seconds": 0.44,
+          "peak_rss_mib": 132.1,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.006,
+          "playback_advance_seconds": 10.0,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.025,
+          "cpu_seconds": 0.453,
+          "peak_rss_mib": 128.8,
+          "native_errors": 0
+        }
+      ],
+      "scope": "prepared 1080p60 pilot, varied offsets, ten seconds per player, no Qt/render/display qualification"
+    },
+    {
+      "status": "COMPLETE",
+      "failure": null,
+      "requested_decoder": "videotoolbox-copy",
+      "concurrent_players": 12,
+      "ready_players": 12,
+      "completed_players": 12,
+      "audio_output": "null",
+      "video_output": "null",
+      "audio_tracks": "auto-muted",
+      "cache_mib_per_player": 32,
+      "aggregate_rss_limit_mib": 3072,
+      "aggregate_rss_peak_mib": 1542.4,
+      "measurement_rss_peak_mib": 1502.6,
+      "aggregate_cpu_percent_one_core_100": 49.5,
+      "startup_hwdec_current": [
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy",
+        "videotoolbox-copy"
+      ],
+      "streams": [
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.01,
+          "playback_advance_seconds": 10.017,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.032,
+          "cpu_seconds": 0.338,
+          "peak_rss_mib": 126.6,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.027,
+          "playback_advance_seconds": 10.033,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.033,
+          "cpu_seconds": 0.337,
+          "peak_rss_mib": 124.1,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.014,
+          "playback_advance_seconds": 10.017,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.039,
+          "cpu_seconds": 0.461,
+          "peak_rss_mib": 131.9,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.028,
+          "playback_advance_seconds": 10.017,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.029,
+          "cpu_seconds": 0.409,
+          "peak_rss_mib": 129.7,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.009,
+          "playback_advance_seconds": 10.017,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.038,
+          "cpu_seconds": 0.458,
+          "peak_rss_mib": 132.1,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.002,
+          "playback_advance_seconds": 10.0,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.041,
+          "cpu_seconds": 0.458,
+          "peak_rss_mib": 130.7,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.009,
+          "playback_advance_seconds": 10.017,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.037,
+          "cpu_seconds": 0.439,
+          "peak_rss_mib": 130.3,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.004,
+          "playback_advance_seconds": 10.0,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.045,
+          "cpu_seconds": 0.43,
+          "peak_rss_mib": 129.0,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.018,
+          "playback_advance_seconds": 10.017,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.034,
+          "cpu_seconds": 0.438,
+          "peak_rss_mib": 129.7,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.014,
+          "playback_advance_seconds": 10.017,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.033,
+          "cpu_seconds": 0.44,
+          "peak_rss_mib": 130.6,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.015,
+          "playback_advance_seconds": 10.0,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.033,
+          "cpu_seconds": 0.414,
+          "peak_rss_mib": 130.4,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.098,
+          "playback_advance_seconds": 10.1,
+          "hwdec_current": [
+            "videotoolbox-copy"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.042,
+          "cpu_seconds": 0.336,
+          "peak_rss_mib": 122.2,
+          "native_errors": 0
+        }
+      ],
+      "scope": "prepared 1080p60 pilot, varied offsets, ten seconds per player, no Qt/render/display qualification"
+    },
+    {
+      "status": "COMPLETE",
+      "failure": null,
+      "requested_decoder": "no",
+      "concurrent_players": 12,
+      "ready_players": 12,
+      "completed_players": 12,
+      "audio_output": "null",
+      "video_output": "null",
+      "audio_tracks": "auto-muted",
+      "cache_mib_per_player": 32,
+      "aggregate_rss_limit_mib": 3072,
+      "aggregate_rss_peak_mib": 1964.1,
+      "measurement_rss_peak_mib": 1964.1,
+      "aggregate_cpu_percent_one_core_100": 188.3,
+      "startup_hwdec_current": [
+        "no",
+        "no",
+        "no",
+        "no",
+        "no",
+        "no",
+        "no",
+        "no",
+        "no",
+        "no",
+        "no",
+        "no"
+      ],
+      "streams": [
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.089,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.022,
+          "cpu_seconds": 1.606,
+          "peak_rss_mib": 164.4,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.085,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.027,
+          "cpu_seconds": 1.657,
+          "peak_rss_mib": 159.2,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.083,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.021,
+          "cpu_seconds": 1.627,
+          "peak_rss_mib": 162.0,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.087,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.021,
+          "cpu_seconds": 1.547,
+          "peak_rss_mib": 162.4,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.088,
+          "playback_advance_seconds": 10.1,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.022,
+          "cpu_seconds": 1.496,
+          "peak_rss_mib": 159.3,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.088,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.021,
+          "cpu_seconds": 1.537,
+          "peak_rss_mib": 160.9,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.083,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.025,
+          "cpu_seconds": 1.57,
+          "peak_rss_mib": 161.7,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.09,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.025,
+          "cpu_seconds": 1.596,
+          "peak_rss_mib": 168.6,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.085,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.025,
+          "cpu_seconds": 1.615,
+          "peak_rss_mib": 160.4,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.082,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.021,
+          "cpu_seconds": 1.623,
+          "peak_rss_mib": 162.3,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.082,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.021,
+          "cpu_seconds": 1.558,
+          "peak_rss_mib": 164.5,
+          "native_errors": 0
+        },
+        {
+          "event": "result",
+          "status": "COMPLETE",
+          "wall_seconds": 10.085,
+          "playback_advance_seconds": 10.083,
+          "hwdec_current": [
+            "no"
+          ],
+          "decoder_drops": 0,
+          "vo_drops": 0,
+          "buffering_events": 0,
+          "backward_time_jumps": 0,
+          "max_progress_gap_seconds": 0.021,
+          "cpu_seconds": 1.562,
+          "peak_rss_mib": 161.0,
+          "native_errors": 0
+        }
+      ],
+      "scope": "prepared 1080p60 pilot, varied offsets, ten seconds per player, no Qt/render/display qualification"
+    }
+  ],
+  "recommendation": "Use videotoolbox-copy for the explicit prepared-source profile; retain original-library fallback. This establishes decode/transport feasibility only, not Qt/OpenGL or dual-display presentation capacity."
+}

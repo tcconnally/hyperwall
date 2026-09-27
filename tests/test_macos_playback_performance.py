@@ -54,7 +54,7 @@ def test_recreated_mpv_defers_audio_until_after_load():
     start = source.index("    def _ensure_mpv")
     end = source.index("\n    def _stop_mpv_for_render_release", start)
     body = source[start:end]
-    assert 'm["aid"] = "no"' in body
+    assert 'm["aid"] = "auto" if self._continuous_audio else "no"' in body
     assert 'self._audio_started = False' in body
 
 
@@ -104,14 +104,14 @@ def test_audio_arm_transition_serializes_replacement():
     assert "return False" in body
 
 
-def test_macos_normal_load_is_deferred_off_gui_thread():
+def test_render_api_normal_load_is_deferred_off_gui_thread():
     cell = _source("hyperwall/cell.py")
     start = cell.index("    def _play_impl")
     end = cell.index("\n    # ── gapless prefetch", start)
     body = cell[start:end]
     assert "_queue_async_play" in body
-    assert "sys.platform == \"darwin\"" in body
-    async_start = body.index("        if sys.platform == \"darwin\"")
+    assert "uses_render_api()" in body
+    async_start = body.index("        if uses_render_api()")
     async_end = body.index("        try:", async_start)
     assert "and not need_create" not in body[async_start:async_end]
     assert "self._mpv.command(\"loadfile\", url)" not in body[async_start:async_end]
@@ -135,12 +135,12 @@ def test_non_macos_audio_disarm_retry_rechecks_latest_mute_state():
     assert "lambda token=token" in body
 
 
-def test_non_macos_audio_arm_preserves_sync_path():
+def test_native_window_audio_arm_preserves_sync_path():
     source = _source("hyperwall/cell.py")
     start = source.index("    def _enable_audio_track(self)")
     end = source.index("\n    def _sync_mute_ui", start)
     body = source[start:end]
-    assert 'sys.platform != "darwin"' in body
+    assert 'if not uses_render_api():' in body
     assert "_enable_audio_track_sync" in body
 
 
@@ -195,14 +195,14 @@ def test_async_prefetch_transition_blocks_stale_recovery_paths():
         assert "_prefetch_advance_inflight" in cell[start:end], name
 
 
-def test_macos_prefetched_advance_is_queued_off_gui_thread():
+def test_render_api_prefetched_advance_is_queued_off_gui_thread():
     source = _source("hyperwall/cell.py")
     start = source.index("    def advance_to_prefetched(")
     end = source.index("\n    def _advance_to_prefetched_impl", start)
     body = source[start:end]
     assert "_queue_prefetched_advance" in body
     assert "playlist-next" not in body
-    assert "sys.platform == \"darwin\"" in body
+    assert "uses_render_api()" in body
 
 
 def test_wall_does_not_rearm_prefetch_before_async_advance_finishes():
@@ -502,8 +502,8 @@ def test_macos_mute_native_write_is_deferred_from_gui_handler():
     end = cell.index("\n    @traced(\"cell._toggle_mute\")", start)
     body = cell[start:end]
     assert "_queue_mute_native" in body
-    darwin = body[body.index('if sys.platform == "darwin":'):]
-    assert "_queue_mute_native(muted)" in darwin
+    render_api = body[body.index('if uses_render_api():'):]
+    assert "_queue_mute_native(muted)" in render_api
 
 
 def test_shutdown_stops_qt_timers_on_gui_thread_before_pool_release():

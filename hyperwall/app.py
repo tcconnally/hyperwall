@@ -481,6 +481,11 @@ def main() -> None:
     if SOAK_MINUTES > 0:
         _soak = SoakController(wall)
 
+    if os.environ.get("HYPERWALL_LOCAL_TELEMETRY", "0") == "1":
+        from .local_telemetry import LocalTelemetry
+        wall._local_telemetry = LocalTelemetry(wall)
+        app.aboutToQuit.connect(wall._local_telemetry.stop)
+
     app.aboutToQuit.connect(wall._cleanup)
     sys.exit(app.exec())
 

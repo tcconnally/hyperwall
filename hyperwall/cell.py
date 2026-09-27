@@ -73,6 +73,7 @@ from .constants import (
     WATCHDOG_INTERVAL_MS,
     _s,
     apply_env_overrides,
+    audio_mode_from_env,
     native_wid,
     uses_render_api,
 )
@@ -247,6 +248,10 @@ class VideoCell(QWidget):
         self.history: deque[dict[str, Any]] = deque(maxlen=50)
         self.looping = False
         self.muted = True
+        # Explicit session opt-in for a prepared, validated library. Originals
+        # retain lazy audio because some have unsafe audio/video interleaving.
+        self._audio_mode = audio_mode_from_env()
+        self._continuous_audio = self._audio_mode == "continuous"
         self._last_vol = 70  # per-cell; restored when unmuting from silence
         # Controls start hidden (the frame is hide()n after build); this flag
         # must agree or the first hover is a no-op until the autohide timer
@@ -586,13 +591,13 @@ class VideoCell(QWidget):
         # v10.8 armed audio at load to make unmute seamless and reintroduced
         # exactly that freeze on the wall's *primary* passive-playback mode;
         # audio is (re)armed on first unmute instead — see _enable_audio_track.
-        # New instances always start with lazy audio, including a cell that
-        # is currently unmuted. The first post-load play() call arms audio
-        # through _enable_audio_track, so recreation never performs aid=auto
-        # synchronously during the GUI-side constructor path.
+        # Continuous mode is an explicit exception for a validated library:
+        # select audio before loading, then change only output mute/volume.
+        # Lazy instances (including unmuted cells) arm after load as before.
         self._audio_started = False
         try:
-            m["aid"] = "no"
+            m["aid"] = "auto" if self._continuous_audio else "no"
+            self._audio_started = self._continuous_audio
         except Exception as e:
             logger.debug("mpv: failed to set initial aid: %s", e)
         if self.looping:
@@ -1195,6 +1200,7 @@ class VideoCell(QWidget):
             "audio": {
                 "muted": bool(self.muted),
                 "audio_started": bool(self._audio_started),
+                "mode": "continuous" if self._continuous_audio else "lazy",
             },
             "decoder": {
                 "requested": requested_decoder,
@@ -1345,6 +1351,20 @@ class VideoCell(QWidget):
 
     # ── playback ──────────────────────────────────────────────────────────
 
+    def _continuous_audio_for_item(self, item: dict[str, Any]) -> bool:
+        return self._audio_mode == "continuous" or (
+            self._audio_mode == "prepared"
+            and item.get("_hyperwall_prepared") is True
+        )
+
+    def _select_audio_for_load(self, mpv_ref: Any, item: dict[str, Any]) -> bool:
+        """Select the incoming track's policy only at a load/advance boundary."""
+        continuous = self._continuous_audio_for_item(item)
+        # A cancelled worker may have changed native aid before publishing its
+        # cached state. Establish the incoming policy explicitly at the boundary.
+        mpv_ref["aid"] = "auto" if continuous else "no"
+        return continuous
+
     def _begin_track(
         self,
         item: dict[str, Any],
@@ -1385,10 +1405,12 @@ class VideoCell(QWidget):
         self._retry_backoff_token = None
         self._park_token = None
         self.current_item = item
+        self._continuous_audio = self._continuous_audio_for_item(item)
         self._track_generation += 1
         self._eof_reached = False
         self._duration_s = 0.0
         self._play_pos = 0.0
+        self._last_seek_ts = 0.0
         # Reset stall tracking so the freshly-loaded track gets a full grace
         # window before the watchdog can flag it.
         self._last_seen_pos = -1.0
@@ -1472,6 +1494,9 @@ class VideoCell(QWidget):
             with self._audio_arm_call_lock:
                 if not self._async_play_is_current(request_id, mpv_ref, token):
                     return
+                self._audio_started = self._select_audio_for_load(
+                    mpv_ref, self.current_item,
+                )
                 mpv_ref["mute"] = self.muted
                 mpv_ref.command("loadfile", url)
                 mpv_ref["pause"] = False
@@ -1517,6 +1542,10 @@ class VideoCell(QWidget):
         self.btn_play.setText(_G_PAUSE)
         if not self.muted and not self._audio_started:
             self._enable_audio_track()
+        # play() cancels property writes queued for the outgoing generation.
+        # Restore the current controls after the replacement load commits.
+        self._queue_mute_native(self.muted)
+        self._queue_native_property("volume", float(self.vol_slider.value()))
         if on_started is not None:
             on_started(True)
 
@@ -1588,7 +1617,7 @@ class VideoCell(QWidget):
                 on_started(False)
             return False
         if not self._audio_arm_call_lock.acquire(blocking=False):
-            if sys.platform == "darwin":
+            if uses_render_api():
                 self._invalidate_async_play()
             self._defer_play_until_audio_idle(
                 item, url, preserve_failure_state, on_started, session_id,
@@ -1686,14 +1715,6 @@ class VideoCell(QWidget):
             # so bank the outgoing track's stats now or they're lost.
             if STATS_ENABLED:
                 self._flush_stats(audio_lock_held=True)
-            # New track: a re-muted cell drops back to aid=no so the next
-            # file starts in the safe lazy-audio state (see _ensure_mpv).
-            if self.muted and self._audio_started:
-                try:
-                    self._mpv["aid"] = "no"
-                    self._audio_started = False
-                except Exception as e:
-                    logger.debug("mpv: failed to re-disable aid: %s", e)
 
         if self._mpv is None:
             logger.error("mpv not initialized — cannot play.")
@@ -1717,13 +1738,14 @@ class VideoCell(QWidget):
             PlaybackEvent.LOAD_REQUESTED,
             self._playback_state_identity(self._pending_native_context),
         )
-        if sys.platform == "darwin":
+        if uses_render_api():
             token = self._current_playback_token()
             if token is None or not self._queue_async_play(token, url, on_started):
                 self._switching = False
                 return False
             return None
         try:
+            self._audio_started = self._select_audio_for_load(self._mpv, item)
             self._mpv["mute"] = self.muted
             self._mpv.command("loadfile", url)
             self._forget_prefetch_after_native_clear(requeue=True)
@@ -1920,7 +1942,7 @@ class VideoCell(QWidget):
         )
 
     def _queue_prefetched_advance(self) -> bool:
-        """Run macOS playlist advance off the Qt GUI thread."""
+        """Run render-API playlist advance off the Qt GUI thread."""
         if self._closing or self._prefetched is None or self._mpv is None:
             return False
         if self._prefetch_advance_inflight is not None:
@@ -1988,8 +2010,8 @@ class VideoCell(QWidget):
                     return
                 if STATS_ENABLED:
                     self._flush_stats(audio_lock_held=True)
-                if self.muted and self._audio_started:
-                    mpv_ref["aid"] = "no"
+                self._select_audio_for_load(mpv_ref, pending[0])
+                mpv_ref["mute"] = self.muted
                 mpv_ref.command("playlist-next")
                 mpv_ref["pause"] = False
                 succeeded = True
@@ -2059,12 +2081,15 @@ class VideoCell(QWidget):
         self._native_active_context = context
         self._pending_native_context = None if start_seen else context
         self._switching = not start_seen
-        if self.muted and self._audio_started:
-            self._audio_started = False
+        self._audio_started = self._continuous_audio
         self._paused = False
         self.btn_play.setText(_G_PAUSE)
         if not self.muted and not self._audio_started:
             self._enable_audio_track()
+        # A control request queued against the outgoing generation can be
+        # discarded at this commit. Publish the latest output values again.
+        self._queue_mute_native(self.muted)
+        self._queue_native_property("volume", float(self.vol_slider.value()))
         self._emby_session_id = sid
         self._emby_item_id = item["Id"]
         if old_item_id and old_session_id and old_session_id != sid:
@@ -2076,7 +2101,7 @@ class VideoCell(QWidget):
     def advance_to_prefetched(self) -> bool:
         if self._closing or self._prefetched is None or self._mpv is None:
             return False
-        if sys.platform == "darwin":
+        if uses_render_api():
             return self._queue_prefetched_advance()
         if not self._audio_arm_call_lock.acquire(blocking=False):
             return False
@@ -2091,8 +2116,8 @@ class VideoCell(QWidget):
 
         Returns False when there is nothing usable (no queue, dead mpv,
         command failure) — the caller falls back to a cold play(). Mirrors
-        play()'s reuse path: bank stats, drop a re-muted cell back to
-        aid=no, arm the _switching guard for the old track's stale
+        play()'s reuse path: bank stats, select the incoming audio policy,
+        arm the _switching guard for the old track's stale
         end-file (reason "stop", probed live), and explicitly unpause
         because the keep-open EOF pause persists across the switch.
         """
@@ -2104,12 +2129,6 @@ class VideoCell(QWidget):
         old_session_id = self._emby_session_id
         if STATS_ENABLED:
             self._flush_stats(audio_lock_held=True)
-        if self.muted and self._audio_started:
-            try:
-                self._mpv["aid"] = "no"
-                self._audio_started = False
-            except Exception as e:
-                logger.debug("mpv: failed to re-disable aid: %s", e)
         self._switching = True
         self._track_done = False
         self._pending_native_context = (
@@ -2128,6 +2147,7 @@ class VideoCell(QWidget):
             self._playback_state_identity(self._pending_native_context),
         )
         try:
+            self._audio_started = self._select_audio_for_load(self._mpv, item)
             self._mpv.command("playlist-next")
             self._mpv["pause"] = False
             self._paused = False
@@ -2178,6 +2198,34 @@ class VideoCell(QWidget):
                 animation.stop()
             except Exception:
                 pass
+
+    def prepare_emergency_shutdown(self) -> None:
+        """Gate callbacks without locks, native calls or completion callbacks."""
+        self._closing = True
+        self._pending_next = False
+        self._pending_next_token = None
+        self._deferred_play = None
+        self._stop_qt_timers()
+        quiesce = getattr(self.video_frame, "quiesce_for_exit", None)
+        if callable(quiesce):
+            quiesce()
+
+    def stop_for_emergency_exit(self) -> None:
+        """Daemon-only best effort silence/stop; retain live render resources."""
+        if not self._audio_arm_call_lock.acquire(blocking=False):
+            return
+        try:
+            if self._mpv is not None:
+                try:
+                    self._mpv["mute"] = True
+                except Exception:
+                    pass
+                try:
+                    self._mpv.command("stop")
+                except Exception:
+                    pass
+        finally:
+            self._audio_arm_call_lock.release()
 
     def prepare_shutdown(self) -> None:
         """Quiesce GUI-owned state before mpv is released off-thread."""
@@ -2626,9 +2674,16 @@ class VideoCell(QWidget):
         for both arm and disarm so a rapid mute/unmute cannot let an old
         ``aid=auto`` completion resurrect hidden audio on the cell.
         """
-        if self._closing or self._mpv is None:
+        if self._closing or self._mpv is None or self._continuous_audio:
             return
-        if sys.platform != "darwin":
+        if (
+            self._async_play_inflight is not None
+            or self._prefetch_advance_inflight is not None
+        ):
+            # The transition selects the incoming policy. Its completion
+            # applies the latest mute intent after committing track identity.
+            return
+        if not uses_render_api():
             token = self._current_playback_token()
             if enabled:
                 self._enable_audio_track_sync(token)
@@ -2707,6 +2762,7 @@ class VideoCell(QWidget):
                         return
                     if position is not None:
                         started = _time.perf_counter()
+                        self._last_seek_ts = _time.monotonic()
                         mpv_ref.seek(position, "absolute+keyframes")
                         seek_ms = (_time.perf_counter() - started) * 1000
                 if not self._audio_arm_is_current(
@@ -2846,7 +2902,7 @@ class VideoCell(QWidget):
     def _disable_audio_track_sync(
         self, token: PlaybackToken | None = None,
     ) -> None:
-        """Stop the audio demuxer synchronously on non-macOS platforms."""
+        """Stop the audio demuxer synchronously on native-window platforms."""
         if self._closing or self._mpv is None or not self.muted:
             return
         if token is None:
@@ -2873,7 +2929,7 @@ class VideoCell(QWidget):
     def _enable_audio_track_sync_locked(
         self, token: PlaybackToken | None = None,
     ) -> None:
-        """Arm audio synchronously on platforms without the macOS GUI stall."""
+        """Arm audio synchronously on native-window platforms."""
         if (
             self._closing
             or self.muted
@@ -2892,6 +2948,7 @@ class VideoCell(QWidget):
             seek_ms = 0.0
             if pos is not None:
                 t0 = _time.perf_counter()
+                self._last_seek_ts = _time.monotonic()
                 self._mpv.seek(pos, "absolute+keyframes")
                 seek_ms = (_time.perf_counter() - t0) * 1000
             logger.info(
@@ -2902,13 +2959,18 @@ class VideoCell(QWidget):
             logger.warning("Audio track arm failed on unmute: %s", e)
 
     def _enable_audio_track(self) -> None:
-        """Start lazy audio arm without blocking the macOS Qt GUI thread.
+        """Start lazy audio arm without blocking a render-API GUI thread.
 
-        Muted cells load with aid=no (see _ensure_mpv). macOS uses the worker
-        because its render-path soak showed long libmpv IPC stalls; Windows
-        and Linux retain the established synchronous behavior.
+        Render-API platforms share Qt's thread across all video surfaces, so
+        macOS and Linux use the worker. Windows keeps its native-window path.
         """
-        if sys.platform != "darwin":
+        if (
+            self._continuous_audio
+            or self._async_play_inflight is not None
+            or self._prefetch_advance_inflight is not None
+        ):
+            return
+        if not uses_render_api():
             self._enable_audio_track_sync(self._current_playback_token())
             return
         if self._audio_started or self._mpv is None:
@@ -2965,17 +3027,17 @@ class VideoCell(QWidget):
     def _apply_mute(self, muted: bool) -> None:
         """Single writer for the mute state itself (cache + mpv + UI).
 
-        Unmuting arms the audio track first (lazy — see _enable_audio_track),
-        while muting disarms the track so silent cells do not keep decoding
-        audio in the background.
+        Lazy mode changes audio track selection. Continuous mode keeps the
+        prepared library's decoder warm and never seeks on output changes.
         """
         self.muted = muted
-        if muted:
-            self._disable_audio_track()
-        else:
-            self._enable_audio_track()
+        if not self._continuous_audio:
+            if muted:
+                self._disable_audio_track()
+            else:
+                self._enable_audio_track()
         if self._mpv is not None:
-            if sys.platform == "darwin":
+            if uses_render_api():
                 self._queue_mute_native(muted)
             else:
                 self._write_mute_native(muted)
@@ -3010,7 +3072,7 @@ class VideoCell(QWidget):
         if val >= 10 and not self.vol_slider.isSliderDown():
             self._last_vol = val
         if self._mpv is not None:
-            if sys.platform == "darwin":
+            if uses_render_api():
                 self._queue_native_property("volume", float(val))
             else:
                 self._write_volume_native(float(val))

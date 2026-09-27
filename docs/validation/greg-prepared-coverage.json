@@ -1,0 +1,13 @@
+{
+  "date": "2026-09-27",
+  "default_items": 851,
+  "full_profile_items": 851,
+  "unique_items": 851,
+  "ready_receipt_verified": 69,
+  "renditions_selected": 75,
+  "original_identity_and_metadata_preserved": true,
+  "default_load_seconds": 0.143,
+  "prepared_source_resolution_seconds": 14.167,
+  "suffix_range_workaround": "Emby 4.9 returns first65bytes; explicit final64byte range verified",
+  "source_mapping_saved_privately": true
+}

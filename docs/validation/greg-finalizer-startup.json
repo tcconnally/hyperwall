@@ -1,0 +1,14 @@
+{
+  "date": "2026-09-27",
+  "worker_started": true,
+  "container": "emby",
+  "initial_discovered_files": 30,
+  "ready_files_at_layout_audit": 19,
+  "faststart_verified": 19,
+  "failures_at_prior_15_file_checkpoint": 0,
+  "original_media_rewritten": false,
+  "expected_ready_files": 851,
+  "deadline_hours": 72,
+  "free_space_reserve_gib": 50,
+  "scope": "Counts observed through authenticated NAS browser terminal; full unique-item coverage is a separate client audit."
+}

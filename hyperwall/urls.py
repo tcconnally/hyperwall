@@ -16,6 +16,7 @@ path on the server.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from .playback_plan import PlaybackPlan
 
@@ -127,6 +128,7 @@ def build_stream_url(
     session_id: str,
     transcode: bool,
     static: bool = True,
+    media_source_id: str | None = None,
 ) -> str:
     """Build the media stream URL for an item.
 
@@ -136,6 +138,9 @@ def build_stream_url(
                       static=true; a backend that must not use it can pass
                       static=False.
     """
+    source_query = (
+        f"&MediaSourceId={quote(media_source_id, safe='')}" if media_source_id else ""
+    )
     if transcode:
         return (
             f"{base}/Videos/{item_id}/master.m3u8?api_key={api_key}"
@@ -143,10 +148,13 @@ def build_stream_url(
             f"&MaxHeight=1080&MaxWidth=1920"
             f"&MaxFramerate=30&VideoBitrate=12000000"
             f"&PlaySessionId={session_id}"
+            f"{source_query}"
         )
     direct = f"{base}/Videos/{item_id}/stream?api_key={api_key}"
     if static:
         direct += "&static=true"
+    if media_source_id:
+        direct += source_query + f"&PlaySessionId={quote(session_id, safe='')}"
     return direct
 
 
@@ -159,6 +167,7 @@ def build_stream_url_for_plan(
     session_id: str,
     plan: PlaybackPlan,
     static: bool = True,
+    media_source_id: str | None = None,
 ) -> str:
     return build_stream_url(
         base=base,
@@ -167,4 +176,5 @@ def build_stream_url_for_plan(
         session_id=session_id,
         transcode=plan.server_mode == "server_transcode",
         static=static,
+        media_source_id=media_source_id,
     )

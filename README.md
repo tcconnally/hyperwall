@@ -21,6 +21,40 @@ hardware-accelerated video cells powered by libmpv.
 - **G-Sync isolation** — per-app NVIDIA Profile Inspector profile
   disables VRR for Hyperwall only, avoiding mixed-FPS jitter
 
+## Run on macOS or Linux with local telemetry
+
+After the platform bootstrap and `config.ini` setup, use:
+
+```sh
+./run-hyperwall.sh
+```
+
+This profile keeps every library item, prefers finalized Emby playback copies,
+and uses hardware decoding (`videotoolbox-copy` on macOS, `auto-safe` on Linux).
+Unprepared files keep the existing recovery and bounded server transcode path.
+The saved layout remains configurable up to twelve cells; keeping a file in
+the library is not a claim that twelve arbitrary originals can decode smoothly.
+The static-library preparation job removes that unpredictable runtime cost.
+
+Performance samples are written every five seconds to
+`logs/telemetry/hyperwall_<date>_<pid>.jsonl`, beside `hyperwall.log`.
+They include per-cell decoder/drop/buffering/audio/render counters, item IDs,
+GUI event-loop lag, CPU and memory measurements, and best-effort ESC hide timing.
+No telemetry is uploaded. Sampling uses cached state and skips busy locks;
+disk writes run on a daemon with a bounded queue. Each session retains up to
+three 5 MiB files. Historical sessions remain local until you remove them.
+Set `HYPERWALL_LOCAL_TELEMETRY=0` to disable JSONL collection.
+
+Summarize the saved data without contacting any service:
+
+```sh
+python3 scripts/summarize-telemetry.py
+```
+
+The current verified hardware results and NAS setup are documented in
+[Greg deployment](docs/greg-streaming-deployment.md). A real twelve-cell visual
+run on each client is still required before claiming flawless presentation.
+
 ## Quick Start (macOS — Apple Silicon / Intel, experimental)
 
 macOS support uses a different video path: mpv's Swift backend does **not**
@@ -92,6 +126,68 @@ soak evidence exists on the exact host.
 For an explicitly controlled diagnostic run only, `HYPERWALL_HARDWARE_PREFLIGHT=0`
 skips the GPU check and `HYPERWALL_UNLOAD_OLLAMA=0` keeps Ollama resident. Do
 not use either override for production or overnight playback.
+
+### Audio switching with a prepared library
+
+`HYPERWALL_AUDIO_MODE=prepared ./launch-linux.sh` enables continuous audio only
+for items explicitly marked as prepared by the rendition selector; originals
+and missing renditions keep the existing lazy behavior. Use `./launch.sh` on
+macOS. Prepared cells retain their selected audio track while muted, so mute
+and volume controls change only audio output without seeking the video or
+restarting its audio track. Audio decode and buffering stay active in these
+muted cells; qualify the intended 8–12-cell workload on the playback machine.
+
+For a separate library whose entire contents have been validated, use
+`HYPERWALL_AUDIO_MODE=continuous` to enable this behavior for every item.
+
+The default is `HYPERWALL_AUDIO_MODE=lazy`, which retains the existing fallback
+for originals with problematic interleaving. The mode is fixed when cells are
+created. Select only the prepared library for an all-`continuous` session.
+The option does not normalize files or infer that a source is safe from its
+codec. Unset the variable or select `lazy` to restore the original behavior;
+unrecognized values also fall back to `lazy`.
+
+### Prepared versions in the existing Emby library
+
+For the configured Greg NAS and M5 client, run
+`./scripts/run-hyperwall-prepared.sh`. This uses the prepared-only profile,
+VideoToolbox-copy decoding and bounded caches while preserving the saved
+display layout. See [deployment and measurements](docs/greg-streaming-deployment.md).
+
+Emby Folder Sync can publish alternate MP4 versions of the original `mv`
+items to a dedicated directory such as `/hyperwall/mv`. Configure
+`HYPERWALL_RENDITION_ROOT=/hyperwall/mv` to prefer those versions. Hyperwall
+keeps each original item's identity, title, favorites and tags, then requests
+its selected `MediaSourceId` through the existing static Emby endpoint.
+Unconverted items remain in the library and use their original playback path.
+
+Folder Sync can copy an already compatible original unchanged. Source selection
+therefore does not by itself enable prepared audio. The NAS finalizer remuxes
+and validates each output, then appends a fixed 64-byte MP4 `free` box receipt
+before publishing it atomically. With `HYPERWALL_AUDIO_MODE=prepared`, Hyperwall
+checks that receipt through an authenticated `Range: bytes=-64` request to the
+existing static endpoint. It rejects redirects, full-file responses and invalid
+ranges. Emby 4.9 may misread a suffix range as the first 65 bytes; Hyperwall
+closes that response without reading it and makes one explicit 64-byte tail
+request using the reported file length. Missing receipts retain the selected
+version with lazy audio behavior.
+No extra file server is required.
+
+`HYPERWALL_PREPARED_ONLY=1` explicitly restricts the playback pool to versions
+with verified receipts, allowing a ready subset to run while normalization is
+still progressing. It logs the ready/total count and admits no items when the
+rendition root is unset or no receipts pass. This option leaves the Emby library
+intact; it is off by default, so ordinary launches retain all original items.
+
+Folder Sync sources are discovered through PlaybackInfo during background
+library loading. Progress and the selected/total count are logged; unavailable
+or ambiguous sources retain their originals. Newly completed versions become
+eligible on the next library load or relaunch. Inspect one item without opening
+media or printing titles, paths or credentials:
+
+```bash
+python3 scripts/inspect-renditions.py --config /path/to/config.ini --item-id ITEM_ID
+```
 
 ### KVM / HDMI-disconnect benchmark
 
@@ -175,7 +271,7 @@ notepad config.ini    # fill in server_url, username, password
 | `F` | Favorites filter |
 | `A` | All-items filter |
 | `S` | mpv stats overlay |
-| `Esc` | Shutdown |
+| `Esc` | Immediately hide every wall/solo window and exit |
 
 ## Web Remote API
 

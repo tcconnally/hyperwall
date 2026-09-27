@@ -117,5 +117,14 @@ class RenderTelemetry:
                 self._interval = _empty()
             return {"total": total, "interval": interval}
 
+    def try_snapshot(self) -> dict | None:
+        """Local periodic diagnostics skip a busy callback instead of waiting."""
+        if not self._lock.acquire(blocking=False):
+            return None
+        try:
+            return dict(self._total)
+        finally:
+            self._lock.release()
+
 
 __all__ = ["RenderTelemetry"]

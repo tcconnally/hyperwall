@@ -1,0 +1,96 @@
+{
+  "concurrent_streams": 12,
+  "bytes_per_stream_requested": 8388608,
+  "streams": [
+    {
+      "stream": 1,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.616,
+      "range_honored": true
+    },
+    {
+      "stream": 2,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.772,
+      "range_honored": true
+    },
+    {
+      "stream": 3,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.838,
+      "range_honored": true
+    },
+    {
+      "stream": 4,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.699,
+      "range_honored": true
+    },
+    {
+      "stream": 5,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.617,
+      "range_honored": true
+    },
+    {
+      "stream": 6,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.854,
+      "range_honored": true
+    },
+    {
+      "stream": 7,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.522,
+      "range_honored": true
+    },
+    {
+      "stream": 8,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.489,
+      "range_honored": true
+    },
+    {
+      "stream": 9,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.649,
+      "range_honored": true
+    },
+    {
+      "stream": 10,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.516,
+      "range_honored": true
+    },
+    {
+      "stream": 11,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.483,
+      "range_honored": true
+    },
+    {
+      "stream": 12,
+      "status": 206,
+      "bytes": 8388608,
+      "seconds": 0.489,
+      "range_honored": true
+    }
+  ],
+  "total_bytes": 100663296,
+  "wall_seconds": 0.856,
+  "aggregate_mbps": 940.55,
+  "all_ranges_honored": true,
+  "all_reads_complete": true,
+  "scope": "bounded HTTP range burst; originals; no decoding or display"
+}

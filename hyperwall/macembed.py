@@ -45,6 +45,7 @@ class MpvGLWidget(QOpenGLWidget):
         super().__init__(parent)
         self._mpv: Any = None            # python-mpv MPV (vo=libmpv)
         self._ctx: Any = None            # mpv.MpvRenderContext
+        self._swap_pending_ctx: Any = None  # context whose FBO was just rendered
         self._gl_ready = False
         self._accepting_frames = True    # shutdown silences the update cb
         self._get_proc_address: Any = None  # CFUNCTYPE — must stay alive
@@ -57,6 +58,11 @@ class MpvGLWidget(QOpenGLWidget):
             self._schedule_frame_update, Qt.ConnectionType.QueuedConnection
         )
         self._sig_free.connect(self._free_ctx, Qt.ConnectionType.QueuedConnection)
+        # paintGL only fills an offscreen FBO. Report presentation after Qt
+        # composites and swaps the top-level window, without a queued delay.
+        self.frameSwapped.connect(
+            self._on_frame_swapped, Qt.ConnectionType.DirectConnection
+        )
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -76,6 +82,11 @@ class MpvGLWidget(QOpenGLWidget):
             finally:
                 self.doneCurrent()
 
+    def quiesce_for_exit(self) -> None:
+        """Gate rendering without freeing a context or its callback owner."""
+        self._accepting_frames = False
+        self._swap_pending_ctx = None
+
     def release(self) -> None:
         """Free the render context (before the mpv core is terminated).
 
@@ -93,6 +104,7 @@ class MpvGLWidget(QOpenGLWidget):
         """
         try:
             self._accepting_frames = False
+            self._swap_pending_ctx = None
             self._frame_pump.close()
             if self._ctx is not None:
                 # The callback body is gated above. Do not replace update_cb
@@ -109,6 +121,7 @@ class MpvGLWidget(QOpenGLWidget):
 
     def _free_ctx(self) -> None:
         """Free the render context. GUI thread only."""
+        self._swap_pending_ctx = None
         if self._ctx is None:
             return
         self.makeCurrent()
@@ -188,11 +201,52 @@ class MpvGLWidget(QOpenGLWidget):
 
     def _schedule_frame_update(self) -> None:
         """GUI-thread delivery of one coalesced frame notification."""
-        self.update()
+        if self._accepting_frames:
+            self.update()
+
+    def _on_frame_swapped(self) -> None:
+        """Report actual Qt presentation with the owning GL context current."""
+        try:
+            ctx = self._ctx
+            if (
+                not self._accepting_frames
+                or ctx is None
+                or self._swap_pending_ctx is not ctx
+                or QThread.currentThread() is not self.thread()
+            ):
+                return
+            self._swap_pending_ctx = None
+            gl_context = self.context()
+            if gl_context is None:
+                return
+            previous = QOpenGLContext.currentContext()
+            previous_surface = previous.surface() if previous is not None else None
+            changed_context = previous is not gl_context
+            try:
+                if changed_context:
+                    self.makeCurrent()
+                if (
+                    QOpenGLContext.currentContext() is gl_context
+                    and self._accepting_frames
+                    and self._ctx is ctx
+                ):
+                    ctx.report_swap()
+            finally:
+                # Qt may still be notifying other widgets about this swap.
+                # Leave its compositor context as we found it.
+                if changed_context:
+                    if previous is not None and previous_surface is not None:
+                        previous.makeCurrent(previous_surface)
+                    else:
+                        self.doneCurrent()
+        except Exception as e:
+            logger.debug("mpv swap report raised: %s", e)
 
     # ── painting ──────────────────────────────────────────────────────
 
     def paintGL(self) -> None:
+        if not self._accepting_frames:
+            return
         self._frame_pump.begin_paint()
         paint_started = time.perf_counter()
         render_started: float | None = None
@@ -219,7 +273,7 @@ class MpvGLWidget(QOpenGLWidget):
                 flip_y=True,                 # Qt FBO origin is bottom-left
                 block_for_target_time=False,  # never block the GUI thread
             )
-            self._ctx.report_swap()
+            self._swap_pending_ctx = self._ctx
             rendered = True
         except Exception as e:
             logger.debug("mpv render raised: %s", e)

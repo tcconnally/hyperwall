@@ -57,6 +57,14 @@ check the rule. Before claiming one of these is fixed, run the probe.
   contexts synchronously on the GUI thread (native windows still alive)
   BEFORE submitting cell releases to the pool. Queued-free remains only
   as the fallback for hypothetical off-GUI callers.
+- **Escape is an emergency process exit.** One press hides all wall/solo
+  windows and gates rendering, without native calls, joins, disk I/O or
+  network waits on the GUI thread. A daemon watchdog calls `os._exit` after
+  200 ms; session stops, mute/stop and telemetry are best effort off-thread.
+  Keep widgets, render contexts and ctypes callbacks alive until that exit;
+  never terminate a core while its render context lives. Normal shutdown
+  still follows the ordered teardown above. The deadline starts when Qt
+  dispatches Escape; it cannot repair an event loop already blocked earlier.
 
 ## python-mpv API
 
@@ -81,11 +89,16 @@ check the rule. Before claiming one of these is fixed, run the probe.
 
 ## mpv playback semantics
 
-- **Never demux a problem file's audio at load.** Muted cells load `aid=no`;
+- **Never demux an unprepared problem file's audio at load.** Muted cells load `aid=no`;
   some poorly-interleaved files hard-freeze (`paused-for-cache`) if their
   audio stream is demuxed from the start — independent of `video-sync` mode.
   Arming audio **mid-stream** on unmute is safe. (v10.8 armed audio at load
   for seamless unmute and froze passive playback; reverted in v10.9.1.)
+  `HYPERWALL_AUDIO_MODE=prepared` is the narrow exception: a selected native
+  Emby alternate must carry the exact normalization receipt appended after
+  a successful remux and validation. Folder Sync directory membership alone
+  is insufficient because it can copy originals unchanged. Keep that track
+  selected across mute/volume changes; never seek merely to change output.
 - Unmute relock is a **keyframe** seek (`absolute+keyframes`): exact seeks
   re-decode to the position (~1s freeze); no seek at all stutters until the
   audio buffer fills (`video_sync=audio` follows the cold track).
