@@ -10,6 +10,7 @@ import ast
 from contextlib import contextmanager
 import logging
 import os
+import random
 from pathlib import Path
 import sys
 import threading
@@ -107,6 +108,92 @@ def client_fixture(count=12, verified=None, block_item=None):
     client.get = get
     client._has_normalization_receipt = lambda item: item["Id"] in client.verified
     return client
+
+
+def paged_client(count, *, include_total=True):
+    client = client_fixture(count=count)
+    client.page_starts = []
+
+    def get(path, **kwargs):
+        if path.endswith("/Views"):
+            return Response({"Items": [{"Name": "fixture-library", "Id": "library"},
+                                        {"Name": "overlap", "Id": "other"}]})
+        params = kwargs["params"]
+        assert params["SortBy"] == "SortName"
+        assert params["SortOrder"] == "Ascending"
+        start = int(params["StartIndex"])
+        client.page_starts.append(start)
+        # Emulate a server silently clamping our 5,000-item request to 100.
+        body = {"Items": client.originals[start:start + 100]}
+        if include_total:
+            body["TotalRecordCount"] = count
+        return Response(body)
+
+    client.get = get
+    return client
+
+
+def test_capped_pages_load_entire_large_library():
+    client = paged_client(7503)
+    items = client.fetch_items(["fixture-library"], resolve_renditions=False)
+    assert {item["Id"] for item in items} == {str(i) for i in range(7503)}
+    assert len(items) == 7503
+    assert client.page_starts == list(range(0, 7503, 100))
+
+
+def test_missing_total_still_shuffles_every_item_once_per_cycle():
+    client = paged_client(1207, include_total=False)
+    items = client.fetch_items(["fixture-library"], resolve_renditions=False)
+    assert len(items) == 1207
+    assert client.page_starts[-1] == 1207  # terminal empty page
+    playlist = PlaylistManager(shuffle=random.Random(42).shuffle)
+    playlist.set_source(items)
+    expected = {str(i) for i in range(1207)}
+    cycles = []
+    for _ in range(2):
+        first = [playlist.next()["Id"] for _ in range(100)]
+        # Background metadata refresh must not reset the shuffle cycle.
+        playlist.update_source([dict(item, refreshed=True) for item in items])
+        cycle = first + [playlist.next()["Id"] for _ in range(1107)]
+        assert len(set(cycle)) == 1207
+        assert set(cycle) == expected
+        assert any(int(item_id) >= 100 for item_id in first)
+        cycles.append(cycle)
+    assert cycles[0] != cycles[1]
+
+
+def test_overlapping_libraries_do_not_weight_shared_items_twice():
+    client = paged_client(207)
+    items = client.fetch_items(["fixture-library", "overlap"], resolve_renditions=False)
+    assert len(items) == len({item["Id"] for item in items}) == 207
+
+
+def test_repeated_page_is_bounded_and_not_admitted_as_complete():
+    client = paged_client(207, include_total=False)
+    get = client.get
+
+    def repeated(path, **kwargs):
+        if not path.endswith("/Views"):
+            kwargs["params"]["StartIndex"] = "0"
+        return get(path, **kwargs)
+
+    client.get = repeated
+    assert client.fetch_items(["fixture-library"], resolve_renditions=False) == []
+    assert len(client.page_starts) == 2
+
+
+def test_failed_second_page_does_not_admit_a_truncated_library():
+    client = paged_client(207)
+    get = client.get
+
+    def failed(path, **kwargs):
+        response = get(path, **kwargs)
+        if not path.endswith("/Views") and int(kwargs["params"]["StartIndex"]) >= 100:
+            response.raise_for_status = Mock(side_effect=RuntimeError("HTTP 503"))
+        return response
+
+    client.get = failed
+    assert client.fetch_items(["fixture-library"], resolve_renditions=False) == []
 
 
 def loader_fixture(client, startup_cells=8, progressive_start=True, discovery_shuffle=None):

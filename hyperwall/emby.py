@@ -170,10 +170,13 @@ class EmbyClient:
         """Fetch all items from the given libraries."""
         all_items: list[dict[str, Any]] = []
         try:
-            views = self.get(
+            response = self.get(
                 f"/Users/{self.user_id}/Views", timeout=10
-            ).json().get("Items", [])
+            )
+            response.raise_for_status()
+            views = response.json().get("Items", [])
             view_map = {v["Name"]: v["Id"] for v in views}
+            admitted_ids = set()
 
             for lib in library_names:
                 lid = view_map.get(lib)
@@ -187,27 +190,49 @@ class EmbyClient:
                     # libraries beyond it while logging a success-looking
                     # count (2026-07-13 audit).
                     items: list[dict[str, Any]] = []
+                    seen_ids = set()
+                    start = 0
                     page = 5_000
                     while True:
-                        body = self.get(
+                        response = self.get(
                             f"/Users/{self.user_id}/Items",
                             params={
                                 "ParentId": lid,
                                 "Recursive": "true",
                                 "IncludeItemTypes": "Video,MusicVideo,Movie,Episode",
                                 "Fields": "MediaSources,MediaStreams,UserData,Tags",
-                                "StartIndex": str(len(items)),
+                                # Enumerate first; PlaylistManager shuffles the
+                                # complete pool locally, never a server sample.
+                                "SortBy": "SortName",
+                                "SortOrder": "Ascending",
+                                "StartIndex": str(start),
                                 "Limit": str(page),
                             },
                             timeout=30,
-                        ).json()
+                        )
+                        response.raise_for_status()
+                        body = response.json()
                         batch = body.get("Items", [])
-                        items.extend(batch)
-                        total = body.get("TotalRecordCount", len(items))
-                        if not batch or len(items) >= total:
+                        if not batch:
+                            break
+                        before = len(seen_ids)
+                        for item in batch:
+                            if item["Id"] not in seen_ids:
+                                seen_ids.add(item["Id"])
+                                items.append(item)
+                        if len(seen_ids) == before:
+                            raise requests.RequestException("Library pagination made no progress")
+                        # Servers may cap responses below our requested Limit.
+                        # Missing totals require reading through the empty page.
+                        start += len(batch)
+                        total = body.get("TotalRecordCount")
+                        if total is not None and start >= total:
                             break
                     logger.info("Library '%s': %d items", lib, len(items))
-                    all_items.extend(items)
+                    for item in items:
+                        if item["Id"] not in admitted_ids:
+                            admitted_ids.add(item["Id"])
+                            all_items.append(item)
                 except requests.RequestException as e:
                     logger.error(
                         "Library '%s' failed (%s) — keeping %d items from prior libs.",

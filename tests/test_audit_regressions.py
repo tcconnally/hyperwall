@@ -133,6 +133,9 @@ def test_fetch_items_paginates_beyond_page_limit():
         def json(self):
             return self._payload
 
+        def raise_for_status(self):
+            pass
+
     total = 7_500  # > one 5 000-item page
 
     def fake_get(path, **kw):
