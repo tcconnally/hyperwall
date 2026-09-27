@@ -83,6 +83,14 @@ def test_auto_transcode_disabled_forces_direct_without_changing_client_decoder()
     assert plan.reason == "auto_transcode_disabled"
 
 
+def test_default_policy_admits_heavy_and_unmeasured_originals_without_transcoding():
+    for item in (_item(fps=120, bitrate=120_000_000), _item()):
+        plan = plan_playback(item, client_decoder="videotoolbox-copy")
+        assert plan.server_mode == "direct"
+        assert plan.requires_transcode_lease is False
+        assert plan.client_decoder == "videotoolbox-copy"
+
+
 def test_stable_direct_candidate_requires_complete_bounded_metadata():
     assert is_stable_direct_candidate(
         _item(fps=30, bitrate=20_000_000),

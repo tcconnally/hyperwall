@@ -228,6 +228,7 @@ class VideoCell(QWidget):
     request_prev = pyqtSignal(object)
     request_solo = pyqtSignal(object)
     resource_quarantined = pyqtSignal(object)
+    transcode_candidate = pyqtSignal(object, str)
     request_remote_solo = pyqtSignal(object)
     _sig_eof = pyqtSignal(object, str)
     _sig_track_done = pyqtSignal(object)
@@ -3170,6 +3171,7 @@ class VideoCell(QWidget):
             or self._mpv is None
             or pending is None
             or self._prefetch_advance_inflight is not None
+            or not is_malformed_stream_fault(_message)
         ):
             return
         item, url, sid = pending
@@ -3184,6 +3186,7 @@ class VideoCell(QWidget):
             item.get("Name", "?"),
         )
         self._prefetch_fault_suppression_until = _time.monotonic() + 5.0
+        self._notify_transcode_candidate(item, "malformed_stream")
         self.resource_quarantined.emit(item)
         self.drop_prefetch(requeue=False)
 
@@ -3224,6 +3227,11 @@ class VideoCell(QWidget):
                 self._decoder_quarantines += 1
             self._resource_quarantined = True
             self._track_done = True
+            self._notify_transcode_candidate(
+                self.current_item,
+                "malformed_stream" if is_malformed_stream_fault(_message)
+                else "decoder_recovery_exhausted",
+            )
             self._notify_resource_quarantined()
             self._request_next_throttled(False)
             return
@@ -3519,6 +3527,26 @@ class VideoCell(QWidget):
         if item.get("Id"):
             self.resource_quarantined.emit(item)
 
+    def _notify_transcode_candidate(
+        self, item: dict[str, Any] | None, reason: str,
+    ) -> None:
+        """Report attributed media failure; the controller queues work off-thread."""
+        if self._closing or not item or not item.get("Id"):
+            return
+        if reason not in {
+            "malformed_stream", "decoder_recovery_exhausted",
+            "playback_recovery_exhausted",
+        }:
+            return
+        try:
+            if self.controller.in_outage():
+                return
+        except Exception:
+            # An unknown wall health state is insufficient evidence to
+            # automatically create a persistent server-side conversion.
+            return
+        self.transcode_candidate.emit(item, reason)
+
     def _request_next_throttled(
         self,
         is_retry: bool,
@@ -3608,7 +3636,9 @@ class VideoCell(QWidget):
             # Force a fresh grace window so we don't re-fire before the retry
             # has a chance to load new frames.
             self._last_progress_ts = _time.monotonic()
-            self._on_error()
+            # A stalled clock alone cannot distinguish bad media from cache
+            # starvation or a stuck presentation thread.
+            self._on_error(transcode_evidence=False)
 
     def _record_failure_and_maybe_park(self) -> bool:
         """Record a failure timestamp; park the cell on a crash-loop.
@@ -3656,7 +3686,7 @@ class VideoCell(QWidget):
         logger.info("Crash-loop cooldown elapsed — resuming cell.")
         self._request_next_throttled(False)
 
-    def _on_error(self) -> None:
+    def _on_error(self, *, transcode_evidence: bool = True) -> None:
         if (
             self._closing
             or self._parked
@@ -3724,9 +3754,12 @@ class VideoCell(QWidget):
         )
         plan = escalation_plan(self._retry_count, MAX_RETRIES)
         if plan["action"] == "retry":
-            if plan["transcode"] and not self._force_transcode:
+            if transcode_evidence and plan["transcode"] and not self._force_transcode:
                 self._force_transcode = True
                 logger.info("Escalating to server transcode.")
+                self._notify_transcode_candidate(
+                    self.current_item, "playback_recovery_exhausted",
+                )
             # Jitter desynchronizes retries: identical deterministic delays
             # made every cell hit the server at the same instant after a
             # wall-wide fault.

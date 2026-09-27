@@ -24,6 +24,7 @@ from hyperwall.playlist import DEFAULT_GROUP, PlaylistManager
 from hyperwall.renditions import prefer_rendition
 from hyperwall.reliability import allow_transcode_prefetch
 from hyperwall.soak_filter import apply_initial_filter
+from hyperwall.transcode_queue import FAILURE_REASONS
 
 
 LOGGER = logging.getLogger("progressive-loading-test")
@@ -108,8 +109,10 @@ def client_fixture(count=12, verified=None, block_item=None):
     return client
 
 
-def loader_fixture(client, startup_cells=8, progressive_start=True):
-    cls = production_class("emby.py", "ContentLoader", {"__init__", "run"}, {"os": os, "logger": LOGGER})
+def loader_fixture(client, startup_cells=8, progressive_start=True, discovery_shuffle=None):
+    shuffle = discovery_shuffle if discovery_shuffle is not None else lambda _items: None
+    cls = production_class("emby.py", "ContentLoader", {"__init__", "run"},
+                           {"os": os, "logger": LOGGER, "random": SimpleNamespace(shuffle=shuffle)})
     loader = cls(client, ["fixture-library"], startup_cells=startup_cells,
                  progressive_start=progressive_start)
     loader.finished, loader.updated, loader.progress = Signal(), Signal(), Signal()
@@ -128,9 +131,11 @@ def loader_fixture(client, startup_cells=8, progressive_start=True):
 
 @contextmanager
 def loading(*, prepared_only, count=12, verified=None, block_item=None, startup_cells=8,
-            root="/hyperwall/mv", progressive_start=True):
+            root="/hyperwall/mv", progressive_start=True, discovery_shuffle=None, shared_raw_list=False):
     client = client_fixture(count, verified, block_item)
-    loader = loader_fixture(client, startup_cells, progressive_start)
+    if shared_raw_list:
+        client.fetch_items = Mock(return_value=client.originals)
+    loader = loader_fixture(client, startup_cells, progressive_start, discovery_shuffle)
     with patch.dict(os.environ, {"HYPERWALL_PREPARED_ONLY": "1" if prepared_only else "0",
                                 "HYPERWALL_RENDITION_ROOT": root, "HYPERWALL_AUDIO_MODE": "prepared"}):
         loader.worker.start()
@@ -154,6 +159,34 @@ def test_full_library_first_signal_precedes_blocked_rendition_resolution():
         assert all(not item.get("_hyperwall_prepared") for item in first[0])
     assert len(loader.updated.emitted[-1]) == 906
     assert [item["Id"] for item in loader.updated.emitted[-1]] == [str(i) for i in range(906)]
+
+
+def test_initial_prepared_scan_shuffles_a_copy_and_preserves_complete_verified_set():
+    verified = {str(i) for i in range(40)} - {"3", "33"}
+    initial_sets = []
+    for permutation in (lambda values: values.reverse(), lambda values: values.sort(key=lambda item: int(item["Id"]))):
+        shuffle = Mock(side_effect=permutation)
+        with loading(prepared_only=True, count=40, verified=verified, startup_cells=16,
+                     discovery_shuffle=shuffle, shared_raw_list=True) as (client, loader):
+            pass
+        shuffle.assert_called_once()
+        assert shuffle.call_args.args[0] is not client.originals
+        assert [item["Id"] for item in client.originals] == [str(i) for i in range(40)]
+        initial = loader.finished.emitted[0]
+        assert len(initial) == 16 and all(item.get("_hyperwall_prepared") is True for item in initial)
+        initial_sets.append({item["Id"] for item in initial})
+        assert {item["Id"] for item in loader.updated.emitted[-1]} == verified
+    assert initial_sets[0] != initial_sets[1]
+
+
+def test_discovery_shuffle_leaves_refresh_and_mixed_library_order_unchanged():
+    for prepared_only, progressive_start in ((True, False), (False, True), (False, False)):
+        shuffle = Mock(side_effect=AssertionError("Non-startup/prepared discovery must not shuffle"))
+        with loading(prepared_only=prepared_only, progressive_start=progressive_start,
+                     discovery_shuffle=shuffle) as (_client, loader):
+            pass
+        shuffle.assert_not_called()
+        assert [item["Id"] for item in loader.finished.emitted[0]] == [str(i) for i in range(12)]
 
 
 def test_refresh_waits_for_complete_pool_in_both_profiles():
@@ -255,11 +288,12 @@ def wall_fixture():
     namespace.update({"os": os, "logger": LOGGER, "select_playback_candidates": select_playback_candidates,
                       "apply_initial_filter": apply_initial_filter, "DEFAULT_GROUP": DEFAULT_GROUP,
                       "allow_transcode_prefetch": allow_transcode_prefetch,
+                      "FAILURE_REASONS": FAILURE_REASONS,
                       "TRANSCODE_PREFETCH_RETRY_S": 1, "TRANSCODE_PREFETCH_RETRY_ATTEMPTS": 3,
                       "QTimer": SimpleNamespace(singleShot=lambda delay, callback: scheduled.append((delay, callback)))})
     cls = production_class("wall.py", "WallController", {
         "_on_items_updated", "_start_empty_cell", "_schedule_transcode_handoff_retry",
-        "_schedule_transcode_prefetch_retry",
+        "_schedule_transcode_prefetch_retry", "_queue_problem_transcode", "_on_resource_quarantined",
     }, namespace)
     wall = cls()
     wall._shutdown_requested = wall._cleaned_up = False
@@ -272,12 +306,71 @@ def wall_fixture():
     wall.next_video = Mock(side_effect=AssertionError("Refresh restarted current playback"))
     wall._set_filter = Mock(side_effect=AssertionError("Refresh used restart-producing filter path"))
     wall._local_telemetry = SimpleNamespace(record_event=Mock())
+    wall._failure_transcodes = SimpleNamespace(submit=Mock(return_value=False))
+    wall._normalization_pending_ids = set()
+    wall._starvation_quarantined = set()
+    wall.in_outage = lambda: False
     wall.scheduled = scheduled
     wall.cells = [SimpleNamespace(current_item=wall.all_items[0],
                                   _prefetched=(wall.all_items[1], "fixture://queued", "queued-session"),
                                   _emby_session_id="current-session",
                                   play=Mock(side_effect=AssertionError("Refresh reloaded a cell")))]
     return wall
+
+
+def test_resumed_deduplicated_original_failure_recovers_only_after_verified_refresh():
+    wall = wall_fixture()
+    failed = wall.all_items[0]
+    current, prefetched = wall.cells[0].current_item, wall.cells[0]._prefetched
+    # Resumed evidence is already in the worker's dedup set.
+    wall._failure_transcodes.submit.return_value = False
+    wall._queue_problem_transcode(failed, "malformed_stream")
+    wall._on_resource_quarantined(failed)
+    wall._failure_transcodes.submit.assert_called_once_with(failed, "malformed_stream")
+    assert failed["Id"] in wall._normalization_pending_ids
+    assert failed["Id"] in wall._starvation_quarantined
+    unverified = [dict(item, _hyperwall_prepared=False) for item in wall.all_items]
+    wall._on_items_updated(unverified)
+    assert failed["Id"] in wall._starvation_quarantined
+    assert failed["Id"] in wall._normalization_pending_ids
+    verified = [dict(item, _hyperwall_prepared=True,
+                     _hyperwall_media_source_id="prepared-" + item["Id"]) for item in wall.all_items]
+    wall._on_items_updated(verified)
+    assert failed["Id"] not in wall._starvation_quarantined
+    assert failed["Id"] not in wall._normalization_pending_ids
+    assert wall.cells[0].current_item is current and wall.cells[0]._prefetched is prefetched
+    wall.next_video.assert_not_called()
+    wall._local_telemetry.record_event.assert_not_called()  # No duplicate queue event.
+
+
+def test_prepared_failure_removes_old_recovery_eligibility_and_remains_quarantined():
+    for accepted in (False, True):
+        wall = wall_fixture()
+        failed = wall.all_items[0]
+        wall._queue_problem_transcode(failed, "malformed_stream")
+        assert failed["Id"] in wall._normalization_pending_ids
+        prepared = dict(failed, _hyperwall_prepared=True, _hyperwall_media_source_id="prepared-0")
+        wall._failure_transcodes.submit.return_value = accepted
+        wall._queue_problem_transcode(prepared, "decoder_recovery_exhausted")
+        wall._on_resource_quarantined(prepared)
+        assert failed["Id"] not in wall._normalization_pending_ids
+        refreshed = [prepared, *wall.all_items[1:]]
+        wall._on_items_updated(refreshed)
+        assert failed["Id"] in wall._starvation_quarantined
+        assert failed["Id"] not in wall._normalization_pending_ids
+        wall.next_video.assert_not_called()
+
+
+def test_unqualified_or_shutdown_failures_cannot_create_recovery_eligibility():
+    for condition in ("unknown-reason", "outage", "shutdown", "cleaned-up"):
+        wall = wall_fixture()
+        wall._shutdown_requested = condition == "shutdown"
+        wall._cleaned_up = condition == "cleaned-up"
+        wall.in_outage = lambda: condition == "outage"
+        reason = "vo_drops" if condition == "unknown-reason" else "malformed_stream"
+        wall._queue_problem_transcode(wall.all_items[0], reason)
+        wall._failure_transcodes.submit.assert_not_called()
+        assert not wall._normalization_pending_ids
 
 
 def retry_fixture():

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import threading
 from typing import Any
 
@@ -27,9 +28,9 @@ from .renditions import NORMALIZATION_RECEIPT, explicit_receipt_range, prefer_re
 
 logger = logging.getLogger("HyperWall")
 
-# Auto-transcode heuristic: sources beyond the fps/bitrate direct-play
-# budget get server-side downscale. Override with HYPERWALL_AUTO_TRANSCODE=0.
-_AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1"
+# Metadata-based transcoding is an explicit diagnostic opt-in. Normal playback
+# tries every original and uses observed failures to justify conversion.
+_AUTO_TRANSCODE = os.environ.get("HYPERWALL_AUTO_TRANSCODE", "0") == "1"
 
 
 def needs_transcode(item: dict[str, Any]) -> bool:
@@ -383,6 +384,12 @@ class ContentLoader(QThread):
             self.progress.emit("No prepared source directory configured")
             self.finished.emit([])
             return
+        if prepared_only and self.progressive_start:
+            # Select the initial verified batch across the library, instead
+            # of replaying the same server-ordered prefix on every launch.
+            # Keep the caller's list and complete refresh order untouched.
+            items = list(items)
+            random.shuffle(items)
 
         def discovered(selected):
             nonlocal started

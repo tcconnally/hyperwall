@@ -4,6 +4,8 @@ config.ini
 hyperwall.log
 hyperwall.log.*
 logs/telemetry/
+logs/transcode-queue/
+logs/normalization/
 *.pyc
 __pycache__/
 

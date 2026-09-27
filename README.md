@@ -29,15 +29,33 @@ After the platform bootstrap and `config.ini` setup, use:
 ./run-hyperwall.sh
 ```
 
-This profile plays finalized, normalized Emby copies and uses hardware decoding
-(`videotoolbox-copy` on macOS, `auto-safe` on Linux). Originals stay intact on
-the NAS. While preparation runs, the wall starts as soon as enough verified
-copies are discovered for its cells and prefetched clips; it does not wait for the full library
-audit. A background refresh every minute adds ready copies to future selections
-without interrupting current playback. Loading cards and local telemetry show
-the ready/pending count. An unfinished or missing copy never silently falls
-back to a heavy original. Set `HYPERWALL_PREPARED_ONLY=0` only for an explicit
-mixed-original comparison; that mode retains bounded runtime transcoding.
+Every library item is eligible immediately. The profile tries direct playback
+with hardware decoding (`videotoolbox-copy` on macOS, `auto-safe` on Linux);
+resolution, bitrate, codec labels and missing metadata do not preemptively
+exclude a file or trigger a transcode. Existing prepared copies are discovered
+in the background and used for future selections without restarting playback.
+
+Only observed, attributed failures can automatically queue a NAS conversion:
+malformed media, exhausted decoder recovery, or repeated explicit playback
+errors outside a server/network outage. Buffering alone, display frame drops,
+watchdog stalls and transport failures are insufficient. Queued jobs contain
+one video ID, never a library/folder or future-content rule. Originals remain
+intact; completed copies can return to rotation after verification.
+
+`HYPERWALL_TRANSCODE_ON_FAILURE=1` enables this behavior in the launcher.
+`HYPERWALL_TRANSCODE_TARGET` names an existing, separate Emby Folder Sync
+destination (default `Hyperwall 1080p`). Failure evidence and queue status are
+saved privately under `logs/transcode-queue/`; unavailable targets remain pending
+locally. Requests go only to the configured media server. Ambiguous submissions
+are checked without repeating the creation request, including after restart.
+Set `HYPERWALL_TRANSCODE_ON_FAILURE=0` to disable persistent conversion jobs.
+`HYPERWALL_AUTO_TRANSCODE=0` disables metadata-based live transcoding while
+retaining recovery for observed playback failures.
+
+Prepared-only playback remains an explicit comparison:
+`HYPERWALL_PREPARED_ONLY=1 ./run-hyperwall.sh`. It restricts the pool and can
+therefore repeat more often while few copies exist. Initial discovery is
+shuffled; subsequent refreshes preserve the current shuffle cycle.
 
 Performance samples are written every five seconds to
 `logs/telemetry/hyperwall_<date>_<pid>.jsonl`, beside `hyperwall.log`.
@@ -152,8 +170,8 @@ unrecognized values also fall back to `lazy`.
 
 ### Prepared versions in the existing Emby library
 
-For the configured Greg NAS and M5 client, run
-`./scripts/run-hyperwall-prepared.sh`. This uses the prepared-only profile,
+For an explicit prepared-only comparison on Greg and the M5 client, run
+`./scripts/run-hyperwall-prepared.sh`. This uses the restricted profile,
 VideoToolbox-copy decoding and bounded caches while preserving the saved
 display layout. See [deployment and measurements](docs/greg-streaming-deployment.md).
 
@@ -181,8 +199,8 @@ No extra file server is required.
 with verified receipts, allowing a ready subset to run while normalization is
 still progressing. It logs the ready/total count and admits no items when the
 rendition root is unset or no receipts pass. This option leaves the Emby library
-intact. The normal `run-hyperwall.sh` profile enables it; the lower-level
-`launch.sh` leaves it disabled unless explicitly configured.
+intact. Both `run-hyperwall.sh` and the lower-level `launch.sh` leave it disabled
+unless explicitly configured.
 
 Folder Sync sources are discovered through PlaybackInfo during background
 library loading. Progress and the selected/total count are logged; unavailable
@@ -338,8 +356,10 @@ Environment variables:
 | `HYPERWALL_VO` | Override video output (gpu-next, gpu) |
 | `HYPERWALL_NO_RELAUNCH=1` | Skip exe re-launch (script mode) |
 | `HYPERWALL_ISOLATED=1` | Force G-Sync isolation on (bypass exe-name check) |
-| `HYPERWALL_AUTO_TRANSCODE=0` | Disable auto-transcode heuristic |
-| `HYPERWALL_STABLE_DIRECT_ONLY` | Explicit emergency escape: force (`1`) or disable (`0`) the fail-closed direct-only pool. It is **not** auto-enabled; normal playback retains the full library and uses bounded server H.264/AAC transcoding for heavy or unmeasured sources. |
+| `HYPERWALL_AUTO_TRANSCODE` | Metadata-based live transcoding: off by default (`0`); `1` explicitly enables the fps/bitrate heuristic. Observed-error recovery remains available. |
+| `HYPERWALL_TRANSCODE_ON_FAILURE` | Automatically queue individual proven problem files on Emby; enabled by `run-hyperwall.sh`. Evidence/status stays under `logs/transcode-queue/`. |
+| `HYPERWALL_TRANSCODE_TARGET` | Existing separate Folder Sync destination name; default `Hyperwall 1080p`. Original/replacement destinations are rejected. |
+| `HYPERWALL_STABLE_DIRECT_ONLY` | Explicit emergency escape: force (`1`) or disable (`0`) the restricted direct-only pool. Normal playback retains every item and tries direct playback first. |
 | `HYPERWALL_STABLE_MAX_FPS` | Stable-pool frame-rate ceiling (default 30 fps) |
 | `HYPERWALL_STABLE_MAX_BITRATE_MBPS` | Stable-pool bitrate ceiling (default 20 Mbps) |
 | `HYPERWALL_STALL_TIMEOUT_S` | Stall watchdog: flag a frozen stream after N s of no progress (default 20) |

@@ -73,7 +73,7 @@ def exceeds_direct_budget(
 def needs_transcode(
     item: dict[str, Any],
     *,
-    auto_transcode: bool = True,
+    auto_transcode: bool = False,
     max_fps: float = 0,
     max_bitrate_mbps: float = 0,
 ) -> bool:

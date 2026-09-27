@@ -27,6 +27,8 @@ SUITES = [
     "test_urls",
     "test_renditions",
     "test_progressive_loading",
+    "test_transcode_evidence",
+    "test_transcode_queue",
     "test_rendition_finalizer",
     "test_local_telemetry",
     "test_emergency_exit",

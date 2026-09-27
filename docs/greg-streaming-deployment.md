@@ -23,11 +23,13 @@ the original items.
   `/hyperwall/mv`, root administrator access only.
 - Conversion working directory: `/hyperwall/.work`. Full-speed conversion
   remains disabled.
-- Library job: custom MP4 / H.264 / AAC, 4 Mbps target, no item limit or
-  unwatched filter. Automatic future additions are disabled for this static
-  library. Job 2 contains 850 items, plus the separate completed pilot.
-- The selected `asmr` library is also queued with the same settings: job 3,
-  55 items. Total normalization scope is now 906 logical items.
+- Initial bulk preparation jobs used custom MP4 / H.264 / AAC at 4 Mbps.
+  The failure-only policy now cancels their unfinished work: 753 remaining
+  queued/incomplete items were cancelled, plus the earlier active incomplete
+  item. All 152 completed copies were verified retained. The conversion task
+  is idle. Originals were never modified.
+- Automatic future work is one individually identified problematic video per
+  job, with `SyncNewContent=false`; no blanket library conversion remains.
 
 The `mv` source inventory found 856 video files (606 GiB, 88.1 hours). Emby
 exposes 851 logical items in that library; file count and logical-item count
@@ -35,30 +37,33 @@ are different measures.
 
 ## Client profile
 
-Run `./run-hyperwall.sh` on macOS or Linux for normalized playback with local
-telemetry. It starts after finding enough verified copies for the selected
-cells and their prefetched clips, while the remaining source audit continues. Original files remain on
-the NAS; unprepared items are explicitly pending in this playback profile.
-`HYPERWALL_PREPARED_ONLY=0` restores an explicit mixed-original comparison.
-The launcher selects the
-prepared version through its explicit Emby `MediaSourceId`, while playback
-reports and metadata retain the original item ID. Discovery uses
-`PlaybackInfo` in the background because Emby's normal library listing omits
-Folder Sync alternate sources.
+Run `./run-hyperwall.sh` on macOS or Linux for full-library direct playback
+with local telemetry. All 906 unique items became available in 0.201 seconds
+in the latest read-only loader check. Background source enrichment retained
+all 906 items and found 151 receipt-verified copies in 20.743 seconds.
 
-The available pool grows during a background refresh every minute. Refreshes
-preserve active playback, prefetched streams and the current shuffle cycle.
-A missing or incomplete copy
-cannot silently enable continuous audio. Normal `launch.sh` retains the
-existing default behavior.
+Resolution, bitrate, codec metadata and missing prepared copies do not mark
+an item problematic. `HYPERWALL_AUTO_TRANSCODE=0` disables speculative live
+transcoding. The separate failure queue accepts attributed malformed-stream
+errors, exhausted decoder recovery and repeated explicit playback failures
+outside an outage. Transport errors, buffering, watchdog stalls and VO frame
+drops do not qualify. A daemon records evidence under `logs/transcode-queue/`
+and submits a single-video job to the existing `Hyperwall 1080p` destination.
+Existing jobs are checked first; uncertain submissions are confirmed without
+repeating the POST. Failed/unconfirmed requests remain visible locally.
 
-On this M5, the prepared profile explicitly uses `videotoolbox-copy`, a
-64 MiB per-cell demuxer ceiling and 768 MiB aggregate ceiling. At the 4 Mbps
-preparation target, 64 MiB represents over two minutes of compressed media;
-the existing cell-count-aware readahead limits remain active. Direct-only
-admission is capped at 60 fps and 8 Mbps. The explicit direct-only comparison
-launcher also disables live transcode fallback.
-Explicit environment overrides still take precedence.
+Completed prepared sources are discovered by their explicit Emby
+`MediaSourceId`; item identity, favorites and tags remain attached to the
+original. A refresh every minute updates future selections and preserves
+active playback, prefetch and the current shuffle cycle. Telemetry includes
+the actual full and filtered pool sizes.
+
+The optional prepared-only comparison remains available with
+`HYPERWALL_PREPARED_ONLY=1`. Its initial discovery order is shuffled to avoid
+always starting from the first 16 files in server order. It uses a 64 MiB
+per-cell cache and 768 MiB aggregate ceiling. Full-library playback retains
+the ordinary cell-count-aware cache budgets. M5 decoding uses
+`videotoolbox-copy`; Linux uses `auto-safe` unless overridden.
 
 The saved client endpoint is the NAS LAN address, `http://10.168.168.29:8096`.
 Media delivery does not need the public reverse proxy.
@@ -81,9 +86,10 @@ The worker is installed at
 `/mnt/cache/appdata/hyperwall-prep/finalize-emby-renditions.py`. Its log and
 PID are in `finalizer.log` and `finalizer.pid` in that same directory. It
 reserves 50 GiB of free space and stops after 72 hours or 851 ready files.
-The additional 55-item ASMR conversion job is queued, but extending the host
-finalizer to 906 files still requires the authenticated NAS terminal. The
-existing worker continues preparing the original scope in the meantime.
+The bulk queue is cancelled; this worker only finalizes existing derived
+copies and does not start encoding originals. It remains a bounded job,
+so finalization must be resumed after its deadline or a NAS restart if new
+failure-triggered conversions need preparation receipts.
 That file count is an exit condition; final library coverage must also be
 checked against unique Emby item IDs. Incompatible files remain excluded.
 
@@ -94,7 +100,7 @@ nohup python3 /mnt/cache/appdata/hyperwall-prep/finalize-emby-renditions.py \
   --root /mnt/user/hyperwall-media/mv --container-root /hyperwall/mv \
   --work /mnt/user/hyperwall-media/.work/finalizer \
   --container-work /hyperwall/.work/finalizer --container emby \
-  --watch-seconds 60 --max-hours 72 --expected 906 \
+  --watch-seconds 60 --max-hours 72 \
   >> /mnt/cache/appdata/hyperwall-prep/finalizer.log 2>&1 < /dev/null &
 echo $! > /mnt/cache/appdata/hyperwall-prep/finalizer.pid
 ```
@@ -104,6 +110,17 @@ failure reasons; unchanged failed inputs are not retried automatically.
 The worker is a bounded one-time preparation job, not a permanent service.
 
 ## Measurements and limits
+
+- Full-library admission now returns all 906 unique items in 0.201 seconds.
+  Source enrichment takes 20.743 seconds in the background and retains all
+  items. Native sync readback confirms the conversion task is idle and
+  completed copies remain available; no synthetic failing file was submitted
+  to the real conversion queue to test job creation.
+- Actual user-started eight-cell sessions show zero decoder drops and zero
+  cache-freeze duration in the sampled records, but substantial VO frame
+  drops remain. These are presentation symptoms under investigation, not
+  sufficient evidence to queue those files for conversion. Short null-output
+  decoder tests do not establish smooth visible rendering.
 
 - Twelve distinct original static stream endpoints returned HTTP 206 with
   correct byte ranges: 96 MiB in 0.856 seconds, about 940.55 Mbps aggregate.
@@ -153,7 +170,7 @@ The worker is a bounded one-time preparation job, not a permanent service.
 - No graphical wall was automatically launched. Actual multi-display
   rendering and long-session behavior require a user-started run.
 
-The final offscreen suite passed 570 checks across 41 suites, with platform
+The final offscreen suite passed 606 checks across 43 suites, with platform
 skips and no failures. Redacted measurements are under `docs/validation/`.
 
 ## Recovery

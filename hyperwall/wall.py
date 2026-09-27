@@ -15,6 +15,7 @@ import os
 import threading
 import time as _time
 from dataclasses import replace
+from pathlib import Path
 import uuid
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -89,6 +90,7 @@ from .reliability import (
 from .urls import build_stream_url_for_plan, tag_names
 from .playlist import PlaylistManager, DEFAULT_GROUP
 from .soak_filter import apply_initial_filter
+from .transcode_queue import FailureTranscodeQueue, FAILURE_REASONS
 
 logger = logging.getLogger("HyperWall")
 EMERGENCY_EXIT_GRACE_S = 0.20
@@ -260,6 +262,13 @@ class WallController:
         # failure, consulted by cells to decide whether to escalate.
         self._failure_events: deque[tuple[float, int]] = deque(maxlen=512)
         self._last_outage_log_ts = 0.0
+        self._normalization_pending_ids: set[str] = set()
+        self._failure_transcodes = None
+        if os.environ.get("HYPERWALL_TRANSCODE_ON_FAILURE", "0") == "1":
+            self._failure_transcodes = FailureTranscodeQueue(
+                self.client, Path(SCRIPT_DIR) / "logs" / "transcode-queue",
+                os.environ.get("HYPERWALL_TRANSCODE_TARGET", "Hyperwall 1080p"),
+            )
         # Monotonic watermark for global queued-prefetch admission. This is
         # intentionally controller-wide: all cells share the same link/cache
         # pressure, so per-cell timers cannot prevent a wall-wide burst.
@@ -307,7 +316,7 @@ class WallController:
         self._playback_policy = PlaybackPolicy(
             auto_transcode=(
                 False if self._direct_only_pool
-                else os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1"
+                else os.environ.get("HYPERWALL_AUTO_TRANSCODE", "0") == "1"
             ),
             max_fps=(
                 pool_max_fps
@@ -407,6 +416,7 @@ class WallController:
                     cell.request_next.connect(self.next_video)
                     cell.request_prev.connect(self.prev_video)
                     cell.resource_quarantined.connect(self._on_resource_quarantined)
+                    cell.transcode_candidate.connect(self._queue_problem_transcode)
                     cell.request_solo.connect(self._toggle_solo)
                     cell.request_remote_solo.connect(self._remote_solo)
                     grid.addWidget(cell, r, c)
@@ -752,6 +762,14 @@ class WallController:
             self.all_items, self.filter_mode, item_id=selected_id,
         )
         self.playlists.update_source(self.filtered, DEFAULT_GROUP)
+        # A newly verified alternate can re-enter rotation after its original
+        # failed. A failing prepared copy itself is never automatically cleared.
+        pending = getattr(self, "_normalization_pending_ids", set())
+        recovered = {item["Id"] for item in self.all_items
+                     if item.get("Id") in pending and item.get("_hyperwall_prepared") is True}
+        if recovered:
+            self._starvation_quarantined.difference_update(recovered)
+            pending.difference_update(recovered)
         for i, cell in enumerate(self.cells):
             if cell.current_item is None and self.filtered:
                 QTimer.singleShot(i * STREAM_START_STAGGER_MS,
@@ -802,9 +820,8 @@ class WallController:
             )
         else:
             logger.info(
-                "Playback pool: retained full library (%d items); "
-                "auto-transcode enabled for heavy or unmeasured sources.",
-                len(source_items),
+                "Playback pool: %d discovered items; metadata-based auto-transcode=%s.",
+                len(source_items), os.environ.get("HYPERWALL_AUTO_TRANSCODE", "0") == "1",
             )
         selection_items = (
             list(items)
@@ -881,7 +898,7 @@ class WallController:
         policy = getattr(self, "_playback_policy", None)
         if not isinstance(policy, PlaybackPolicy):
             policy = PlaybackPolicy(
-                auto_transcode=os.environ.get("HYPERWALL_AUTO_TRANSCODE", "1") == "1",
+                auto_transcode=os.environ.get("HYPERWALL_AUTO_TRANSCODE", "0") == "1",
                 max_fps=MAX_DIRECT_FPS,
                 max_bitrate_mbps=getattr(self, "_bitrate_budget_mbps", 60),
                 cache_budget_mb=budgeted_mib(
@@ -1504,6 +1521,22 @@ class WallController:
         if item and item.get("Id"):
             self._starvation_quarantined.add(item["Id"])
 
+    def _queue_problem_transcode(self, item: dict, reason: str) -> None:
+        worker = getattr(self, "_failure_transcodes", None)
+        if (self._shutdown_requested or self._cleaned_up or worker is None
+                or reason not in FAILURE_REASONS or not item.get("Id") or self.in_outage()):
+            return
+        if item.get("_hyperwall_prepared") is True:
+            self._normalization_pending_ids.discard(item["Id"])
+        else:
+            # A pending job may have resumed from disk; submission deduplication
+            # must not prevent its completed copy from clearing quarantine.
+            self._normalization_pending_ids.add(item["Id"])
+        if worker.submit(item, reason):
+            telemetry = getattr(self, "_local_telemetry", None)
+            if telemetry is not None:
+                telemetry.record_event("transcode_candidate", item_id=item["Id"], reason=reason)
+
     @traced("wall.prev_video")
     def prev_video(self, cell: VideoCell) -> None:
         if cell.history:
@@ -1822,6 +1855,9 @@ class WallController:
         except Exception:
             pass
         telemetry = getattr(self, "_local_telemetry", None)
+        worker = getattr(self, "_failure_transcodes", None)
+        if worker is not None:
+            worker.stop()
         if telemetry is not None:
             try:
                 telemetry.record_event(
@@ -1919,6 +1955,9 @@ class WallController:
         if self._cleaned_up:
             return []
         self._cleaned_up = True
+        worker = getattr(self, "_failure_transcodes", None)
+        if worker is not None:
+            worker.stop()
         try:
             self.loader.requestInterruption()
             if hasattr(self, "_rendition_refresh_timer"):

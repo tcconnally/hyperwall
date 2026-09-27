@@ -1,0 +1,14 @@
+{
+  "initial_items": 906,
+  "unique_items": 906,
+  "initial_seconds": 0.201,
+  "final_items": 906,
+  "prepared_copies": 151,
+  "enrichment_seconds": 20.743,
+  "conversion_task_state": "Idle",
+  "existing_copy_job_read_only_check": {
+    "state": "existing_copy",
+    "job_id": 1,
+    "job_item_id": 1
+  }
+}

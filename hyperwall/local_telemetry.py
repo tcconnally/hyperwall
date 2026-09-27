@@ -181,6 +181,8 @@ class LocalTelemetry(QObject):
         lags = sorted(self.lags)
         self.lags.clear()
         self.record_event("sample", library_status=getattr(self.wall, "_library_status", None),
+                          library_pool_size=len(getattr(self.wall, "all_items", [])),
+                          filtered_pool_size=len(getattr(self.wall, "filtered", [])),
                           cells=[cached_cell_snapshot(c, i)
                                           for i, c in enumerate(self.wall.cells)],
                           loop_lag_ms={"max": round(max(lags, default=0), 3),

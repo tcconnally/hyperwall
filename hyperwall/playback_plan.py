@@ -7,7 +7,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class PlaybackPolicy:
-    auto_transcode: bool = True
+    auto_transcode: bool = False
     max_fps: float = 66.0
     max_bitrate_mbps: float = 60.0
     cache_budget_mb: int = 0

@@ -14,7 +14,7 @@ import threading
 import time
 from types import SimpleNamespace
 from unittest import SkipTest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -166,6 +166,43 @@ def test_escape_returns_and_hides_without_waiting_for_blocked_cleanup():
         event = h.wall._local_telemetry.record_event.call_args
         assert event.args == ("escape",) and event.kwargs["windows_hidden_ms"] < 200
         print(f"    observed handler={elapsed * 1000:.2f}ms, mocked exit={(h.exit_times[0]-started)*1000:.2f}ms")
+
+
+def test_escape_stops_conversion_queue_after_hiding_without_waiting_for_worker():
+    from hyperwall.transcode_queue import FailureTranscodeQueue
+
+    with harness() as h:
+        # Use the production queue stop method with a real daemon blocked in
+        # simulated server I/O. No queue constructor, disk access or HTTP runs.
+        queue_worker = object.__new__(FailureTranscodeQueue)
+        queue_worker._stop = threading.Event()
+        entered = threading.Event()
+
+        def blocked_conversion():
+            entered.set()
+            h.gate.wait(2)
+
+        queue_worker.thread = threading.Thread(target=blocked_conversion, daemon=True)
+        h.threads.append(queue_worker.thread)
+        queue_worker.thread.start()
+        assert entered.wait(.2)
+        real_stop = queue_worker.stop
+
+        def stop_after_hide():
+            assert all(window.hide.call_count == 1 for window in h.wall.windows)
+            real_stop()
+
+        queue_worker.stop = Mock(side_effect=stop_after_hide)
+        h.wall._failure_transcodes = queue_worker
+        with patch.object(queue_worker.thread, "join", side_effect=AssertionError("Escape joined conversion worker")) as join:
+            started = time.monotonic()
+            h.wall._emergency_shutdown()
+            assert time.monotonic() - started < .2
+            queue_worker.stop.assert_called_once()
+            assert queue_worker._stop.is_set()
+            assert queue_worker.thread.is_alive() and not h.gate.is_set()
+            assert h.exited.wait(.5)
+            join.assert_not_called()
 
 
 def test_escape_is_idempotent_and_keeps_render_callback_owners_alive():

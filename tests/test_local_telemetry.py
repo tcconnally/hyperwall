@@ -100,7 +100,7 @@ def test_full_library_launcher_platforms_without_starting_wall():
         launcher = base / "run-hyperwall.sh"
         launcher.write_text((root / launcher.name).read_text())
         fake = base / "launch.sh"
-        fake.write_text('#!/bin/sh\nprintf "%s\\n" "$HYPERWALL_HWDEC" "$HYPERWALL_PREPARED_ONLY" "$HYPERWALL_STABLE_DIRECT_ONLY" "$HYPERWALL_LOCAL_TELEMETRY" "$HYPERWALL_STATS"\n')
+        fake.write_text('#!/bin/sh\nprintf "%s\\n" "$HYPERWALL_HWDEC" "$HYPERWALL_PREPARED_ONLY" "$HYPERWALL_STABLE_DIRECT_ONLY" "$HYPERWALL_LOCAL_TELEMETRY" "$HYPERWALL_STATS" "$HYPERWALL_AUTO_TRANSCODE" "$HYPERWALL_TRANSCODE_ON_FAILURE"\n')
         fake.chmod(0o700)
         for platform, decoder in (("Darwin", "videotoolbox-copy"), ("Linux", "auto-safe")):
             uname = base / "uname"
@@ -109,7 +109,7 @@ def test_full_library_launcher_platforms_without_starting_wall():
             env = {"PATH": f"{base}:/usr/bin:/bin", "HOME": directory}
             result = subprocess.run(["/bin/bash", str(launcher)], env=env,
                                     capture_output=True, text=True, check=True)
-            assert result.stdout.splitlines() == [decoder, "1", "0", "1", "1"]
+            assert result.stdout.splitlines() == [decoder, "0", "0", "1", "1", "0", "1"]
 
 
 def run_all():
